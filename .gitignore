@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+*.pyc
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model files (too large for GitHub)
+model/*.pth
+model/*.pkl
+model/*.pt
+model/*.ckpt
+
+# Training outputs
+logs/
+tensorboard/
+wandb/
+
+# Game saves (optional - 게임 저장 파일 제외하려면 주석 해제)
+# saved_games/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Package artifacts
+*.tar.gz
+*.zip
