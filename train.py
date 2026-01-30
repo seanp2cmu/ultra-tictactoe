@@ -125,8 +125,13 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         print("CUDA GPU detected - using GPU optimized config")
         config = get_gpu_optimized_config()
+    elif torch.backends.mps.is_available():
+        print("MPS GPU (Apple Silicon) detected - using GPU optimized config")
+        config = get_gpu_optimized_config()
+        config.gpu.device = "mps"  # MPS 사용
+        config.training.use_amp = False  # MPS는 AMP 지원 안함
     else:
-        print("No CUDA GPU detected - using default config")
+        print("No GPU detected - using default config")
         config = get_default_config()
     
     train_alphazero(config)

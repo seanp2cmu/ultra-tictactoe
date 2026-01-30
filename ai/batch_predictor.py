@@ -72,6 +72,21 @@ class BatchPredictor:
         # 결과 대기
         return request.wait_for_result()
     
+    def predict_batch(self, board_states):
+        """여러 board states를 한 번에 처리 (배치 MCTS용)"""
+        # BatchPredictor를 통해 각 board를 개별적으로 요청
+        # BatchPredictor가 알아서 이들을 모아서 배치 처리함
+        results = []
+        for board_state in board_states:
+            policy_probs, value = self.predict(board_state)
+            results.append((policy_probs, value))
+        
+        # 결과를 numpy 배열로 변환
+        policy_probs_batch = np.array([r[0] for r in results])
+        values_batch = np.array([r[1] for r in results])
+        
+        return policy_probs_batch, values_batch
+    
     def _batch_worker(self):
         """배치 처리 워커 스레드"""
         pending_requests = []

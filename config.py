@@ -63,17 +63,17 @@ def get_gpu_optimized_config():
         num_channels=256
     )
     config.training = TrainingConfig(
-        num_iterations=100,
-        num_self_play_games=30,  # 60 → 30 (빠른 iteration)
-        num_train_epochs=50,  # 100 → 50
-        num_simulations=100,  # 400 → 100 (4배 빠름)
+        num_iterations=200,  # 100 → 200 (2배 증가)
+        num_self_play_games=100,  # 30 → 100 (더 많은 데이터)
+        num_train_epochs=30,  # 50 → 30 (오버피팅 방지, 대신 데이터 증가)
+        num_simulations=150,  # 100 → 150 (더 정확한 MCTS)
         batch_size=1024,
         lr=0.002,
         weight_decay=1e-4,
-        replay_buffer_size=100000,
-        save_interval=5,
+        replay_buffer_size=200000,  # 100k → 200k (더 많은 다양성)
+        save_interval=10,  # 5 → 10 (저장 빈도 감소)
         use_amp=True,
-        num_parallel_games=32  # 최적 병렬 게임 수 (GPU batch + CPU 균형)
+        num_parallel_games=32
     )
     config.gpu = GPUConfig(
         device="cuda",

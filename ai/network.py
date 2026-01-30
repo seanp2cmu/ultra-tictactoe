@@ -208,6 +208,8 @@ class AlphaZeroNet:
         save_dict = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'num_res_blocks': len(self.model.res_blocks),  # 모델 구조 정보 저장
+            'num_channels': self.model.num_channels,
         }
         if self.scaler is not None:
             save_dict['scaler_state_dict'] = self.scaler.state_dict()
@@ -215,6 +217,37 @@ class AlphaZeroNet:
     
     def load(self, filepath):
         checkpoint = torch.load(filepath, map_location=self.device)
+        
+        # 저장된 모델 구조 정보가 있으면 사용
+        if 'num_res_blocks' in checkpoint and 'num_channels' in checkpoint:
+            num_res_blocks = checkpoint['num_res_blocks']
+            num_channels = checkpoint['num_channels']
+        else:
+            # 기존 모델: state_dict에서 구조 추론
+            state_dict = checkpoint['model_state_dict']
+            
+            # res_blocks의 최대 인덱스 찾기
+            max_block_idx = -1
+            for key in state_dict.keys():
+                if key.startswith('res_blocks.'):
+                    block_idx = int(key.split('.')[1])
+                    max_block_idx = max(max_block_idx, block_idx)
+            
+            num_res_blocks = max_block_idx + 1  # 0-indexed이므로 +1
+            
+            # num_channels 추론 (input layer에서)
+            num_channels = state_dict['input.0.weight'].shape[0]
+            
+            print(f"Inferred model structure from checkpoint: {num_res_blocks} blocks, {num_channels} channels")
+        
+        # 현재 모델 구조와 다르면 새로 생성
+        if len(self.model.res_blocks) != num_res_blocks or self.model.num_channels != num_channels:
+            print(f"Recreating model with {num_res_blocks} blocks and {num_channels} channels")
+            self.model = Model(num_res_blocks=num_res_blocks, num_channels=num_channels).to(self.device)
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), 
+                                               lr=self.optimizer.param_groups[0]['lr'],
+                                               weight_decay=self.optimizer.param_groups[0]['weight_decay'])
+        
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
