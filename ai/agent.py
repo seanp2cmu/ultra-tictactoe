@@ -1,138 +1,20 @@
 import math
 import random
 import copy
+from typing import Dict, List, Tuple
 import numpy as np
 from game import Board
 
-class Node:
-    def __init__(self, board: Board, parent=None, action=None):
-        self.board = copy.deepcopy(board)
-        self.parent = parent
-        self.action = action
-        self.children: [Node] = []
-        self.visits = 0
-        self.wins = 0
-        self.untried_actions = self.board.get_legal_moves()
-        
-    def is_fully_expanded(self):
-        return len(self.untried_actions) == 0
-    
-    def is_terminal(self):
-        return self.board.winner is not None or len(self.board.get_legal_moves()) == 0
-    
-    def best_child(self, c_param=1.41):
-        choices_weights = [
-            (child.wins / child.visits) + c_param * math.sqrt(2 * math.log(self.visits) / child.visits)
-            for child in self.children
-        ]
-        return self.children[choices_weights.index(max(choices_weights))]
-    
-    def expand(self):
-        action = self.untried_actions.pop()
-        next_board = copy.deepcopy(self.board)
-        next_board.make_move(action[0], action[1])
-        child_node = Node(next_board, parent=self, action=action)
-        self.children.append(child_node)
-        return child_node
-    
-    def rollout(self):
-        current_board = copy.deepcopy(self.board)
-        
-        while current_board.winner is None:
-            legal_moves = current_board.get_legal_moves()
-            if not legal_moves:
-                break
-            move = random.choice(legal_moves)
-            current_board.make_move(move[0], move[1])
-        
-        return current_board.winner
-    
-    def backpropagate(self, result, player):
-        self.visits += 1
-        
-        if result == player:
-            self.wins += 1
-        elif result == 3:
-            self.wins += 0.5
-        
-        if self.parent:
-            self.parent.backpropagate(result, player)
-
-
-class Agent:
-    def __init__(self, num_simulations=1000, exploration_param=1.41):
-        self.num_simulations = num_simulations
-        self.exploration_param = exploration_param
-    
-    def select_action(self, board: Board, player=None):
-        if player is None:
-            player = board.current_player
-        
-        root = Node(board)
-        
-        for _ in range(self.num_simulations):
-            node = root
-            
-            while not node.is_terminal() and node.is_fully_expanded():
-                node = node.best_child(self.exploration_param)
-            
-            if not node.is_terminal() and not node.is_fully_expanded():
-                node = node.expand()
-            
-            result = node.rollout()
-            
-            node.backpropagate(result, player)
-        
-        if not root.children:
-            legal_moves = board.get_legal_moves()
-            if legal_moves:
-                move = random.choice(legal_moves)
-                return move[0] * 9 + move[1]
-            return 0
-        
-        best_child = max(root.children, key=lambda c: c.visits)
-        action = best_child.action
-        return action[0] * 9 + action[1]
-    
-    def get_action_probs(self, board: Board, player=None):
-        if player is None:
-            player = board.current_player
-        
-        root = Node(board)
-        
-        for _ in range(self.num_simulations):
-            node = root
-            
-            while not node.is_terminal() and node.is_fully_expanded():
-                node = node.best_child(self.exploration_param)
-            
-            if not node.is_terminal() and not node.is_fully_expanded():
-                node = node.expand()
-            
-            result = node.rollout()
-            
-            node.backpropagate(result, player)
-        
-        action_visits = {}
-        for child in root.children:
-            action = child.action[0] * 9 + child.action[1]
-            action_visits[action] = child.visits
-        
-        total_visits = sum(action_visits.values())
-        if total_visits == 0:
-            return {}
-        
-        action_probs = {action: visits / total_visits for action, visits in action_visits.items()}
-        return action_probs
-
+from .dtw_calculator import DTWCalculator
+from .network import AlphaZeroNet
 
 class AlphaZeroNode:
     def __init__(self, board, parent=None, action=None, prior_prob=0):
-        self.board = copy.deepcopy(board)
-        self.parent = parent
+        self.board: Board = copy.deepcopy(board)
+        self.parent: AlphaZeroNode = parent
         self.action = action
         self.prior_prob = prior_prob
-        self.children = {}
+        self.children: Dict[int, AlphaZeroNode] = {}
         self.visits = 0
         self.value_sum = 0
         
@@ -186,14 +68,28 @@ class AlphaZeroNode:
 
 
 class AlphaZeroAgent:
-    def __init__(self, network, num_simulations=100, c_puct=1.0, temperature=1.0, batch_size=8):
-        self.network = network
+    def __init__(self, network, num_simulations=100, c_puct=1.0, temperature=1.0, batch_size=8, 
+                 use_dtw=False, dtw_max_depth=18):
+        self.network: AlphaZeroNet = network
         self.num_simulations = num_simulations
         self.c_puct = c_puct
         self.temperature = temperature
-        self.batch_size = batch_size  # 배치 크기
+        self.batch_size = batch_size
+        self.use_dtw = use_dtw
+        
+        # DTW 초기화
+        if use_dtw:
+            self.dtw_calculator = DTWCalculator(
+                max_depth=dtw_max_depth, 
+                use_cache=True,
+                hot_size=500000,
+                cold_size=5000000,
+                use_symmetry=True
+            )
+        else:
+            self.dtw_calculator = None  # 배치 크기
     
-    def search(self, board):
+    def search(self, board: Board):
         root = AlphaZeroNode(board)
         
         # Root 확장
@@ -208,9 +104,10 @@ class AlphaZeroAgent:
             batch_size = min(self.batch_size, self.num_simulations - batch_idx * self.batch_size)
             
             # 1. Selection - 배치 크기만큼 노드 선택
-            search_paths = []
-            leaf_nodes = []
-            leaf_boards = []
+            search_paths: List[List[AlphaZeroNode]] = []
+            leaf_nodes: List[AlphaZeroNode] = []
+            leaf_boards: List[Board] = []
+            tablebase_results: List[Tuple[int, float, Dict[int, float]]] = []  # (node_idx, value, expand_probs)
             
             for _ in range(batch_size):
                 node = root
@@ -223,62 +120,91 @@ class AlphaZeroAgent:
                     search_path.append(node)
                 
                 search_paths.append(search_path)
+                node_idx = len(leaf_nodes)
                 leaf_nodes.append(node)
                 
-                if not node.is_terminal():
+                # Tablebase 체크 (25칸 이하, DTW 사용 시)
+                tablebase_hit = False
+                if not node.is_terminal() and self.use_dtw and self.dtw_calculator:
+                    empty_count = sum(1 for row in node.board.boards for cell in row if cell == 0)
+                    
+                    if empty_count <= 25:
+                        result_data = self.dtw_calculator.calculate_dtw(node.board)
+                        
+                        if result_data is not None:
+                            result, dtw, _ = result_data
+                            value = float(result)  # -1, 0, 1
+                            
+                            # 관점 조정
+                            if node.board.current_player != board.current_player:
+                                value = -value
+                            
+                            # Expand용 uniform policy (Tablebase는 정확하므로 policy 불필요)
+                            legal_moves = node.board.get_legal_moves()
+                            uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0
+                            expand_probs = {move[0] * 9 + move[1]: uniform_prob for move in legal_moves}
+                            
+                            tablebase_results.append((node_idx, value, expand_probs))
+                            tablebase_hit = True
+                
+                # Neural Net으로 평가할 노드만 추가
+                if not node.is_terminal() and not tablebase_hit:
                     leaf_boards.append(node.board)
             
-            # 2. Evaluation - 배치로 한 번에 평가
+            # 2. Evaluation
+            # 2-1. Tablebase 노드 처리
+            tablebase_indices = {idx for idx, _, _ in tablebase_results}
+            
+            # 2-2. Neural Net 평가
             if leaf_boards:
                 policy_probs_batch, values_batch = self.network.predict_batch(leaf_boards)
-                
-                leaf_idx = 0
-                for i, node in enumerate(leaf_nodes):
-                    if node.is_terminal():
-                        # 터미널 노드는 직접 계산
-                        if node.board.winner is None or node.board.winner == 3:
-                            value = 0
-                        elif node.board.winner == board.current_player:
-                            value = 1
-                        else:
-                            value = -1
-                    else:
-                        # 배치 평가 결과 사용
-                        policy_probs = policy_probs_batch[leaf_idx]
-                        value = float(values_batch[leaf_idx])
-                        leaf_idx += 1
-                        
-                        action_probs = {i: policy_probs[i] for i in range(81)}
-                        node.expand(action_probs)
-                        
-                        if node.board.current_player != board.current_player:
-                            value = -value
-                    
-                    # 3. Backpropagation - Virtual loss 제거하며 업데이트
-                    for path_node in reversed(search_paths[i]):
-                        path_node.visits -= 1  # Virtual loss 제거
-                        path_node.update(value)
-                        value = -value
-            else:
-                # 모든 노드가 터미널인 경우
-                for i, node in enumerate(leaf_nodes):
+            
+            # 3. 결과 적용 및 Backpropagation
+            leaf_idx = 0
+            for i, node in enumerate(leaf_nodes):
+                if node.is_terminal():
+                    # 터미널 노드는 직접 계산
                     if node.board.winner is None or node.board.winner == 3:
                         value = 0
                     elif node.board.winner == board.current_player:
                         value = 1
                     else:
                         value = -1
+                elif i in tablebase_indices:
+                    # Tablebase 결과 사용
+                    _, value, expand_probs = next((r for r in tablebase_results if r[0] == i), (None, 0, {}))
+                    if expand_probs:
+                        node.expand(expand_probs)
+                else:
+                    # Neural Net 평가 결과 사용
+                    policy_probs = policy_probs_batch[leaf_idx]
+                    value = float(values_batch[leaf_idx])
+                    leaf_idx += 1
                     
-                    for path_node in reversed(search_paths[i]):
-                        path_node.visits -= 1  # Virtual loss 제거
-                        path_node.update(value)
+                    action_probs = {i: policy_probs[i] for i in range(81)}
+                    node.expand(action_probs)
+                    
+                    if node.board.current_player != board.current_player:
                         value = -value
+                
+                # Backpropagation - Virtual loss 제거하며 업데이트
+                for path_node in reversed(search_paths[i]):
+                    path_node.visits -= 1  # Virtual loss 제거
+                    path_node.update(value)
+                    value = -value
         
         return root
     
-    def select_action(self, board, temperature=None):
+    def select_action(self, board: Board, temperature=None):
         if temperature is None:
             temperature = self.temperature
+        
+        # DTW로 엔드게임 확정 승리 체크
+        if self.use_dtw and self.dtw_calculator:
+            if self.dtw_calculator.is_endgame(board):
+                best_move, dtw = self.dtw_calculator.get_best_winning_move(board)
+                if best_move and dtw < float('inf'):
+                    return best_move[0] * 9 + best_move[1]
         
         root = self.search(board)
         
@@ -304,7 +230,7 @@ class AlphaZeroAgent:
         
         return actions[action_idx]
     
-    def get_action_probs(self, board, temperature=None):
+    def get_action_probs(self, board: Board, temperature=None):
         if temperature is None:
             temperature = self.temperature
         

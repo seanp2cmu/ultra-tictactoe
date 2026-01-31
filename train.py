@@ -1,137 +1,187 @@
-import os
-import time
-import torch
-from tqdm import tqdm
-from ai.trainer import AlphaZeroTrainer
-from config import Config, get_default_config, get_gpu_optimized_config, get_cpu_config
+"""
+Ultimate Tic-Tac-Toe AlphaZero + DTW 학습 스크립트
 
-def train_alphazero(config: Config = None):
-    if config is None:
-        config = get_default_config()
+- 20 ResNet blocks, 384 channels
+- 2048 batch size, 400 simulations
+- 200만/2000만 Tablebase cache
+"""
+import os
+from tqdm import tqdm
+from config import Config
+from ai.trainer_with_dtw import AlphaZeroTrainerWithDTW
+
+def main():
+    config = Config()
     
+    # 기존 모델 로드할 경로 (None이면 새로 시작)
+    load_model_path = None  # 예: "./model/model_dtw_iter_50.pth"
+    
+    # 디바이스 자동 설정
+    if config.gpu.device == "auto":
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    else:
+        device = config.gpu.device
+    
+    # 저장 디렉토리 생성
     os.makedirs(config.training.save_dir, exist_ok=True)
     
-    device_str = config.gpu.device
-    if device_str == "auto":
-        if torch.cuda.is_available():
-            device_str = "cuda"
-        elif torch.backends.mps.is_available():
-            device_str = "mps"
-        else:
-            device_str = "cpu"
-    
-    print("=" * 70)
-    print("AlphaZero Ultra Tic-Tac-Toe Training")
-    print("=" * 70)
-    print(f"Device: {device_str}")
-    if device_str == "cuda":
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"CUDA Version: {torch.version.cuda}")
-    print(f"\nNetwork Configuration:")
-    print(f"  Residual blocks: {config.network.num_res_blocks}")
+    # 설정 출력
+    print("=" * 80)
+    print("AlphaZero Training with DTW + Compressed Transposition Table")
+    print("=" * 80)
+    print(f"Network:")
+    print(f"  Residual Blocks: {config.network.num_res_blocks}")
     print(f"  Channels: {config.network.num_channels}")
-    print(f"\nTraining Configuration:")
+    print(f"\nTraining:")
     print(f"  Iterations: {config.training.num_iterations}")
-    print(f"  Self-play games per iteration: {config.training.num_self_play_games}")
-    print(f"  Parallel games: {config.training.num_parallel_games}")
-    print(f"  Training epochs per iteration: {config.training.num_train_epochs}")
+    print(f"  Games per iteration: {config.training.num_self_play_games}")
+    print(f"  Training epochs: {config.training.num_train_epochs}")
     print(f"  MCTS simulations: {config.training.num_simulations}")
     print(f"  Batch size: {config.training.batch_size}")
     print(f"  Learning rate: {config.training.lr}")
-    print(f"  Weight decay: {config.training.weight_decay}")
-    print(f"  Replay buffer size: {config.training.replay_buffer_size}")
-    print(f"  Mixed precision (AMP): {config.training.use_amp}")
-    print(f"  Save directory: {config.training.save_dir}")
-    print(f"  Save interval: every {config.training.save_interval} iterations")
-    print("=" * 70 + "\n")
+    print(f"  Parallel games: {config.training.num_parallel_games}")
+    print(f"\nDTW:")
+    print(f"  Enabled: {config.dtw.use_dtw}")
+    print(f"  Max depth: {config.dtw.max_depth}")
+    print(f"  Endgame threshold: {config.dtw.endgame_threshold} cells")
+    print(f"  Cache size: {config.dtw.hot_cache_size + config.dtw.cold_cache_size:,} entries")
+    print(f"\nGPU:")
+    print(f"  Device: {device}")
+    print(f"  AMP: {config.training.use_amp}")
+    print("=" * 80)
     
-    trainer = AlphaZeroTrainer(
+    # Trainer 초기화
+    trainer = AlphaZeroTrainerWithDTW(
+        network=None,
         lr=config.training.lr,
         weight_decay=config.training.weight_decay,
         batch_size=config.training.batch_size,
         num_simulations=config.training.num_simulations,
         replay_buffer_size=config.training.replay_buffer_size,
-        device=device_str,
+        device=device,
         use_amp=config.training.use_amp,
         num_res_blocks=config.network.num_res_blocks,
         num_channels=config.network.num_channels,
-        num_parallel_games=config.training.num_parallel_games
+        num_parallel_games=config.training.num_parallel_games,
+        use_dtw=config.dtw.use_dtw,
+        dtw_max_depth=config.dtw.max_depth,
+        hot_cache_size=config.dtw.hot_cache_size,
+        cold_cache_size=config.dtw.cold_cache_size,
+        use_symmetry=config.dtw.use_symmetry
     )
     
-    start_time = time.time()
+    # 기존 모델 로드
+    if load_model_path:
+        print(f"\nLoading model from {load_model_path}")
+        trainer.load(load_model_path)
+        print("✓ Model loaded successfully\n")
     
-    pbar = tqdm(range(1, config.training.num_iterations + 1), desc="Training", ncols=120)
-    for iteration in pbar:
-        iter_start = time.time()
+    # Temperature 스케줄
+    def get_temperature(iteration, total_iterations):
+        progress = iteration / total_iterations
+        if progress < 0.3:
+            return config.mcts.temperature_start
+        elif progress < 0.7:
+            return (config.mcts.temperature_start + config.mcts.temperature_end) / 2
+        else:
+            return config.mcts.temperature_end
+    
+    # 학습 시작
+    print("=" * 80)
+    print("Starting training...")
+    print("=" * 80 + "\n")
+    
+    # 학습 루프
+    for iteration in tqdm(range(config.training.num_iterations), desc="Training Progress", ncols=100):
+        temp = get_temperature(iteration, config.training.num_iterations)
         
-        pbar.set_description(f"Iteration {iteration}/{config.training.num_iterations}")
+        print(f"\n{'='*80}")
+        print(f"Iteration {iteration + 1}/{config.training.num_iterations} (Temperature: {temp:.2f})")
+        print(f"{'='*80}")
         
-        # Progressive temperature
-        temp_range = config.mcts.temperature_start - config.mcts.temperature_end
-        temperature = max(config.mcts.temperature_end, 
-                         config.mcts.temperature_start - (iteration / config.training.num_iterations) * temp_range)
-        
-        # Progressive MCTS: 초반에는 적은 시뮬레이션, 후반에는 많은 시뮬레이션
-        progress = iteration / config.training.num_iterations
-        min_sims = 50  # 초반 시뮬레이션 수
-        max_sims = config.training.num_simulations  # 최대 시뮬레이션 수
-        current_sims = int(min_sims + (max_sims - min_sims) * progress)
-        
+        # Self-play + Training
         result = trainer.train_iteration(
             num_self_play_games=config.training.num_self_play_games,
             num_train_epochs=config.training.num_train_epochs,
-            temperature=temperature,
+            temperature=temp,
             verbose=False,
             disable_tqdm=False,
-            num_simulations=current_sims
+            num_simulations=config.training.num_simulations
         )
         
-        iter_elapsed = time.time() - iter_start
-        total_elapsed = time.time() - start_time
+        # 결과 출력
+        print(f"\nIteration {iteration + 1} Results:")
+        print(f"  Samples: {result['num_samples']}")
+        print(f"  Total Loss: {result['avg_loss']['total_loss']:.4f}")
+        print(f"  Policy Loss: {result['avg_loss']['policy_loss']:.4f}")
+        print(f"  Value Loss: {result['avg_loss']['value_loss']:.4f}")
         
-        pbar.set_postfix({
-            'loss': f"{result['avg_loss']['total_loss']:.4f}",
-            'samples': result['num_samples'],
-            'sims': current_sims,
-            'time': f"{iter_elapsed:.1f}s"
-        })
+        # 샘플 분포 통계
+        if hasattr(trainer.replay_buffer, 'get_stats'):
+            buffer_stats = trainer.replay_buffer.get_stats()
+            if buffer_stats:
+                print(f"  Avg Weight: {buffer_stats.get('avg_weight', 0):.2f}")
+                dist = buffer_stats.get('distribution', {})
+                if 'transition' in dist:
+                    print(f"  Transition (26-29칸): {dist['transition']}")
         
-        if iteration % config.training.save_interval == 0:
-            model_path = os.path.join(config.training.save_dir, f"model_iter_{iteration}.pth")
-            trainer.save(model_path)
-            print(f"\n  ✓ Model saved: {model_path}")
+        # DTW 통계
+        if 'dtw_stats' in result:
+            stats = result['dtw_stats']
+            print(f"  DTW Cache Hit Rate: {stats.get('hit_rate', 'N/A')}")
+            print(f"  DTW Cache Size: {stats.get('total_mb', 0):.2f} MB")
         
-        latest_path = os.path.join(config.training.save_dir, "model_latest.pth")
-        trainer.save(latest_path)
+        # 주기적으로 모델 저장
+        if (iteration + 1) % config.training.save_interval == 0:
+            save_path = os.path.join(config.training.save_dir, f'model_dtw_iter_{iteration + 1}.pth')
+            trainer.save(save_path)
+            print(f"\n✓ Model saved to {save_path}")
+            
+            # Tablebase도 함께 저장 (중단 시 복구용)
+            if trainer.dtw_calculator and trainer.dtw_calculator.tt:
+                tablebase_path = os.path.join(config.training.save_dir, 'tablebase.pkl')
+                trainer.dtw_calculator.tt.save_to_file(tablebase_path)
+                stats = trainer.dtw_calculator.get_stats()
+                print(f"✓ Tablebase checkpoint saved ({stats.get('total_mb', 0):.1f} MB, hit rate: {stats.get('hit_rate', 'N/A')})")
+        
+        # 주기적으로 DTW 캐시 클리어 (메모리 관리)
+        if (iteration + 1) % 20 == 0 and config.dtw.use_dtw:
+            trainer.clear_dtw_cache()
     
-    final_path = os.path.join(config.training.save_dir, "model_final.pth")
+    print("\n" + "="*80)
+    print("Training completed!")
+    print("="*80)
+    
+    # 최종 모델 저장
+    final_path = os.path.join(config.training.save_dir, 'model_dtw_final.pth')
     trainer.save(final_path)
+    print(f"\n✓ Final model saved to {final_path}")
     
-    total_time = time.time() - start_time
+    # Tablebase 저장
+    if trainer.dtw_calculator and trainer.dtw_calculator.tt:
+        tablebase_path = os.path.join(config.training.save_dir, 'tablebase.pkl')
+        trainer.dtw_calculator.tt.save_to_file(tablebase_path)
+        print(f"✓ Tablebase saved to {tablebase_path}")
+        
+        stats = trainer.dtw_calculator.get_stats()
+        if stats:
+            print(f"  Final cache size: {stats.get('total_mb', 0):.1f} MB")
+            print(f"  Hit rate: {stats.get('hit_rate', 'N/A')}")
     
-    print("\n" + "=" * 70)
-    print("Training Complete!")
-    print("=" * 70)
-    print(f"Total time: {total_time/60:.1f} minutes")
-    print(f"Final buffer size: {len(trainer.replay_buffer)}")
-    print(f"Final model saved: {final_path}")
-    print(f"Latest model: {latest_path}")
-    print("=" * 70)
+    # 최종 통계
+    if config.dtw.use_dtw and trainer.dtw_calculator:
+        final_stats = trainer.dtw_calculator.get_stats()
+        print("\nFinal DTW Statistics:")
+        print(f"  Total queries: {final_stats.get('total_queries', 0)}")
+        print(f"  Hit rate: {final_stats.get('hit_rate', 'N/A')}")
+        print(f"  Cache size: {final_stats.get('total_mb', 0):.2f} MB")
 
 
-if __name__ == "__main__":
-    import torch
-    
-    if torch.cuda.is_available():
-        print("CUDA GPU detected - using GPU optimized config")
-        config = get_gpu_optimized_config()
-    elif torch.backends.mps.is_available():
-        print("MPS GPU (Apple Silicon) detected - using GPU optimized config")
-        config = get_gpu_optimized_config()
-        config.gpu.device = "mps"  # MPS 사용
-        config.training.use_amp = False  # MPS는 AMP 지원 안함
-    else:
-        print("No GPU detected - using default config")
-        config = get_default_config()
-    
-    train_alphazero(config)
+if __name__ == '__main__':
+    main()

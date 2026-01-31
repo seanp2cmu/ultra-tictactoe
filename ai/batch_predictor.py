@@ -2,7 +2,9 @@ import threading
 import queue
 import time
 import numpy as np
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, List
+
+from .network import AlphaZeroNet
 
 class PredictionRequest:
     """개별 prediction 요청"""
@@ -12,18 +14,16 @@ class PredictionRequest:
         self.result = None
         self.ready_event = threading.Event()
     
-    def wait_for_result(self, timeout=10):
-        """결과를 기다림"""
-        if self.ready_event.wait(timeout):
-            return self.result
-        else:
-            raise TimeoutError("Prediction timeout")
+    def wait_for_result(self, timeout=None):
+        """결과를 기다림 (timeout 없음 - 무제한 대기)"""
+        self.ready_event.wait(timeout)
+        return self.result
 
 class BatchPredictor:
     """여러 게임의 prediction을 batch로 처리"""
     
     def __init__(self, network, batch_size=8, wait_time=0.002, verbose=False):
-        self.network = network
+        self.network: AlphaZeroNet = network
         self.batch_size = batch_size
         self.wait_time = wait_time  # 초 단위 (기본 2ms)
         self.verbose = verbose
@@ -89,7 +89,7 @@ class BatchPredictor:
     
     def _batch_worker(self):
         """배치 처리 워커 스레드"""
-        pending_requests = []
+        pending_requests: List[PredictionRequest] = []
         last_process_time = time.time()
         
         while self.running:
@@ -117,10 +117,6 @@ class BatchPredictor:
                     self._process_batch(pending_requests)
                     pending_requests = []
                     last_process_time = current_time
-                
-                # CPU 과부하 방지
-                if not pending_requests:
-                    time.sleep(0.001)
                     
             except Exception as e:
                 print(f"Batch worker error: {e}")
@@ -134,7 +130,7 @@ class BatchPredictor:
         if pending_requests:
             self._process_batch(pending_requests)
     
-    def _process_batch(self, requests):
+    def _process_batch(self, requests: List[PredictionRequest]):
         """배치로 prediction 처리"""
         if not requests:
             return

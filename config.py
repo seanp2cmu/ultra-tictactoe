@@ -2,38 +2,56 @@ from dataclasses import dataclass
 
 @dataclass
 class NetworkConfig:
-    num_res_blocks: int = 10
-    num_channels: int = 256
+    num_res_blocks: int = 20
+    num_channels: int = 384
     
 @dataclass
 class TrainingConfig:
-    num_iterations: int = 100
-    num_self_play_games: int = 20
-    num_train_epochs: int = 50
-    num_simulations: int = 200
-    batch_size: int = 512
-    lr: float = 0.001
+    num_iterations: int = 300
+    num_self_play_games: int = 200
+    num_train_epochs: int = 40
+    num_simulations: int = 400
+    batch_size: int = 2048
+    lr: float = 0.002
     weight_decay: float = 1e-4
     
-    replay_buffer_size: int = 50000
+    replay_buffer_size: int = 500000
     
     save_dir: str = "./model"
     save_interval: int = 10
     
     use_amp: bool = True
-    num_parallel_games: int = 1
+    num_parallel_games: int = 32
     
 @dataclass
 class GPUConfig:
-    device: str = "auto"
-    num_workers: int = 4
+    device: str = "cuda"
+    num_workers: int = 12
     pin_memory: bool = True
     
 @dataclass
 class MCTSConfig:
     c_puct: float = 1.0
     temperature_start: float = 1.0
-    temperature_end: float = 0.5
+    temperature_end: float = 0.3
+
+@dataclass
+class DTWConfig:
+    use_dtw: bool = True
+    max_depth: int = 18               # DTW 탐색 깊이 (18수 앞까지 계산)
+    endgame_threshold: int = 25       # 빈 칸 25개 이하면 엔드게임 (Tablebase 영역)
+    hot_cache_size: int = 2000000     # 200만 (빠른 접근)
+    cold_cache_size: int = 20000000   # 2000만 (압축 저장)
+    use_symmetry: bool = True         # 보드 대칭 정규화 (8배 메모리 절약)
+    use_tablebase: bool = True        # Retrograde Tablebase 사용 (25칸 이하 완벽)
+
+@dataclass
+class PredictionConfig:
+    """실제 게임/예측 시 사용할 설정"""
+    num_simulations: int = 400        # 실전에서는 더 많은 시뮬레이션
+    temperature: float = 0.1          # 낮은 temperature (더 결정적)
+    use_dtw: bool = True              # DTW 사용 (엔드게임 완벽)
+    dtw_max_depth: int = 18           # DTW 깊이
     
 @dataclass
 class Config:
@@ -41,6 +59,7 @@ class Config:
     training: TrainingConfig = None
     gpu: GPUConfig = None
     mcts: MCTSConfig = None
+    dtw: DTWConfig = None
     
     def __post_init__(self):
         if self.network is None:
@@ -51,57 +70,5 @@ class Config:
             self.gpu = GPUConfig()
         if self.mcts is None:
             self.mcts = MCTSConfig()
-
-def get_default_config():
-    return Config()
-
-def get_gpu_optimized_config():
-    """RTX 5090 같은 고성능 GPU를 위한 설정"""
-    config = Config()
-    config.network = NetworkConfig(
-        num_res_blocks=15,
-        num_channels=256
-    )
-    config.training = TrainingConfig(
-        num_iterations=200,  # 100 → 200 (2배 증가)
-        num_self_play_games=100,  # 30 → 100 (더 많은 데이터)
-        num_train_epochs=30,  # 50 → 30 (오버피팅 방지, 대신 데이터 증가)
-        num_simulations=150,  # 100 → 150 (더 정확한 MCTS)
-        batch_size=1024,
-        lr=0.002,
-        weight_decay=1e-4,
-        replay_buffer_size=200000,  # 100k → 200k (더 많은 다양성)
-        save_interval=10,  # 5 → 10 (저장 빈도 감소)
-        use_amp=True,
-        num_parallel_games=32
-    )
-    config.gpu = GPUConfig(
-        device="cuda",
-        num_workers=8,
-        pin_memory=True
-    )
-    return config
-
-def get_cpu_config():
-    """CPU 또는 저성능 환경을 위한 설정"""
-    config = Config()
-    config.network = NetworkConfig(
-        num_res_blocks=5,
-        num_channels=64
-    )
-    config.training = TrainingConfig(
-        num_iterations=20,
-        num_self_play_games=5,
-        num_train_epochs=10,
-        num_simulations=50,
-        batch_size=16,
-        lr=0.001,
-        use_amp=False,
-        num_parallel_games=1
-    )
-    config.gpu = GPUConfig(
-        device="cpu",
-        num_workers=2,
-        pin_memory=False
-    )
-    return config
+        if self.dtw is None:
+            self.dtw = DTWConfig()
