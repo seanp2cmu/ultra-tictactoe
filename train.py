@@ -1,14 +1,18 @@
 """
 Ultimate Tic-Tac-Toe AlphaZero + DTW 학습 스크립트
 
-- 20 ResNet blocks, 384 channels
-- 2048 batch size, 400 simulations
-- 200만/2000만 Tablebase cache
+RTX 5090 (32GB VRAM) 최적화 설정:
+- 30 ResNet blocks with SE (512 channels)
+- 7-channel input (perspective normalized, last move, valid mask)
+- 4096 batch size, 800 simulations
+- Cosine Annealing LR (0.002 → 0.00002)
+- Gradient clipping (max_norm=1.0)
+- 500만/2000만 Tablebase cache
 """
 import os
 from tqdm import tqdm
 from config import Config
-from ai.trainer_with_dtw import AlphaZeroTrainerWithDTW
+from ai.trainer import AlphaZeroTrainerWithDTW
 
 def main():
     config = Config()
@@ -73,7 +77,8 @@ def main():
         dtw_max_depth=config.dtw.max_depth,
         hot_cache_size=config.dtw.hot_cache_size,
         cold_cache_size=config.dtw.cold_cache_size,
-        use_symmetry=config.dtw.use_symmetry
+        use_symmetry=config.dtw.use_symmetry,
+        total_iterations=config.training.num_iterations
     )
     
     # 기존 모델 로드
@@ -121,6 +126,8 @@ def main():
         print(f"  Total Loss: {result['avg_loss']['total_loss']:.4f}")
         print(f"  Policy Loss: {result['avg_loss']['policy_loss']:.4f}")
         print(f"  Value Loss: {result['avg_loss']['value_loss']:.4f}")
+        if 'learning_rate' in result:
+            print(f"  Learning Rate: {result['learning_rate']:.6f}")
         
         # 샘플 분포 통계
         if hasattr(trainer.replay_buffer, 'get_stats'):

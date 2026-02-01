@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ai.agent import AlphaZeroAgent, AlphaZeroNode
 from ai.network import AlphaZeroNet, Model
 from ai.dtw_calculator import DTWCalculator
-from ai.trainer_with_dtw import SelfPlayData
+from ai.trainer import SelfPlayData
 from game import Board
 
 

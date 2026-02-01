@@ -42,12 +42,14 @@ class SelfPlayData:
     def _get_weight(self, state):
         """
         보드 state에서 가중치 계산
-        state shape: (6, 9, 9)
+        state shape: (7, 9, 9)
+        Channels: my_plane, opponent_plane, my_completed, opponent_completed, 
+                  draw_completed, last_move, valid_board_mask
         """
-        # 빈 칸 개수 계산 (player1_plane + player2_plane = 0인 곳)
-        player1_plane = state[0]
-        player2_plane = state[1]
-        empty_count = np.sum((player1_plane == 0) & (player2_plane == 0))
+        # 빈 칸 개수 계산 (my_plane + opponent_plane = 0인 곳)
+        my_plane = state[0]
+        opponent_plane = state[1]
+        empty_count = np.sum((my_plane == 0) & (opponent_plane == 0))
         
         if empty_count >= 50:
             weight = 1.0
@@ -260,33 +262,13 @@ class SelfPlayWorkerWithDTW:
         return training_data
     
     def _board_to_input(self, board):
-        boards = np.array(board.boards, dtype=np.float32)
-        
-        player1_plane = (boards == 1).astype(np.float32)
-        player2_plane = (boards == 2).astype(np.float32)
-        
-        if board.current_player == 1:
-            current_player_plane = np.ones((9, 9), dtype=np.float32)
-        else:
-            current_player_plane = np.zeros((9, 9), dtype=np.float32)
-        
-        completed_p1_plane = np.zeros((9, 9), dtype=np.float32)
-        completed_p2_plane = np.zeros((9, 9), dtype=np.float32)
-        completed_draw_plane = np.zeros((9, 9), dtype=np.float32)
-        
-        for br in range(3):
-            for bc in range(3):
-                if board.completed_boards[br][bc] == 1:
-                    completed_p1_plane[br*3:(br+1)*3, bc*3:(bc+1)*3] = 1
-                elif board.completed_boards[br][bc] == 2:
-                    completed_p2_plane[br*3:(br+1)*3, bc*3:(bc+1)*3] = 1
-                elif board.completed_boards[br][bc] == 3:
-                    completed_draw_plane[br*3:(br+1)*3, bc*3:(bc+1)*3] = 1
-        
-        state = np.stack([
-            player1_plane, player2_plane, current_player_plane,
-            completed_p1_plane, completed_p2_plane, completed_draw_plane
-        ], axis=0)
+        """
+        Convert board to network input format (7 channels)
+        Uses network's _board_to_tensor method for consistency
+        """
+        tensor = self.network.model._board_to_tensor(board)
+        # Remove batch dimension and convert to numpy
+        state = tensor.squeeze(0).cpu().numpy()
         return state
 
 
@@ -294,7 +276,8 @@ class AlphaZeroTrainerWithDTW:
     def __init__(self, network=None, lr=0.001, weight_decay=1e-4, batch_size=32, 
                  num_simulations=100, replay_buffer_size=10000, device=None, use_amp=True,
                  num_res_blocks=10, num_channels=256, num_parallel_games=1,
-                 use_dtw=True, dtw_max_depth=12, hot_cache_size=50000, cold_cache_size=500000, use_symmetry=True):
+                 use_dtw=True, dtw_max_depth=12, hot_cache_size=50000, cold_cache_size=500000, use_symmetry=True,
+                 total_iterations=300):
         """
         Args:
             use_dtw: DTW 사용 여부
@@ -307,7 +290,7 @@ class AlphaZeroTrainerWithDTW:
             from .network import Model
             model = Model(num_res_blocks=num_res_blocks, num_channels=num_channels)
             self.network = AlphaZeroNet(model=model, lr=lr, weight_decay=weight_decay, 
-                                       device=device, use_amp=use_amp)
+                                       device=device, use_amp=use_amp, total_iterations=total_iterations)
         else:
             self.network = network
         
@@ -506,14 +489,21 @@ class AlphaZeroTrainerWithDTW:
         
         avg_loss = self.train(num_epochs=num_train_epochs, verbose=verbose, disable_tqdm=disable_tqdm)
         
+        # Learning rate scheduler step (after each iteration)
+        current_lr = self.network.step_scheduler()
+        
         result = {
             'num_samples': num_samples,
-            'avg_loss': avg_loss
+            'avg_loss': avg_loss,
+            'learning_rate': current_lr
         }
         
         # DTW 통계 추가
         if self.use_dtw and self.dtw_calculator:
             result['dtw_stats'] = self.dtw_calculator.get_stats()
+        
+        if verbose:
+            print(f"Learning rate: {current_lr:.6f}")
         
         return result
     

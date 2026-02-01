@@ -6,23 +6,57 @@ import threading
 from torchsummaryX import summary
 from torch.amp import autocast, GradScaler
 
-class ResidualBlock(nn.Module):
-    def __init__(self, channels):
-        super(ResidualBlock, self).__init__()
 
-        self.residual = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(channels),
-            nn.ReLU(),
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(channels)
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation Block - Channel Attention"""
+    def __init__(self, channels, reduction=16):
+        super(SEBlock, self).__init__()
+        self.squeeze = nn.AdaptiveAvgPool2d(1)
+        self.excitation = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid()
         )
         
     def forward(self, x):
+        b, c, _, _ = x.size()
+        # Squeeze: Global average pooling
+        y = self.squeeze(x).view(b, c)
+        # Excitation: FC → ReLU → FC → Sigmoid
+        y = self.excitation(y).view(b, c, 1, 1)
+        # Scale: Channel-wise multiplication
+        return x * y.expand_as(x)
+
+
+class ResidualBlock(nn.Module):
+    """Residual Block with SE (Squeeze-and-Excitation)"""
+    def __init__(self, channels):
+        super(ResidualBlock, self).__init__()
+        
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+        self.se = SEBlock(channels, reduction=16)  # SE Block 추가
+        
+    def forward(self, x):
         residual = x
-        out = self.residual(x)
+        
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = F.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        # SE Block으로 channel attention 적용
+        out = self.se(out)
+        
+        # Residual connection
         out += residual
         out = F.relu(out)
+        
         return out
 
 
@@ -32,8 +66,11 @@ class Model(nn.Module):
         
         self.num_channels = num_channels
         
+        # Step 5: Updated input to 7 channels (from 6)
+        # Channels: my_pieces, opponent_pieces, my_completed, opponent_completed, 
+        #           draw_completed, last_move, valid_board_mask
         self.input = nn.Sequential(
-          nn.Conv2d(6, num_channels, kernel_size=3, padding=1),
+          nn.Conv2d(7, num_channels, kernel_size=3, padding=1),
           nn.BatchNorm2d(num_channels)
         )
         self.res_blocks = nn.ModuleList([
@@ -80,31 +117,87 @@ class Model(nn.Module):
         else:
             boards = np.array(board_state.boards, dtype=np.float32)
         
-        player1_plane = (boards == 1).astype(np.float32)
-        player2_plane = (boards == 2).astype(np.float32)
-        current_player_plane = np.ones((9, 9), dtype=np.float32)
+        # Step 1: Mask completed boards (completed small boards' cells are meaningless)
+        if hasattr(board_state, 'completed_boards'):
+            for br in range(3):
+                for bc in range(3):
+                    if board_state.completed_boards[br][bc] != 0:
+                        # 완료된 보드의 개별 칸 정보 제거 (규칙상 무의미)
+                        start_r, start_c = br * 3, bc * 3
+                        boards[start_r:start_r+3, start_c:start_c+3] = 0
         
-        if hasattr(board_state, 'current_player'):
-            if board_state.current_player == 2:
-                current_player_plane = np.zeros((9, 9), dtype=np.float32)
+        # Step 2: Perspective normalization (my pieces vs opponent pieces)
+        # Always represent from current player's perspective for better learning
+        current_player = board_state.current_player if hasattr(board_state, 'current_player') else 1
         
-        completed_p1_plane = np.zeros((9, 9), dtype=np.float32)
-        completed_p2_plane = np.zeros((9, 9), dtype=np.float32)
-        completed_draw_plane = np.zeros((9, 9), dtype=np.float32)
+        if current_player == 1:
+            my_plane = (boards == 1).astype(np.float32)
+            opponent_plane = (boards == 2).astype(np.float32)
+        else:  # current_player == 2
+            my_plane = (boards == 2).astype(np.float32)
+            opponent_plane = (boards == 1).astype(np.float32)
+        
+        # Completed boards (also perspective normalized)
+        my_completed_plane = np.zeros((9, 9), dtype=np.float32)
+        opponent_completed_plane = np.zeros((9, 9), dtype=np.float32)
+        draw_completed_plane = np.zeros((9, 9), dtype=np.float32)
         
         if hasattr(board_state, 'completed_boards'):
             for br in range(3):
                 for bc in range(3):
-                    if board_state.completed_boards[br][bc] == 1:
-                        completed_p1_plane[br*3:(br+1)*3, bc*3:(bc+1)*3] = 1
-                    elif board_state.completed_boards[br][bc] == 2:
-                        completed_p2_plane[br*3:(br+1)*3, bc*3:(bc+1)*3] = 1
-                    elif board_state.completed_boards[br][bc] == 3:
-                        completed_draw_plane[br*3:(br+1)*3, bc*3:(bc+1)*3] = 1
+                    status = board_state.completed_boards[br][bc]
+                    start_r, start_c = br * 3, bc * 3
+                    
+                    if status == current_player:
+                        # 내가 완료한 보드
+                        my_completed_plane[start_r:start_r+3, start_c:start_c+3] = 1
+                    elif status == (3 - current_player):
+                        # 상대가 완료한 보드
+                        opponent_completed_plane[start_r:start_r+3, start_c:start_c+3] = 1
+                    elif status == 3:
+                        # 무승부
+                        draw_completed_plane[start_r:start_r+3, start_c:start_c+3] = 1
+        
+        # Step 3: Last move plane (critical for Ultimate Tic-Tac-Toe rules)
+        last_move_plane = np.zeros((9, 9), dtype=np.float32)
+        if hasattr(board_state, 'last_move') and board_state.last_move is not None:
+            last_r, last_c = board_state.last_move
+            last_move_plane[last_r, last_c] = 1.0
+        
+        # Step 4: Valid board mask (shows which small boards can be played)
+        valid_board_mask = np.zeros((9, 9), dtype=np.float32)
+        if hasattr(board_state, 'last_move') and board_state.last_move is not None:
+            last_r, last_c = board_state.last_move
+            target_board_r = last_r % 3
+            target_board_c = last_c % 3
+            
+            # Check if target board is completed
+            if hasattr(board_state, 'completed_boards'):
+                if board_state.completed_boards[target_board_r][target_board_c] == 0:
+                    # Target board is available - mark only that board
+                    start_r = target_board_r * 3
+                    start_c = target_board_c * 3
+                    valid_board_mask[start_r:start_r+3, start_c:start_c+3] = 1.0
+                else:
+                    # Target board completed - can play any non-completed board
+                    for br in range(3):
+                        for bc in range(3):
+                            if board_state.completed_boards[br][bc] == 0:
+                                start_r, start_c = br * 3, bc * 3
+                                valid_board_mask[start_r:start_r+3, start_c:start_c+3] = 1.0
+            else:
+                # No completed_boards info - assume target board is valid
+                start_r = target_board_r * 3
+                start_c = target_board_c * 3
+                valid_board_mask[start_r:start_r+3, start_c:start_c+3] = 1.0
+        else:
+            # First move - all boards are valid
+            valid_board_mask[:] = 1.0
         
         board_tensor = np.stack([
-            player1_plane, player2_plane, current_player_plane,
-            completed_p1_plane, completed_p2_plane, completed_draw_plane
+            my_plane, opponent_plane,
+            my_completed_plane, opponent_completed_plane, draw_completed_plane,
+            last_move_plane, valid_board_mask
         ], axis=0)
         board_tensor = torch.FloatTensor(board_tensor).unsqueeze(0)
         
@@ -115,7 +208,7 @@ class Model(nn.Module):
 
 
 class AlphaZeroNet:
-    def __init__(self, model=None, lr=0.001, weight_decay=1e-4, device=None, use_amp=True):
+    def __init__(self, lr=0.001, weight_decay=1e-4, device=None, model=None, use_amp=True, total_iterations=300):
         if device is None:
             if torch.cuda.is_available():
                 self.device = torch.device("cuda")
@@ -134,7 +227,21 @@ class AlphaZeroNet:
         else:
             self.model = model.to(self.device)
         
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        # Optimizer with explicit hyperparameters
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=weight_decay
+        )
+        
+        # Cosine Annealing LR Scheduler
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=total_iterations,
+            eta_min=lr * 0.01  # Minimum LR = 1% of initial
+        )
         
         self.use_amp = use_amp and self.device.type == "cuda"
         self.scaler = GradScaler("cuda") if self.use_amp else None
@@ -188,6 +295,11 @@ class AlphaZeroNet:
                 total_loss = policy_loss + value_loss
             
             self.scaler.scale(total_loss).backward()
+            
+            # Gradient clipping (unscale first for AMP)
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
@@ -197,18 +309,29 @@ class AlphaZeroNet:
             total_loss = policy_loss + value_loss
             
             total_loss.backward()
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
             self.optimizer.step()
         
-        return {
-            'total_loss': total_loss.item(),
-            'policy_loss': policy_loss.item(),
-            'value_loss': value_loss.item()
-        }
+        return total_loss.item(), policy_loss.item(), value_loss.item()
+    
+    def step_scheduler(self):
+        """Call after each iteration to update learning rate"""
+        self.scheduler.step()
+        current_lr = self.scheduler.get_last_lr()[0]
+        return current_lr
+    
+    def get_current_lr(self):
+        """Get current learning rate"""
+        return self.optimizer.param_groups[0]['lr']
     
     def save(self, filepath):
         save_dict = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),  # Scheduler 상태 저장
             'num_res_blocks': len(self.model.res_blocks),  # 모델 구조 정보 저장
             'num_channels': self.model.num_channels,
         }
@@ -251,6 +374,11 @@ class AlphaZeroNet:
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Scheduler 상태 복원
+        if 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
 
