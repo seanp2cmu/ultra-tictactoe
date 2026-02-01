@@ -3,7 +3,9 @@ Compressed Transposition Table for DTW caching
 Hot/Cold 2-tier 구조 + 보드 대칭 정규화로 메모리 효율 극대화
 """
 from collections import OrderedDict
+from game import Board
 
+from ai.utils import BoardSymmetry
 
 class CompressedTranspositionTable:
     def __init__(self, hot_size=50000, cold_size=500000, use_symmetry=True):
@@ -21,7 +23,6 @@ class CompressedTranspositionTable:
         
         self.use_symmetry = use_symmetry
         if use_symmetry:
-            from .board_symmetry import BoardSymmetry
             self.symmetry = BoardSymmetry()
         
         self.stats = {
@@ -32,7 +33,7 @@ class CompressedTranspositionTable:
             "symmetry_saves": 0  # 대칭으로 인한 중복 방지 횟수
         }
     
-    def get_hash(self, board):
+    def get_hash(self, board: Board):
         """
         보드를 해시로 변환
         use_symmetry=True면 정규화된 형태로 변환 (8배 절약)

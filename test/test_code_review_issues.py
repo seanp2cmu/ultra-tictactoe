@@ -11,10 +11,10 @@ from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai.agent import AlphaZeroAgent, AlphaZeroNode
-from ai.network import AlphaZeroNet, Model
-from ai.dtw_calculator import DTWCalculator
-from ai.trainer import SelfPlayData
+from ai.mcts import AlphaZeroAgent, Node
+from ai.core import AlphaZeroNet, Model
+from ai.endgame import DTWCalculator
+from ai.training import SelfPlayData
 from game import Board
 
 
@@ -84,7 +84,7 @@ def test_terminal_value_perspective():
     print(f"P1 wins board: winner={board_p1_wins.winner}, current_player={board_p1_wins.current_player}")
     
     # 현재 구현으로 value 계산
-    node = AlphaZeroNode(board_p1_wins)
+    node = Node(board_p1_wins)
     
     # Terminal 노드 value 계산 (agent.py 로직 복사)
     if board_p1_wins.winner is None or board_p1_wins.winner == 3:
@@ -359,11 +359,11 @@ def test_weight_cache_with_maxlen_overflow():
 # ============================================================================
 
 def test_dtw_max_depth_setting():
-    """MAX_DEPTH가 적절한지 확인"""
+    """DTW MAX_DEPTH가 적절한지 확인"""
     print("\n=== DTW MAX_DEPTH Setting Test ===")
     
     # 현재 MAX_DEPTH 확인
-    from ai.dtw_calculator import DTWCalculator
+    from ai.endgame import DTWCalculator
     
     # 매우 복잡한 엔드게임 보드 (깊은 재귀 필요)
     board = Board()

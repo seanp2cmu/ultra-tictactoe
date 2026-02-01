@@ -1,10 +1,9 @@
 import threading
 import queue
 import time
-import numpy as np
-from typing import Dict, Tuple, List
+from typing import List
 
-from .network import AlphaZeroNet
+from ai.core import AlphaZeroNet
 
 class PredictionRequest:
     """개별 prediction 요청"""

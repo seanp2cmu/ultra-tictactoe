@@ -12,7 +12,7 @@ RTX 5090 (32GB VRAM) 최적화 설정:
 import os
 from tqdm import tqdm
 from config import Config
-from ai.trainer import AlphaZeroTrainerWithDTW
+from ai.training import Trainer
 
 def main():
     config = Config()
@@ -61,7 +61,7 @@ def main():
     print("=" * 80)
     
     # Trainer 초기화
-    trainer = AlphaZeroTrainerWithDTW(
+    trainer = Trainer(
         network=None,
         lr=config.training.lr,
         weight_decay=config.training.weight_decay,

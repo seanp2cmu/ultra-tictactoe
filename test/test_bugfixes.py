@@ -7,9 +7,9 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai.agent import AlphaZeroAgent, AlphaZeroNode
-from ai.network import AlphaZeroNet, Model
-from ai.dtw_calculator import DTWCalculator
+from ai.mcts import AlphaZeroAgent, Node
+from ai.core import AlphaZeroNet, Model
+from ai.endgame import DTWCalculator
 from game import Board
 
 
@@ -173,7 +173,7 @@ def test_terminal_value_draw():
 def test_terminal_node_direct_evaluation():
     """Terminal 노드가 직접 평가되는지 확인"""
     board = create_player1_win_board()
-    node = AlphaZeroNode(board)
+    node = Node(board)
     
     # Terminal 노드 확인
     assert node.is_terminal(), "Node should be terminal"
@@ -292,17 +292,17 @@ def test_neural_net_perspective_no_extra_flip():
 def test_backprop_value_alternation():
     """Backprop 시 value가 교대로 플립되는지 확인"""
     board = Board()
-    root = AlphaZeroNode(board)
+    root = Node(board)
     
     # 수동으로 path 생성
     board1 = Board()
     board1.make_move(0, 0)
-    node1 = AlphaZeroNode(board1, parent=root)
+    node1 = Node(board1, parent=root)
     
     board2 = Board()
     board2.make_move(0, 0)
     board2.make_move(1, 1)
-    node2 = AlphaZeroNode(board2, parent=node1)
+    node2 = Node(board2, parent=node1)
     
     # Value 1.0으로 backprop 시뮬레이션
     value = 1.0

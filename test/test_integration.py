@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 import numpy as np
 from game import Board
-from ai.network import AlphaZeroNet, Model
-from ai.agent import AlphaZeroAgent
+from ai.core import AlphaZeroNet, Model
+from ai.mcts import AlphaZeroAgent
 
 
 def test_board_last_move():

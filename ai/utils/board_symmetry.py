@@ -3,7 +3,7 @@
 Ultimate Tic-Tac-Toe는 D4 대칭군을 가짐 (8가지 대칭)
 """
 import numpy as np
-
+from game import Board
 
 class BoardSymmetry:
     """보드 대칭 변환 및 정규화"""
@@ -44,7 +44,7 @@ class BoardSymmetry:
         return np.rot90(np.transpose(board_2d), k=2)
     
     @staticmethod
-    def get_all_symmetries(board):
+    def get_all_symmetries(board: Board):
         """
         모든 대칭 변환 적용
         
@@ -107,14 +107,14 @@ class BoardSymmetry:
         return symmetries
     
     @staticmethod
-    def to_tuple(boards_arr, completed_arr, current_player):
+    def to_tuple(boards_arr: np.ndarray, completed_arr: np.ndarray, current_player):
         """numpy array를 hashable tuple로 변환"""
         boards_tuple = tuple(tuple(row) for row in boards_arr.flatten().reshape(9, 9))
         completed_tuple = tuple(tuple(row) for row in completed_arr)
         return (boards_tuple, completed_tuple, current_player)
     
     @staticmethod
-    def get_canonical_form(board):
+    def get_canonical_form(board: Board):
         """
         정규화된 형태 (canonical form) 반환
         8가지 대칭 중 사전순으로 가장 작은 것

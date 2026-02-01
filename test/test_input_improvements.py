@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 import numpy as np
 from game import Board
-from ai.network import Model
+from ai.core import Model
 
 def test_input_channels():
     """입력 채널이 7개로 업데이트되었는지 확인"""

@@ -3,6 +3,7 @@ Distance to Win (DTW) Calculator
 엔드게임에서 확정 승리까지의 최단 거리 계산
 """
 import copy
+
 from .transposition_table import CompressedTranspositionTable
 from game import Board
 
@@ -200,7 +201,7 @@ class DTWCalculator:
         if result_data is None:
             return network_value
         
-        result, dtw, _ = result_data
+        result, _, _ = result_data
         
         # result: 1 (승), -1 (패), 0 (무승부)
         return float(result)

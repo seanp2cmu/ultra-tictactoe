@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import numpy as np
-from ai.network import AlphaZeroNet, SEBlock, ResidualBlock
+from ai.core import AlphaZeroNet, SEBlock, ResidualBlock
 
 def test_se_block():
     """SE Block이 정상 작동하는지 확인"""

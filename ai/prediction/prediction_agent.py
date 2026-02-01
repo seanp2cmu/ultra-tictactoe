@@ -2,8 +2,8 @@
 실전 게임/예측용 AlphaZero Agent 헬퍼
 DTW가 활성화된 강화된 Agent 생성
 """
-from .agent import AlphaZeroAgent
-from .network import AlphaZeroNet
+from ai.mcts import AlphaZeroAgent
+from ai.core import AlphaZeroNet
 
 
 def create_prediction_agent(model_path=None, network=None, num_simulations=400, 
@@ -92,38 +92,3 @@ def create_strong_agent(model_path=None, network=None):
         use_dtw=True,
         dtw_max_depth=18
     )
-
-
-# Config 기반 Agent 생성
-def create_agent_from_config(model_path=None, network=None, config=None):
-    """
-    Config 기반 Agent 생성
-    
-    Example:
-        from config import get_default_config
-        config = get_default_config()
-        agent = create_agent_from_config("./model/model_final.pth", config=config)
-    """
-    if config is None:
-        from config import get_default_config
-        config = get_default_config()
-    
-    # PredictionConfig가 있으면 사용
-    if hasattr(config, 'prediction'):
-        pred_cfg = config.prediction
-        return create_prediction_agent(
-            model_path=model_path,
-            network=network,
-            num_simulations=pred_cfg.num_simulations,
-            temperature=pred_cfg.temperature,
-            use_dtw=pred_cfg.use_dtw,
-            dtw_max_depth=pred_cfg.dtw_max_depth
-        )
-    else:
-        # DTW 설정 사용
-        return create_prediction_agent(
-            model_path=model_path,
-            network=network,
-            use_dtw=config.dtw.use_dtw,
-            dtw_max_depth=config.dtw.max_depth
-        )
