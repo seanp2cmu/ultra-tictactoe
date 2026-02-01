@@ -147,28 +147,29 @@ class AlphaZeroNet:
     
     def predict_batch(self, board_states):
         """여러 board states를 batch로 처리"""
-        self.model.eval()
-        with torch.no_grad():
-            # 모든 board states를 tensor로 변환
-            batch_tensors = []
-            for board_state in board_states:
-                board_tensor = self.model._board_to_tensor(board_state)
-                batch_tensors.append(board_tensor)
-            
-            # Batch로 합치기 (batch_size, channels, height, width)
-            batch_input = torch.cat(batch_tensors, dim=0).to(self.device)
-            
-            # Forward pass
-            policy_logits, values = self.model(batch_input)
-            
-            # Softmax for policy
-            policy_probs = torch.softmax(policy_logits, dim=1)
-            
-            # CPU로 이동 및 numpy 변환
-            policy_probs = policy_probs.cpu().numpy()
-            values = values.cpu().numpy()
-            
-            return policy_probs, values.flatten()
+        with self.predict_lock:
+            self.model.eval()
+            with torch.no_grad():
+                # 모든 board states를 tensor로 변환
+                batch_tensors = []
+                for board_state in board_states:
+                    board_tensor = self.model._board_to_tensor(board_state)
+                    batch_tensors.append(board_tensor)
+                
+                # Batch로 합치기 (batch_size, channels, height, width)
+                batch_input = torch.cat(batch_tensors, dim=0).to(self.device)
+                
+                # Forward pass
+                policy_logits, values = self.model(batch_input)
+                
+                # Softmax for policy
+                policy_probs = torch.softmax(policy_logits, dim=1)
+                
+                # CPU로 이동 및 numpy 변환
+                policy_probs = policy_probs.cpu().numpy()
+                values = values.cpu().numpy()
+                
+                return policy_probs, values.flatten()
     
     def train_step(self, boards, policies, values):
         self.model.train()

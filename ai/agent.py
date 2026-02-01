@@ -113,31 +113,28 @@ class AlphaZeroAgent:
                 node = root
                 search_path = [node]
                 
-                # Virtual loss 적용하며 leaf까지 이동
+                # Leaf까지 이동 (virtual loss 없이)
                 while node.is_expanded() and not node.is_terminal():
                     action, node = node.select_child(self.c_puct)
-                    node.visits += 1  # Virtual loss
                     search_path.append(node)
                 
                 search_paths.append(search_path)
                 node_idx = len(leaf_nodes)
                 leaf_nodes.append(node)
                 
-                # Tablebase 체크 (25칸 이하, DTW 사용 시)
+                # Tablebase 체크 (DTW 사용 시)
                 tablebase_hit = False
                 if not node.is_terminal() and self.use_dtw and self.dtw_calculator:
-                    empty_count = sum(1 for row in node.board.boards for cell in row if cell == 0)
-                    
-                    if empty_count <= 25:
+                    # is_endgame 메서드로 체크 (중복 계산 제거)
+                    if self.dtw_calculator.is_endgame(node.board):
                         result_data = self.dtw_calculator.calculate_dtw(node.board)
                         
                         if result_data is not None:
                             result, dtw, _ = result_data
-                            value = float(result)  # -1, 0, 1
-                            
-                            # 관점 조정
-                            if node.board.current_player != board.current_player:
-                                value = -value
+                            # DTW result는 node.board.current_player 관점
+                            # Backprop에서 자동으로 관점 교대되므로 그대로 사용
+                            # (각 레벨에서 value = -value로 플립됨)
+                            value = float(result)
                             
                             # Expand용 uniform policy (Tablebase는 정확하므로 policy 불필요)
                             legal_moves = node.board.get_legal_moves()
@@ -164,12 +161,17 @@ class AlphaZeroAgent:
             for i, node in enumerate(leaf_nodes):
                 if node.is_terminal():
                     # 터미널 노드는 직접 계산
+                    # winner는 이긴 플레이어 번호 (1 or 2), 무승부면 None or 3
+                    # 중요: make_move() 후 current_player가 바뀌므로,
+                    # current_player는 마지막 수를 두지 않은 플레이어 (다음 차례)
                     if node.board.winner is None or node.board.winner == 3:
-                        value = 0
-                    elif node.board.winner == board.current_player:
-                        value = 1
+                        value = 0.0
                     else:
-                        value = -1
+                        # 현재 플레이어 (current_player) 관점에서 평가
+                        if node.board.winner == node.board.current_player:
+                            value = 1.0  # 현재 플레이어가 이김
+                        else:
+                            value = -1.0  # 현재 플레이어가 짐 (상대가 이김)
                 elif i in tablebase_indices:
                     # Tablebase 결과 사용
                     _, value, expand_probs = next((r for r in tablebase_results if r[0] == i), (None, 0, {}))
@@ -184,13 +186,13 @@ class AlphaZeroAgent:
                     action_probs = {i: policy_probs[i] for i in range(81)}
                     node.expand(action_probs)
                     
-                    if node.board.current_player != board.current_player:
-                        value = -value
+                    # Network는 node.board.current_player 관점에서 예측
+                    # Backprop에서 자동으로 관점이 플립되므로 그대로 사용
+                    # (각 부모 레벨에서 value = -value)
                 
-                # Backpropagation - Virtual loss 제거하며 업데이트
+                # Backpropagation
                 for path_node in reversed(search_paths[i]):
-                    path_node.visits -= 1  # Virtual loss 제거
-                    path_node.update(value)
+                    path_node.update(value)  # visits += 1, value_sum += value
                     value = -value
         
         return root

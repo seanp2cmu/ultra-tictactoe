@@ -71,11 +71,14 @@ class WeightedSampleBuffer:
     가중치 기반 샘플링 버퍼
     
     전환 구간 데이터를 더 자주 샘플링
+    deque 사용으로 O(1) FIFO 성능
     """
     
     def __init__(self, max_size=50000):
-        self.data = []
-        self.weights = []
+        from collections import deque
+        self.data = deque(maxlen=max_size)
+        self.weights = deque(maxlen=max_size)
+        self.categories = deque(maxlen=max_size)  # 카테고리 추적
         self.max_size = max_size
         
         # 통계
@@ -88,6 +91,9 @@ class WeightedSampleBuffer:
             "tablebase": 0,
             "deep_tablebase": 0
         }
+        
+        # 누적 가중치 (샘플링 최적화)
+        self.total_weight = 0.0
     
     def add(self, state, policy, value, board, dtw=None):
         """
@@ -104,37 +110,38 @@ class WeightedSampleBuffer:
         weight = get_position_weight(board)
         category = get_position_category(board)
         
-        # FIFO with max size
+        # deque가 가득 차면 자동으로 가장 오래된 것 제거
         if len(self.data) >= self.max_size:
-            # 가장 오래된 것 제거
-            self.data.pop(0)
-            self.weights.pop(0)
+            # 제거될 항목의 카테고리와 가중치
+            old_category = self.categories[0]
+            old_weight = self.weights[0]
             
-            # 통계도 업데이트 (정확하지 않지만 근사)
-            for cat in self.stats:
-                if self.stats[cat] > 0:
-                    self.stats[cat] -= 1
-                    break
+            # 통계 업데이트
+            self.stats[old_category] -= 1
+            self.total_weight -= old_weight
         
+        # 추가 (deque가 자동으로 maxlen 관리)
         self.data.append((state, policy, value, dtw, weight))
         self.weights.append(weight)
+        self.categories.append(category)
+        
+        # 통계 업데이트
         self.stats[category] += 1
+        self.total_weight += weight
     
     def sample(self, batch_size):
         """
-        가중치 기반 샘플링
+        가중치 기반 샘플링 (누적 가중치 사용으로 O(n) → O(1))
         
         전환 구간(weight=1.2)이 더 자주 선택됨
         """
-        import random
         import numpy as np
         
         if len(self.data) < batch_size:
-            batch = self.data
+            batch = list(self.data)
         else:
-            # 가중치 기반 샘플링
-            total_weight = sum(self.weights)
-            probs = [w / total_weight for w in self.weights]
+            # 가중치 기반 샘플링 (누적 가중치 재사용)
+            probs = [w / self.total_weight for w in self.weights]
             
             indices = np.random.choice(
                 len(self.data), 

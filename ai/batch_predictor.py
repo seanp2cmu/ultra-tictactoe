@@ -74,18 +74,9 @@ class BatchPredictor:
     
     def predict_batch(self, board_states):
         """여러 board states를 한 번에 처리 (배치 MCTS용)"""
-        # BatchPredictor를 통해 각 board를 개별적으로 요청
-        # BatchPredictor가 알아서 이들을 모아서 배치 처리함
-        results = []
-        for board_state in board_states:
-            policy_probs, value = self.predict(board_state)
-            results.append((policy_probs, value))
-        
-        # 결과를 numpy 배열로 변환
-        policy_probs_batch = np.array([r[0] for r in results])
-        values_batch = np.array([r[1] for r in results])
-        
-        return policy_probs_batch, values_batch
+        # 배치로 들어온 요청은 직접 네트워크에 전달 (큐 우회)
+        # 개별 요청으로 분리하면 배치의 이점이 사라짐
+        return self.network.predict_batch(board_states)
     
     def _batch_worker(self):
         """배치 처리 워커 스레드"""

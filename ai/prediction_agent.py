@@ -52,8 +52,7 @@ def create_prediction_agent(model_path=None, network=None, num_simulations=400,
         num_simulations=num_simulations,
         temperature=temperature,
         use_dtw=use_dtw,
-        dtw_max_depth=dtw_max_depth,
-        tablebase_path=tablebase_path
+        dtw_max_depth=dtw_max_depth
     )
     
     if use_dtw:

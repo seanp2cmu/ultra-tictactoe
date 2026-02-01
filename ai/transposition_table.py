@@ -135,6 +135,9 @@ class CompressedTranspositionTable:
             if key in self.hot:
                 self.hot[key] = (result, dtw, best_move)
                 self.hot.move_to_end(key)
+            elif key in self.cold:
+                # Cold에 있으면 Hot으로 승격하며 업데이트
+                self._promote_to_hot(key, result, dtw, best_move)
             return
         
         if len(self.hot) >= self.hot_size:

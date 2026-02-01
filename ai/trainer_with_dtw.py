@@ -33,17 +33,11 @@ class SelfPlayData:
     def __init__(self, max_size=10000):
         self.data = deque(maxlen=max_size)
         self.weights = deque(maxlen=max_size)
+        self.categories = deque(maxlen=max_size)
         
-        # 통계
-        self.stats = {
-            "opening": 0,
-            "early_mid": 0,
-            "mid": 0,
-            "transition": 0,  # 26-29칸
-            "near_tablebase": 0,
-            "tablebase": 0,
-            "deep_tablebase": 0
-        }
+        # 캐시된 확률 배열 (샘플링 최적화용)
+        self._probs_cache = None
+        self._cache_dirty = True
     
     def _get_weight(self, state):
         """
@@ -85,30 +79,28 @@ class SelfPlayData:
         
         self.data.append((state, policy, value, dtw))
         self.weights.append(weight)
+        self.categories.append(category)
         
-        # 통계 업데이트
-        self.stats[category] += 1
-        
-        # maxlen 초과 시 가장 오래된 것 제거 (deque가 자동 처리)
-        if len(self.data) > len(self.stats):
-            # 통계는 근사치로 유지
-            pass
+        # 캐시 무효화
+        self._cache_dirty = True
     
     def sample(self, batch_size):
-        """가중치 기반 샘플링"""
+        """가중치 기반 샘플링 (캐싱 최적화)"""
         if len(self.data) < batch_size:
             batch_indices = list(range(len(self.data)))
         else:
-            # 가중치 기반 샘플링
-            weights_array = np.array(self.weights)
-            total_weight = np.sum(weights_array)
-            probs = weights_array / total_weight
+            # 캐시된 확률 배열 사용
+            if self._cache_dirty:
+                weights_array = np.array(self.weights)
+                total_weight = np.sum(weights_array)
+                self._probs_cache = weights_array / total_weight
+                self._cache_dirty = False
             
             batch_indices = np.random.choice(
                 len(self.data),
                 size=batch_size,
                 replace=False,
-                p=probs
+                p=self._probs_cache
             )
         
         batch = [self.data[i] for i in batch_indices]
@@ -116,18 +108,21 @@ class SelfPlayData:
         return np.array(states), np.array(policies), np.array(values), list(dtws)
     
     def get_stats(self):
-        """통계 반환"""
+        """통계 반환 (정확한 실시간 계산)"""
         total = len(self.data)
         if total == 0:
             return {}
+        
+        # 카테고리 분포 정확히 계산
+        from collections import Counter
+        counter = Counter(self.categories)
         
         return {
             "total": total,
             "avg_weight": np.mean(self.weights) if self.weights else 0,
             "distribution": {
                 cat: f"{count} ({100*count/total:.1f}%)"
-                for cat, count in self.stats.items()
-                if count > 0
+                for cat, count in counter.items()
             }
         }
     
@@ -148,10 +143,8 @@ class SelfPlayWorkerWithDTW:
             cold_cache_size: Cold cache 크기
             use_symmetry: 보드 대칭 사용 (8배 메모리 절약)
         """
-        if batch_predictor:
-            self.agent = AlphaZeroAgent(batch_predictor, num_simulations=num_simulations, temperature=temperature)
-        else:
-            self.agent = AlphaZeroAgent(network, num_simulations=num_simulations, temperature=temperature)
+        # Agent는 항상 network를 받음 (batch_predictor는 별도로 처리 안 함)
+        self.agent = AlphaZeroAgent(network, num_simulations=num_simulations, temperature=temperature)
         
         self.use_dtw_endgame = use_dtw_endgame
         
@@ -235,26 +228,25 @@ class SelfPlayWorkerWithDTW:
             if verbose and step % 10 == 0:
                 print(f"Step {step}")
         
-        # 게임 결과
+        # 게임 결과 (ground truth)
         if board.winner is None or board.winner == 3:
-            final_value = 0
+            winner = None  # 무승부
         else:
-            final_value = board.winner
+            winner = board.winner  # 1 또는 2
         
-        # 훈련 데이터 생성 (DTW 고려)
+        # 훈련 데이터 생성 (게임 결과가 ground truth)
         training_data = []
         for state, policy, player, dtw in game_data:
-            # Value 계산
-            if final_value == 0:
-                value = 0
-            elif final_value == player:
-                value = 1
-            else:
-                value = -1
-            
-            # DTW가 있고 확정 승리였으면 value = 1.0
-            if dtw is not None and dtw < float('inf'):
+            # Value 계산: 실제 게임 결과 기준
+            if winner is None:
+                value = 0.0
+            elif winner == player:
                 value = 1.0
+            else:
+                value = -1.0
+            
+            # DTW는 value를 오버라이드하지 않음!
+            # DTW는 해당 시점의 이론적 평가일 뿐, 실제 게임 결과가 ground truth
             
             training_data.append((state, policy, value, dtw))
         
@@ -349,9 +341,11 @@ class AlphaZeroTrainerWithDTW:
     def _play_single_game(self, game_idx, num_games, temperature, verbose, batch_predictor=None, num_simulations=None):
         """단일 게임 실행 (병렬 실행용)"""
         sims = num_simulations if num_simulations is not None else self.num_simulations
+        # 각 worker가 자신의 DTW calculator를 생성 (thread-safe)
+        # dtw_calculator=None으로 전달하면 worker 내부에서 새로 생성됨
         worker = SelfPlayWorkerWithDTW(
             self.network, 
-            dtw_calculator=self.dtw_calculator,
+            dtw_calculator=None,  # None으로 전달하여 각 worker가 자신의 calculator 생성
             batch_predictor=batch_predictor,
             num_simulations=sims, 
             temperature=temperature,
@@ -388,11 +382,30 @@ class AlphaZeroTrainerWithDTW:
                     game_pbar = tqdm(total=num_games, desc="Self-play", 
                                     leave=False, disable=disable_tqdm, ncols=100)
                     
+                    completed_games = 0
+                    total_positions = 0
+                    dtw_positions = 0
+                    
                     for future in as_completed(futures):
                         game_data = future.result()
                         all_data.extend(game_data)
+                        completed_games += 1
+                        
+                        # DTW 통계 수집
+                        for _, _, _, dtw in game_data:
+                            total_positions += 1
+                            if dtw is not None:
+                                dtw_positions += 1
+                        
+                        avg_length = len(all_data) / completed_games if completed_games > 0 else 0
+                        dtw_rate = dtw_positions / total_positions if total_positions > 0 else 0
+                        
                         game_pbar.update(1)
-                        game_pbar.set_postfix({"samples": len(all_data)})
+                        game_pbar.set_postfix({
+                            "samples": len(all_data),
+                            "avg_len": f"{avg_length:.1f}",
+                            "dtw%": f"{dtw_rate:.1%}"
+                        })
                     
                     game_pbar.close()
         else:
@@ -401,7 +414,17 @@ class AlphaZeroTrainerWithDTW:
             for game_idx in game_pbar:
                 game_data = self._play_single_game(game_idx, num_games, temperature, verbose, None, num_simulations)
                 all_data.extend(game_data)
-                game_pbar.set_postfix({"samples": len(all_data)})
+                
+                # DTW 통계 수집
+                dtw_count = sum(1 for _, _, _, dtw in game_data if dtw is not None)
+                dtw_rate = dtw_count / len(game_data) if game_data else 0
+                avg_length = len(all_data) / (game_idx + 1) if game_idx >= 0 else 0
+                
+                game_pbar.set_postfix({
+                    "samples": len(all_data),
+                    "avg_len": f"{avg_length:.1f}",
+                    "dtw%": f"{dtw_rate:.1%}"
+                })
         
         # Replay buffer에 추가 및 통계
         for state, policy, value, dtw in all_data:
@@ -512,8 +535,20 @@ class AlphaZeroTrainerWithDTW:
         except FileNotFoundError:
             pass
     
-    def clear_dtw_cache(self):
-        """DTW 캐시 초기화 (메모리 절약)"""
+    def clear_dtw_cache(self, clear_cold_only=True):
+        """
+        DTW 캐시 초기화 (메모리 절약)
+        
+        Args:
+            clear_cold_only: True면 Cold cache만 비우고 Hot은 유지 (기본값)
+                           False면 전체 캐시 초기화
+        """
         if self.use_dtw and self.dtw_calculator:
-            self.dtw_calculator.clear_cache()
-            print("DTW cache cleared")
+            if clear_cold_only:
+                # Cold만 비워서 메모리 절약하되 Hot은 유지 (성능 유지)
+                self.dtw_calculator.tt.cold.clear()
+                print("DTW cold cache cleared (hot cache preserved)")
+            else:
+                # 전체 캐시 초기화
+                self.dtw_calculator.clear_cache()
+                print("DTW cache fully cleared")

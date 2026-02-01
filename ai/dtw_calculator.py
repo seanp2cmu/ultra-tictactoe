@@ -69,10 +69,14 @@ class DTWCalculator:
         
         return (result, dtw, best_move)
     
-    def _retrograde_analysis(self, board: Board):
+    def _retrograde_analysis(self, board: Board, depth: int = 0):
         """
         완벽한 Retrograde Analysis (25칸 이하)
-        depth 제한 없이 끝까지 계산
+        depth 제한으로 stack overflow 방지
+        
+        Args:
+            board: 현재 보드
+            depth: 재귀 깊이 (안전장치)
         
         Returns:
             (result, dtw, best_move)
@@ -80,6 +84,14 @@ class DTWCalculator:
             - dtw: Distance to Win/Loss
             - best_move: (row, col) or None
         """
+        # Depth 제한 (안전장치 - stack overflow 방지)
+        # endgame_threshold=25이므로 최대 깊이는 25
+        # 안전 마진으로 30 설정
+        MAX_DEPTH = 30
+        if depth > MAX_DEPTH:
+            # 무승부로 처리
+            return (0, float('inf'), None)
+        
         # 터미널 체크
         if board.winner is not None:
             if board.winner == board.current_player:
@@ -108,11 +120,11 @@ class DTWCalculator:
                 if cached is not None:
                     opponent_result, opponent_dtw, _ = cached
                 else:
-                    # 재귀 (depth 제한 없음)
-                    opponent_result, opponent_dtw, _ = self._retrograde_analysis(next_board)
+                    # 재귀 (depth 추적)
+                    opponent_result, opponent_dtw, _ = self._retrograde_analysis(next_board, depth + 1)
                     self.tt.put(next_board, opponent_result, opponent_dtw, None)
             else:
-                opponent_result, opponent_dtw, _ = self._retrograde_analysis(next_board)
+                opponent_result, opponent_dtw, _ = self._retrograde_analysis(next_board, depth + 1)
             
             # 상대 관점을 내 관점으로 변환
             my_result = -opponent_result
@@ -120,12 +132,27 @@ class DTWCalculator:
             
             # 최선의 수 선택
             if my_result > best_result:
+                # 더 좋은 결과 (승 > 무 > 패)
                 best_result = my_result
                 best_dtw = my_dtw
                 best_move = move
-            elif my_result == best_result and my_dtw < best_dtw:
-                best_dtw = my_dtw
-                best_move = move
+            elif my_result == best_result:
+                # 같은 결과일 때 DTW 비교
+                if my_result > 0:
+                    # 승리: 빨리 이기기 (작은 DTW)
+                    if my_dtw < best_dtw:
+                        best_dtw = my_dtw
+                        best_move = move
+                elif my_result < 0:
+                    # 패배: 늦게 지기 (큰 DTW)
+                    if my_dtw > best_dtw:
+                        best_dtw = my_dtw
+                        best_move = move
+                else:
+                    # 무승부: DTW 작은 것 (빨리 끝내기)
+                    if my_dtw < best_dtw:
+                        best_dtw = my_dtw
+                        best_move = move
         
         return (best_result, best_dtw, best_move)
     
