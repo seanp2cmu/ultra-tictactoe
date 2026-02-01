@@ -33,9 +33,8 @@ class DTWCalculator:
             self.tt = None
     
     def is_endgame(self, board: Board):
-        """엔드게임 판단 (빈 칸이 threshold 이하 - Tablebase 영역)"""
-        empty_count = sum(1 for row in board.boards for cell in row if cell == 0)
-        return empty_count <= self.endgame_threshold
+        """엔드게임 판단 (플레이 가능한 빈칸이 threshold 이하)"""
+        return board.count_playable_empty_cells() <= self.endgame_threshold
     
     def calculate_dtw(self, board: Board):
         """
@@ -56,10 +55,8 @@ class DTWCalculator:
             if cached is not None:
                 return cached
         
-        empty_count = sum(1 for row in board.boards for cell in row if cell == 0)
-        
         # === threshold 초과: DTW 계산 안 함, MCTS 사용 ===
-        if empty_count > self.endgame_threshold:
+        if board.count_playable_empty_cells() > self.endgame_threshold:
             return None
         
         # === threshold 이하: Retrograde Analysis (완벽) ===
@@ -70,14 +67,15 @@ class DTWCalculator:
         
         return (result, dtw, best_move)
     
-    def _retrograde_analysis(self, board: Board, depth: int = 0):
+    def _retrograde_analysis(self, board: Board, depth: int = 0, alpha: int = -2, beta: int = 2):
         """
-        완벽한 Retrograde Analysis (25칸 이하)
-        depth 제한으로 stack overflow 방지
+        Alpha-Beta Pruning으로 최적화된 Minimax (25칸 이하)
         
         Args:
             board: 현재 보드
             depth: 재귀 깊이 (안전장치)
+            alpha: Alpha 값 (최대화 플레이어의 최소 보장 값)
+            beta: Beta 값 (최소화 플레이어의 최대 보장 값)
         
         Returns:
             (result, dtw, best_move)
@@ -85,30 +83,25 @@ class DTWCalculator:
             - dtw: Distance to Win/Loss
             - best_move: (row, col) or None
         """
-        # Depth 제한 (안전장치 - stack overflow 방지)
-        # endgame_threshold=25이므로 최대 깊이는 25
-        # 안전 마진으로 30 설정
         MAX_DEPTH = 30
         if depth > MAX_DEPTH:
-            # 무승부로 처리
             return (0, float('inf'), None)
         
         # 터미널 체크
         if board.winner is not None:
             if board.winner == board.current_player:
-                return (1, 0, None)  # 승리
+                return (1, 0, None)
             elif board.winner == 3:
-                return (0, 0, None)  # 무승부
+                return (0, 0, None)
             else:
-                return (-1, 0, None)  # 패배
+                return (-1, 0, None)
         
         legal_moves = board.get_legal_moves()
         if not legal_moves:
-            return (0, 0, None)  # 무승부
+            return (0, 0, None)
         
-        # 모든 수 탐색 (depth 제한 없음)
         best_move = None
-        best_result = -1  # 최악부터 시작
+        best_result = -2  # -1보다 작게 시작
         best_dtw = float('inf')
         
         for move in legal_moves:
@@ -121,39 +114,42 @@ class DTWCalculator:
                 if cached is not None:
                     opponent_result, opponent_dtw, _ = cached
                 else:
-                    # 재귀 (depth 추적)
-                    opponent_result, opponent_dtw, _ = self._retrograde_analysis(next_board, depth + 1)
+                    # Alpha-Beta Pruning 적용
+                    opponent_result, opponent_dtw, _ = self._retrograde_analysis(
+                        next_board, depth + 1, -beta, -alpha
+                    )
                     self.tt.put(next_board, opponent_result, opponent_dtw, None)
             else:
-                opponent_result, opponent_dtw, _ = self._retrograde_analysis(next_board, depth + 1)
+                opponent_result, opponent_dtw, _ = self._retrograde_analysis(
+                    next_board, depth + 1, -beta, -alpha
+                )
             
-            # 상대 관점을 내 관점으로 변환
             my_result = -opponent_result
             my_dtw = opponent_dtw + 1 if opponent_dtw != float('inf') else float('inf')
             
             # 최선의 수 선택
             if my_result > best_result:
-                # 더 좋은 결과 (승 > 무 > 패)
                 best_result = my_result
                 best_dtw = my_dtw
                 best_move = move
+                alpha = max(alpha, my_result)
             elif my_result == best_result:
-                # 같은 결과일 때 DTW 비교
                 if my_result > 0:
-                    # 승리: 빨리 이기기 (작은 DTW)
                     if my_dtw < best_dtw:
                         best_dtw = my_dtw
                         best_move = move
                 elif my_result < 0:
-                    # 패배: 늦게 지기 (큰 DTW)
                     if my_dtw > best_dtw:
                         best_dtw = my_dtw
                         best_move = move
                 else:
-                    # 무승부: DTW 작은 것 (빨리 끝내기)
                     if my_dtw < best_dtw:
                         best_dtw = my_dtw
                         best_move = move
+            
+            # 🔥 Alpha-Beta Pruning
+            if alpha >= beta:
+                break  # 나머지 브랜치 탐색 생략
         
         return (best_result, best_dtw, best_move)
     

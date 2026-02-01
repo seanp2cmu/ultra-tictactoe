@@ -81,3 +81,19 @@ class Board:
 
     def is_game_over(self): 
         return self.winner is not None
+    
+    def count_empty_cells(self) -> int:
+        """Count total empty cells (including cells in completed small boards)."""
+        return sum(1 for row in self.boards for cell in row if cell == 0)
+    
+    def count_playable_empty_cells(self) -> int:
+        """Count only playable empty cells (excluding completed small boards)."""
+        empty_count = 0
+        for br in range(3):
+            for bc in range(3):
+                if self.completed_boards[br][bc] == 0:
+                    for r in range(3):
+                        for c in range(3):
+                            if self.boards[br * 3 + r][bc * 3 + c] == 0:
+                                empty_count += 1
+        return empty_count

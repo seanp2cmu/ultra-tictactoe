@@ -2,9 +2,10 @@
 포지션별 학습 가중치
 전환 구간(26-29칸)에 집중, Tablebase 영역은 낮게
 """
+from game.board import Board
 
 
-def get_position_weight(board):
+def get_position_weight(board: Board):
     """
     보드 상태에 따른 학습 가중치 반환
     
@@ -23,7 +24,7 @@ def get_position_weight(board):
     - 10-19칸: 0.5  (Tablebase 확실)
     - 0-9칸:   0.3  (Tablebase 완전 확실)
     """
-    empty_count = sum(1 for row in board.boards for cell in row if cell == 0)
+    empty_count = board.count_empty_cells()
     
     if empty_count >= 50:
         return 1.0  # 미드게임
@@ -41,14 +42,14 @@ def get_position_weight(board):
         return 0.3  # Tablebase 완전 확실
 
 
-def get_position_category(board):
+def get_position_category(board: Board):
     """
     포지션 카테고리 반환 (통계용)
     
     Returns:
         str: 카테고리 이름
     """
-    empty_count = sum(1 for row in board.boards for cell in row if cell == 0)
+    empty_count = board.count_empty_cells()
     
     if empty_count >= 50:
         return "opening"

@@ -218,7 +218,7 @@ def test_dtw_max_depth_limit():
 
 
 def test_dtw_endgame_threshold():
-    """DTW가 25칸 이하에서만 계산되는지 확인"""
+    """DTW가 25칸 이하에서만 계산되는지 확인 (플레이 가능한 빈칸 기준)"""
     dtw = DTWCalculator(endgame_threshold=25, use_cache=False)
     
     # 26칸 이상 (DTW 계산 안 함)
@@ -228,8 +228,15 @@ def test_dtw_endgame_threshold():
         if moves:
             board_26.make_move(moves[0][0], moves[0][1])
     
+    # 실제 플레이 가능한 빈칸 확인
+    playable_26 = board_26.count_playable_empty_cells()
     result_26 = dtw.calculate_dtw(board_26)
-    assert result_26 is None, "Should return None for > 25 empty cells"
+    
+    if playable_26 > 25:
+        assert result_26 is None, f"Should return None for {playable_26} > 25 playable cells"
+    else:
+        # 완료된 보드로 인해 플레이 가능한 칸이 25 이하면 계산 시도
+        print(f"  Note: Only {playable_26} playable cells (completed boards exist)")
     
     # 25칸 이하 (DTW 계산 시도)
     board_25 = Board()
@@ -238,9 +245,12 @@ def test_dtw_endgame_threshold():
         if moves:
             board_25.make_move(moves[0][0], moves[0][1])
     
+    playable_25 = board_25.count_playable_empty_cells()
     result_25 = dtw.calculate_dtw(board_25)
-    # 25칸 이하면 계산 시도 (결과는 None일 수도 있음)
-    print(f"  25칸 이하 결과: {result_25}")
+    
+    if playable_25 <= 25:
+        # 25칸 이하면 계산 시도 (결과는 None일 수도 있음)
+        print(f"  25칸 이하 결과: {result_25}, playable cells: {playable_25}")
     
     print("✓ DTW endgame threshold test passed")
 
