@@ -84,25 +84,27 @@ move = agent.select_action(board)
 
 ## 주요 기능
 
-### 1. DTW (Distance to Win) - 완벽한 엔드게임
+### 1. Alpha-Beta Search + MCTS 하이브리드
 
 ```
-엔드게임 (≤15 playable cells):
-├─ Alpha-Beta Pruning 완전 탐색
+엔드게임 (≤15 cells):
+├─ Alpha-Beta 완전 탐색 (depth 무제한)
 ├─ 승리까지 최단 거리 (DTW) 측정
 ├─ Transposition Table 캐싱 (Hot/Cold 2-tier)
-├─ 8방향 대칭 정규화 (메모리 8배 절약)
+├─ 승리 확정 + DTW≤5: 최적수 직접 사용
 └─ 완벽한 수 반환 ✓
 
-중반전 (16-50 cells):
-├─ MCTS + 신경망 평가
-├─ DTW 캐시 참조 (높은 히트율)
-└─ 강력한 플레이 ✓
+중반 (16-45 cells):
+├─ MCTS로 상위 5개 후보수 선택
+├─ 얕은 Alpha-Beta (depth=8)로 승/패 확정 체크
+├─ 승리 확정 수 발견 → 즉시 선택
+├─ 패배 확정 수 → 후보에서 제외
+└─ 나머지 → MCTS 기준 선택 ✓
 
-초반 (51-81 cells):
+초반 (46-81 cells):
 └─ 순수 MCTS + 신경망 학습 ✓
 
-※ endgame_threshold=15 (25칸은 계산 시간 초과)
+※ 파라미터: endgame=15, midgame=45, shallow_depth=8
 ```
 
 ### 2. Tablebase 저장/로드
@@ -155,9 +157,10 @@ agent = create_prediction_agent(model_path)
 
 DTW/Tablebase:
 ├─ endgame_threshold: 15 cells (완전 탐색)
+├─ midgame_threshold: 45 cells (얕은 탐색)
 ├─ hot_cache: 500만 포지션
 ├─ cold_cache: 2000만 포지션
-└─ use_symmetry: True (8배 절약)
+└─ 대칭 정규화 항상 사용 (8배 절약)
 ```
 
 ### 기본 GPU 설정 (`get_gpu_optimized_config()`)

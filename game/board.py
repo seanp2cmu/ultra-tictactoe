@@ -1,25 +1,24 @@
 import numpy as np
 
-class Board: 
+class Board:
+    # 클래스 변수: 모든 인스턴스가 공유 (메모리 절약)
+    CHECKER = (
+        ((0,0), (0,1), (0,2)),
+        ((1,0), (1,1), (1,2)),
+        ((2,0), (2,1), (2,2)),
+        ((0,0), (1,0), (2,0)),
+        ((0,1), (1,1), (2,1)),
+        ((0,2), (1,2), (2,2)),
+        ((0,0), (1,1), (2,2)),
+        ((0,2), (1,1), (2,0))
+    )
+    
     def __init__(self):
         self.boards = [[0 for _ in range(9)] for _ in range(9)] # empty: 0, player 1: 1, player 2: 2
         self.completed_boards = [[0 for _ in range(3)] for _ in range(3)] # empty: 0, player 1: 1, player 2: 2, draw: 3
-        
-        self.checker = [
-            [(0,0), (0,1), (0,2)],
-            [(1,0), (1,1), (1,2)],
-            [(2,0), (2,1), (2,2)],
-            [(0,0), (1,0), (2,0)],
-            [(0,1), (1,1), (2,1)],
-            [(0,2), (1,2), (2,2)],
-            [(0,0), (1,1), (2,2)],
-            [(0,2), (1,1), (2,0)]
-        ]
-
         self.current_player = 1
         self.winner = None
         self.last_move = None
-        self.completed_boards = [[0 for _ in range(3)] for _ in range(3)]
     
     def clone(self):
         """
@@ -29,7 +28,7 @@ class Board:
         new_board = Board.__new__(Board)
         new_board.boards = [row[:] for row in self.boards]
         new_board.completed_boards = [row[:] for row in self.completed_boards]
-        new_board.checker = self.checker  # Immutable tuples, safe to share
+        # CHECKER는 클래스 변수이므로 복사 불필요
         new_board.current_player = self.current_player
         new_board.winner = self.winner
         new_board.last_move = self.last_move
@@ -63,8 +62,39 @@ class Board:
                             legal_moves.append((r, c))
         return legal_moves
     
-    def make_move(self, r, c):
-        if (r, c) not in self.get_legal_moves():
+    def _is_valid_move(self, r, c) -> bool:
+        """Fast validation without computing all legal moves. O(1) instead of O(81)."""
+        # 범위 체크
+        if not (0 <= r < 9 and 0 <= c < 9):
+            return False
+        
+        # 이미 놓인 칸인지
+        if self.boards[r][c] != 0:
+            return False
+        
+        # 해당 소보드가 완료됐는지
+        board_r, board_c = r // 3, c // 3
+        if self.completed_boards[board_r][board_c] != 0:
+            return False
+        
+        # 첫 수는 어디든 가능
+        if self.last_move is None:
+            return True
+        
+        # 지정된 소보드인지 확인
+        last_r, last_c = self.last_move
+        target_board_r = last_r % 3
+        target_board_c = last_c % 3
+        
+        # 지정된 소보드가 완료됐으면 어디든 가능
+        if self.completed_boards[target_board_r][target_board_c] != 0:
+            return True
+        
+        # 지정된 소보드에만 둘 수 있음
+        return board_r == target_board_r and board_c == target_board_c
+    
+    def make_move(self, r, c, validate=True):
+        if validate and not self._is_valid_move(r, c):
             raise ValueError("Illegal move")
         
         self.boards[r][c] = self.current_player
@@ -79,7 +109,7 @@ class Board:
         board_r, board_c = r // 3, c // 3
         start_r, start_c = board_r * 3, board_c * 3
         
-        for pattern in self.checker:
+        for pattern in Board.CHECKER:
             if all(self.boards[start_r + pr][start_c + pc] == self.current_player for pr, pc in pattern):
                 self.completed_boards[board_r][board_c] = self.current_player
                 return
@@ -88,7 +118,7 @@ class Board:
             self.completed_boards[board_r][board_c] = 3
 
     def check_winner(self):
-        for pattern in self.checker:
+        for pattern in Board.CHECKER:
             if all(self.completed_boards[pr][pc] == self.current_player for pr, pc in pattern):
                 self.winner = self.current_player
                 return
@@ -101,16 +131,17 @@ class Board:
     
     def count_playable_empty_cells(self) -> int:
         """Count only playable empty cells (excluding completed small boards)."""
-        
-        boards_array = np.array(self.boards)
         empty_count = 0
         
         for br in range(3):
             for bc in range(3):
                 if self.completed_boards[br][bc] == 0:
-                    # Extract 3x3 small board and count zeros with numpy
-                    small_board = boards_array[br*3:(br+1)*3, bc*3:(bc+1)*3]
-                    empty_count += np.sum(small_board == 0)
+                    # Count zeros in 3x3 small board (pure Python, no numpy)
+                    start_r, start_c = br * 3, bc * 3
+                    for r in range(start_r, start_r + 3):
+                        for c in range(start_c, start_c + 3):
+                            if self.boards[r][c] == 0:
+                                empty_count += 1
         
         return empty_count
     
@@ -239,19 +270,20 @@ class Board:
         - endgame: 10-19 empty
         - deep_endgame: 0-9 empty
         """
-        # Convert board to state-like structure for static method
+        # 최적화: numpy 변환 없이 직접 빈 칸 수 계산
+        playable_empty = self.count_playable_empty_cells()
         
-        
-        # Create simple 2-plane representation
-        player1_plane = np.zeros((9, 9), dtype=np.float32)
-        player2_plane = np.zeros((9, 9), dtype=np.float32)
-        
-        for r in range(9):
-            for c in range(9):
-                if self.boards[r][c] == 1:
-                    player1_plane[r][c] = 1
-                elif self.boards[r][c] == 2:
-                    player2_plane[r][c] = 1
-        
-        state = np.array([player1_plane, player2_plane])
-        return Board.get_phase_from_state(state)
+        if playable_empty >= 50:
+            return 1.0, "opening"
+        elif playable_empty >= 40:
+            return 1.0, "early_mid"
+        elif playable_empty >= 30:
+            return 1.0, "mid"
+        elif playable_empty >= 25:
+            return 1.2, "transition"
+        elif playable_empty >= 20:
+            return 0.8, "near_endgame"
+        elif playable_empty >= 10:
+            return 0.5, "endgame"
+        else:
+            return 0.3, "deep_endgame"

@@ -38,10 +38,12 @@ class MCTSConfig:
 
 @dataclass
 class DTWConfig:
-    endgame_threshold: int = 15       # 플레이 가능한 빈칸 15개 이하면 완전 탐색 (25칸은 너무 느림)
+    endgame_threshold: int = 15       # 완전 탐색 (15칸 이하)
+    midgame_threshold: int = 45       # 얕은 탐색 (16-45칸)
+    shallow_depth: int = 8            # 중반 얕은 탐색 depth 제한
     hot_cache_size: int = 5000000     # 500만: 92GB RAM으로 2.5배 증가 (캐시 hit rate 향상)
     cold_cache_size: int = 20000000   # 2000만: Disk 80GB로 제한적 (압축 저장)
-    use_symmetry: bool = True         # 보드 대칭 정규화 (8배 메모리 절약) - 필수
+    # 보드 대칭 정규화 항상 사용 (8배 메모리 절약)
 
 @dataclass
 class PredictionConfig:

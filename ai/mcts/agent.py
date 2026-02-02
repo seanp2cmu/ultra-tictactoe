@@ -34,8 +34,7 @@ class AlphaZeroAgent:
             self.dtw_calculator = DTWCalculator(
                 use_cache=True,
                 hot_size=50000,   # 5만 (테스트용 작은 캐시)
-                cold_size=500000,  # 50만
-                use_symmetry=True
+                cold_size=500000  # 50만
             )
     
     def search(self, board: Board) -> Node:
@@ -43,7 +42,7 @@ class AlphaZeroAgent:
         root = Node(board)
         
         policy_probs, _ = self.network.predict(board)
-        action_probs = {i: policy_probs[i] for i in range(81)}
+        action_probs = dict(enumerate(policy_probs))
         root.expand(action_probs)
         
         num_batches = (self.num_simulations + self.batch_size - 1) // self.batch_size
@@ -86,7 +85,8 @@ class AlphaZeroAgent:
                 if not node.is_terminal() and not tablebase_hit:
                     leaf_boards.append(node.board)
             
-            tablebase_indices = {idx for idx, _, _ in tablebase_results}
+            # Convert to dict for O(1) lookup instead of O(n) search
+            tablebase_dict = {idx: (value, expand_probs) for idx, value, expand_probs in tablebase_results}
             
             if leaf_boards:
                 policy_probs_batch, values_batch = self.network.predict_batch(leaf_boards)
@@ -101,8 +101,8 @@ class AlphaZeroAgent:
                             value = 1.0
                         else:
                             value = -1.0
-                elif i in tablebase_indices:
-                    _, value, expand_probs = next((r for r in tablebase_results if r[0] == i), (None, 0, {}))
+                elif i in tablebase_dict:
+                    value, expand_probs = tablebase_dict[i]
                     if expand_probs:
                         node.expand(expand_probs)
                 else:
@@ -110,7 +110,7 @@ class AlphaZeroAgent:
                     value = values_batch[leaf_idx].item() if hasattr(values_batch[leaf_idx], 'item') else float(values_batch[leaf_idx].squeeze())
                     leaf_idx += 1
                     
-                    action_probs = {i: policy_probs[i] for i in range(81)}
+                    action_probs = dict(enumerate(policy_probs))
                     node.expand(action_probs)
                 
                 for path_node in reversed(search_paths[i]):

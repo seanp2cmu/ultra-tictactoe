@@ -26,7 +26,6 @@ class Trainer:
         endgame_threshold: int = 15,
         hot_cache_size: int = 50000,
         cold_cache_size: int = 500000,
-        use_symmetry: bool = True,
         total_iterations: int = 300
     ) -> None:
         if network is None:
@@ -46,15 +45,13 @@ class Trainer:
         
         self.hot_cache_size = hot_cache_size
         self.cold_cache_size = cold_cache_size
-        self.use_symmetry = use_symmetry
         
-        # DTW always enabled
+        # DTW always enabled (symmetry always used)
         from ..endgame import DTWCalculator
         self.dtw_calculator = DTWCalculator(
             use_cache=True,
             hot_size=hot_cache_size,
             cold_size=cold_cache_size,
-            use_symmetry=use_symmetry,
             endgame_threshold=endgame_threshold
         )
         

@@ -46,71 +46,38 @@ class BoardSymmetry:
     @staticmethod
     def get_all_symmetries(board: Board):
         """
-        모든 대칭 변환 적용
+        모든 대칭 변환 적용 (최적화: 불필요한 copy 제거)
         
         Args:
             board: Board 객체
             
         Returns:
             list of (boards_2d, completed_2d) tuples (8개)
+        
+        Note: numpy 변환 함수들은 view를 반환하므로 원본 수정 없이 안전함
         """
         boards_arr = np.array(board.boards)
         completed_arr = np.array(board.completed_boards)
         
-        symmetries = []
-        
-        # 1. 원본
-        symmetries.append((boards_arr.copy(), completed_arr.copy()))
-        
-        # 2. 좌우 반전
-        symmetries.append((
-            BoardSymmetry.flip_horizontal(boards_arr),
-            BoardSymmetry.flip_horizontal(completed_arr)
-        ))
-        
-        # 3. 상하 반전
-        symmetries.append((
-            BoardSymmetry.flip_vertical(boards_arr),
-            BoardSymmetry.flip_vertical(completed_arr)
-        ))
-        
-        # 4. 180도 회전
-        symmetries.append((
-            BoardSymmetry.rotate_180(boards_arr),
-            BoardSymmetry.rotate_180(completed_arr)
-        ))
-        
-        # 5. 90도 회전
-        symmetries.append((
-            BoardSymmetry.rotate_90(boards_arr),
-            BoardSymmetry.rotate_90(completed_arr)
-        ))
-        
-        # 6. 270도 회전
-        symmetries.append((
-            BoardSymmetry.rotate_270(boards_arr),
-            BoardSymmetry.rotate_270(completed_arr)
-        ))
-        
-        # 7. 대각선 반전
-        symmetries.append((
-            BoardSymmetry.transpose(boards_arr),
-            BoardSymmetry.transpose(completed_arr)
-        ))
-        
-        # 8. 역대각선 반전
-        symmetries.append((
-            BoardSymmetry.transpose_anti(boards_arr),
-            BoardSymmetry.transpose_anti(completed_arr)
-        ))
-        
-        return symmetries
+        # 원본은 copy 필요 (다른 변환들은 view를 반환)
+        # rot90, fliplr, flipud, transpose 모두 view 반환 → copy 불필요
+        return [
+            (boards_arr, completed_arr),  # 1. 원본
+            (np.fliplr(boards_arr), np.fliplr(completed_arr)),  # 2. 좌우 반전
+            (np.flipud(boards_arr), np.flipud(completed_arr)),  # 3. 상하 반전
+            (np.rot90(boards_arr, k=2), np.rot90(completed_arr, k=2)),  # 4. 180도
+            (np.rot90(boards_arr, k=-1), np.rot90(completed_arr, k=-1)),  # 5. 90도
+            (np.rot90(boards_arr, k=1), np.rot90(completed_arr, k=1)),  # 6. 270도
+            (boards_arr.T, completed_arr.T),  # 7. 대각선 반전 (transpose)
+            (np.rot90(boards_arr.T, k=2), np.rot90(completed_arr.T, k=2))  # 8. 역대각선
+        ]
     
     @staticmethod
     def to_tuple(boards_arr: np.ndarray, completed_arr: np.ndarray, current_player):
-        """numpy array를 hashable tuple로 변환"""
-        boards_tuple = tuple(tuple(row) for row in boards_arr.flatten().reshape(9, 9))
-        completed_tuple = tuple(tuple(row) for row in completed_arr)
+        """numpy array를 hashable tuple로 변환 (최적화: 불필요한 reshape 제거)"""
+        # boards_arr가 이미 (9,9) 형태이므로 flatten/reshape 불필요
+        boards_tuple = tuple(map(tuple, boards_arr))
+        completed_tuple = tuple(map(tuple, completed_arr))
         return (boards_tuple, completed_tuple, current_player)
     
     @staticmethod

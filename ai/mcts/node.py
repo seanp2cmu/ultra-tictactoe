@@ -13,21 +13,42 @@ class Node:
         board: Board,
         parent: Optional['Node'] = None,
         action: Optional[int] = None,
-        prior_prob: float = 0
+        prior_prob: float = 0,
+        _clone: bool = True
     ) -> None:
-        self.board = board.clone()
+        self.board = board.clone() if _clone else board
         self.parent = parent
         self.action = action
         self.prior_prob = prior_prob
         self.children: Dict[int, 'Node'] = {}
         self.visits = 0
         self.value_sum = 0
+        self._is_terminal: Optional[bool] = None  # 캐시된 terminal 상태
         
     def is_expanded(self) -> bool:
         return len(self.children) > 0
     
     def is_terminal(self) -> bool:
-        return self.board.winner is not None or len(self.board.get_legal_moves()) == 0
+        # 캐시된 결과 반환 (반복 호출 최적화)
+        if self._is_terminal is not None:
+            return self._is_terminal
+        
+        if self.board.winner is not None:
+            self._is_terminal = True
+            return True
+        
+        # Check if any playable cell exists (faster than computing all legal moves)
+        for br in range(3):
+            for bc in range(3):
+                if self.board.completed_boards[br][bc] == 0:
+                    for r in range(br*3, br*3+3):
+                        for c in range(bc*3, bc*3+3):
+                            if self.board.boards[r][c] == 0:
+                                self._is_terminal = False
+                                return False  # Found at least one empty cell
+        
+        self._is_terminal = True
+        return True  # No empty cells in incomplete boards
     
     def value(self) -> float:
         if self.visits == 0:
@@ -40,9 +61,13 @@ class Node:
         best_action = None
         best_child = None
         
+        # 최적화: sqrt를 루프 밖으로 이동 (반복 계산 제거)
+        sqrt_visits = math.sqrt(self.visits)
+        exploration_factor = c_puct * sqrt_visits
+        
         for action, child in self.children.items():
-            q_value = child.value()
-            u_value = c_puct * child.prior_prob * math.sqrt(self.visits) / (1 + child.visits)
+            q_value = child.value_sum / child.visits if child.visits > 0 else 0
+            u_value = exploration_factor * child.prior_prob / (1 + child.visits)
             score = q_value + u_value
             
             if score > best_score:
@@ -62,7 +87,8 @@ class Node:
                 next_board = self.board.clone()
                 next_board.make_move(move[0], move[1])
                 prior = action_probs.get(action, 1e-8)
-                self.children[action] = Node(next_board, parent=self, action=action, prior_prob=prior)
+                # _clone=False: next_board is already cloned above
+                self.children[action] = Node(next_board, parent=self, action=action, prior_prob=prior, _clone=False)
     
     def update(self, value: float) -> None:
         """Update visit count and value sum."""

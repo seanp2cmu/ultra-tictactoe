@@ -8,12 +8,13 @@ from game import Board
 from ai.utils import BoardSymmetry
 
 class CompressedTranspositionTable:
-    def __init__(self, hot_size=50000, cold_size=500000, use_symmetry=True):
+    def __init__(self, hot_size=50000, cold_size=500000):
         """
         Args:
             hot_size: Hot cache 크기 (빠른 접근, 압축 안 함)
             cold_size: Cold cache 크기 (느린 접근, 압축)
-            use_symmetry: 보드 대칭 정규화 사용 (8배 메모리 절약)
+        
+        Note: 보드 대칭 정규화 항상 사용 (8배 메모리 절약)
         """
         self.hot = OrderedDict()
         self.hot_size = hot_size
@@ -21,9 +22,8 @@ class CompressedTranspositionTable:
         self.cold = {}
         self.cold_size = cold_size
         
-        self.use_symmetry = use_symmetry
-        if use_symmetry:
-            self.symmetry = BoardSymmetry()
+        # 대칭 정규화 항상 사용
+        self.symmetry = BoardSymmetry()
         
         self.stats = {
             "hot_hits": 0,
@@ -35,15 +35,9 @@ class CompressedTranspositionTable:
     
     def get_hash(self, board: Board):
         """
-        보드를 해시로 변환
-        use_symmetry=True면 정규화된 형태로 변환 (8배 절약)
+        보드를 해시로 변환 (대칭 정규화 적용, 8배 절약)
         """
-        if self.use_symmetry:
-            return self.symmetry.get_canonical_hash(board)
-        else:
-            boards_tuple = tuple(tuple(row) for row in board.boards)
-            completed_tuple = tuple(tuple(row) for row in board.completed_boards)
-            return hash((boards_tuple, completed_tuple, board.current_player))
+        return self.symmetry.get_canonical_hash(board)
     
     def compress_entry(self, result, dtw, best_move):
         """
@@ -242,8 +236,7 @@ class CompressedTranspositionTable:
         data = {
             'hot': dict(self.hot),
             'cold': self.cold,
-            'stats': self.stats,
-            'use_symmetry': self.use_symmetry
+            'stats': self.stats
         }
         
         with open(filepath, 'wb') as f:

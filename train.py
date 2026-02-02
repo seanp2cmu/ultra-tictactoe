@@ -73,7 +73,6 @@ def main():
         num_parallel_games=config.training.num_parallel_games,
         hot_cache_size=config.dtw.hot_cache_size,
         cold_cache_size=config.dtw.cold_cache_size,
-        use_symmetry=config.dtw.use_symmetry,
         total_iterations=config.training.num_iterations
     )
     
