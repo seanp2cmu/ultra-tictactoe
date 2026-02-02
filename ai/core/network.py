@@ -54,6 +54,7 @@ class Model(nn.Module):
     def __init__(self, num_res_blocks: int = 10, num_channels: int = 256) -> None:
         super().__init__()
         self.num_channels = num_channels
+        self._device_cache = None
         
         self.input = nn.Sequential(
             nn.Conv2d(7, num_channels, kernel_size=3, padding=1),
@@ -71,6 +72,16 @@ class Model(nn.Module):
         self.value_bn = nn.BatchNorm2d(1)
         self.value_fc1 = nn.Linear(9 * 9, 64)
         self.value_fc2 = nn.Linear(64, 1)
+    
+    @property
+    def _device(self):
+        if self._device_cache is None:
+            self._device_cache = next(self.parameters()).device
+        return self._device_cache
+    
+    def to(self, device):
+        self._device_cache = None
+        return super().to(device)
         
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = F.relu(self.input(x))
@@ -99,7 +110,9 @@ class Model(nn.Module):
             return policy_probs.cpu().numpy()[0], value.cpu().numpy()[0][0]
     
     def _board_to_tensor(self, board_state: Board) -> torch.Tensor:
-        """Convert board to 7-channel tensor input (최적화: np.kron 대신 슬라이싱)."""
+        """Convert board to 7-channel tensor input."""
+        tensor = np.zeros((7, 9, 9), dtype=np.float32)
+        
         if isinstance(board_state, np.ndarray):
             boards = board_state.copy()
         else:
@@ -108,68 +121,43 @@ class Model(nn.Module):
         current_player = board_state.current_player if hasattr(board_state, 'current_player') else 1
         opponent_player = 3 - current_player
         
-        # 최적화: planes 미리 초기화
-        my_completed_plane = np.zeros((9, 9), dtype=np.float32)
-        opponent_completed_plane = np.zeros((9, 9), dtype=np.float32)
-        draw_completed_plane = np.zeros((9, 9), dtype=np.float32)
-        valid_board_mask = np.zeros((9, 9), dtype=np.float32)
-        
         if hasattr(board_state, 'completed_boards'):
             completed = board_state.completed_boards
-            
-            # 최적화: np.kron 대신 직접 슬라이싱으로 3x3 블록 채우기
             for br in range(3):
                 for bc in range(3):
-                    start_r, start_c = br * 3, bc * 3
                     status = completed[br][bc]
-                    
                     if status != 0:
-                        # 완료된 보드: 해당 영역 빈 칸으로
-                        boards[start_r:start_r+3, start_c:start_c+3] = 0
-                        
+                        sr, sc = br * 3, bc * 3
+                        boards[sr:sr+3, sc:sc+3] = 0
                         if status == current_player:
-                            my_completed_plane[start_r:start_r+3, start_c:start_c+3] = 1.0
+                            tensor[2, sr:sr+3, sc:sc+3] = 1.0
                         elif status == opponent_player:
-                            opponent_completed_plane[start_r:start_r+3, start_c:start_c+3] = 1.0
-                        elif status == 3:
-                            draw_completed_plane[start_r:start_r+3, start_c:start_c+3] = 1.0
+                            tensor[3, sr:sr+3, sc:sc+3] = 1.0
+                        else:
+                            tensor[4, sr:sr+3, sc:sc+3] = 1.0
         
-        # player planes
-        my_plane = (boards == current_player).astype(np.float32)
-        opponent_plane = (boards == opponent_player).astype(np.float32)
+        tensor[0] = (boards == current_player)
+        tensor[1] = (boards == opponent_player)
         
-        # last move plane
-        last_move_plane = np.zeros((9, 9), dtype=np.float32)
         if hasattr(board_state, 'last_move') and board_state.last_move is not None:
             last_r, last_c = board_state.last_move
-            last_move_plane[last_r, last_c] = 1.0
+            tensor[5, last_r, last_c] = 1.0
             
-            # valid board mask 계산
-            target_board_r, target_board_c = last_r % 3, last_c % 3
-            
+            target_br, target_bc = last_r % 3, last_c % 3
             if hasattr(board_state, 'completed_boards'):
-                if board_state.completed_boards[target_board_r][target_board_c] == 0:
-                    start_r, start_c = target_board_r * 3, target_board_c * 3
-                    valid_board_mask[start_r:start_r+3, start_c:start_c+3] = 1.0
+                if board_state.completed_boards[target_br][target_bc] == 0:
+                    sr, sc = target_br * 3, target_bc * 3
+                    tensor[6, sr:sr+3, sc:sc+3] = 1.0
                 else:
-                    # 완료되지 않은 보드에 마스크 적용
                     for br in range(3):
                         for bc in range(3):
                             if board_state.completed_boards[br][bc] == 0:
                                 sr, sc = br * 3, bc * 3
-                                valid_board_mask[sr:sr+3, sc:sc+3] = 1.0
+                                tensor[6, sr:sr+3, sc:sc+3] = 1.0
             else:
-                start_r, start_c = target_board_r * 3, target_board_c * 3
-                valid_board_mask[start_r:start_r+3, start_c:start_c+3] = 1.0
+                sr, sc = target_br * 3, target_bc * 3
+                tensor[6, sr:sr+3, sc:sc+3] = 1.0
         else:
-            valid_board_mask[:] = 1.0
+            tensor[6] = 1.0
         
-        board_tensor = np.stack([
-            my_plane, opponent_plane,
-            my_completed_plane, opponent_completed_plane, draw_completed_plane,
-            last_move_plane, valid_board_mask
-        ], axis=0)
-        board_tensor = torch.FloatTensor(board_tensor).unsqueeze(0)
-        
-        device = next(self.parameters()).device
-        return board_tensor.to(device)
+        return torch.from_numpy(tensor).unsqueeze(0).to(self._device)

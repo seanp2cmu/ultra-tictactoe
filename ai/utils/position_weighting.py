@@ -17,10 +17,9 @@ class WeightedSampleBuffer:
         from collections import deque
         self.data = deque(maxlen=max_size)
         self.weights = deque(maxlen=max_size)
-        self.categories = deque(maxlen=max_size)  # 카테고리 추적
+        self.categories = deque(maxlen=max_size)
         self.max_size = max_size
         
-        # 통계
         self.stats = {
             "opening": 0,
             "early_mid": 0,
@@ -31,7 +30,6 @@ class WeightedSampleBuffer:
             "deep_endgame": 0
         }
         
-        # 누적 가중치 (샘플링 최적화)
         self.total_weight = 0.0
     
     def add(self, state, policy, value, board: Board, dtw=None):
@@ -39,46 +37,39 @@ class WeightedSampleBuffer:
         데이터 추가 (가중치 포함)
         
         Args:
-            state: 보드 state
-            policy: policy 확률
-            value: value 타겟
-            board: Board 객체 (가중치 계산용)
-            dtw: DTW 값 (선택)
+            state: board state
+            policy: policy probability
+            value: value target
+            board: Board object (for weight calculation)
+            dtw: DTW value (optional)
         """
-        # 가중치 계산 (Board 메서드 사용)
         weight, category = board.get_phase()
         
-        # deque가 가득 차면 자동으로 가장 오래된 것 제거
         if len(self.data) >= self.max_size:
-            # 제거될 항목의 카테고리와 가중치
             old_category = self.categories[0]
             old_weight = self.weights[0]
             
-            # 통계 업데이트
             self.stats[old_category] -= 1
             self.total_weight -= old_weight
         
-        # 추가 (deque가 자동으로 maxlen 관리)
         self.data.append((state, policy, value, dtw, weight))
         self.weights.append(weight)
         self.categories.append(category)
         
-        # 통계 업데이트
         self.stats[category] += 1
         self.total_weight += weight
     
     def sample(self, batch_size):
         """
-        가중치 기반 샘플링 (누적 가중치 사용으로 O(n) → O(1))
+        weight based sampling
         
-        전환 구간(weight=1.2)이 더 자주 선택됨
+        transition part more often selected
         """
         import numpy as np
         
         if len(self.data) < batch_size:
             batch = list(self.data)
         else:
-            # 가중치 기반 샘플링 (누적 가중치 재사용)
             probs = [w / self.total_weight for w in self.weights]
             
             indices = np.random.choice(
@@ -99,7 +90,7 @@ class WeightedSampleBuffer:
         )
     
     def get_stats(self):
-        """통계 반환"""
+        """return statistics"""
         total = len(self.data)
         if total == 0:
             return {}
@@ -115,30 +106,3 @@ class WeightedSampleBuffer:
     
     def __len__(self):
         return len(self.data)
-
-
-def print_weight_schedule():
-    """가중치 스케줄 출력 (디버깅용)"""
-    print("=" * 60)
-    print("Position Weighting Schedule")
-    print("=" * 60)
-    print("Empty Cells | Weight | Category")
-    print("-" * 60)
-    print("50+         | 1.0    | Opening/Mid")
-    print("40-49       | 1.0    | Early Mid")
-    print("30-39       | 1.0    | Mid")
-    print("26-29       | 1.2    | ★ Transition (Most Important!)")
-    print("20-25       | 0.8    | Near Endgame")
-    print("10-19       | 0.5    | Endgame")
-    print("0-9         | 0.3    | Deep Endgame")
-    print("=" * 60)
-    print("\nRationale:")
-    print("- Transition (26-29): Critical decision point")
-    print("- Endgame (≤25): Perfect solution exists, less learning needed")
-    print("- Focus on positions where neural net can add value")
-    print("=" * 60)
-
-
-if __name__ == "__main__":
-    # 테스트
-    print_weight_schedule()

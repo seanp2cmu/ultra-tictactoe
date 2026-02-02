@@ -1,352 +1,263 @@
 # Ultimate Tic-Tac-Toe AlphaZero + DTW
 
-AlphaZero + Alpha-Beta Search (DTW)를 결합한 Ultimate Tic-Tac-Toe AI
+A hybrid AI for Ultimate Tic-Tac-Toe combining AlphaZero (ResNet + MCTS) with Distance to Win (DTW) endgame solver.
 
-## 핵심 기술
+## Key Features
 
-- **AlphaZero**: 신경망 (ResNet + SE Block) + MCTS로 초중반 강력한 전략 학습
-- **Distance to Win (DTW)**: 엔드게임(≤15칸)에서 Alpha-Beta 완전 탐색
-- **Tablebase**: Hot/Cold 2-tier 캐싱으로 즉시 완벽한 수 반환
-- **배치 MCTS**: GPU 최대 활용 + Virtual Loss 병렬화
-- **최적화**: Board.clone(), 공유 DTW Calculator
+- **AlphaZero**: Deep ResNet with SE attention + Monte Carlo Tree Search
+- **DTW (Distance to Win)**: Alpha-Beta complete search for endgame positions
+- **Hybrid Search**: MCTS for opening, shallow Alpha-Beta for midgame, complete search for endgame
 
-## 프로젝트 구조
+## Project Structure
 
 ```
 ultra-tictacto/
 ├── ai/
-│   ├── core/
-│   │   ├── network.py           # ResNet + SE Block 신경망
-│   │   └── alpha_zero_net.py    # 학습/예측 래퍼
-│   ├── mcts/
-│   │   ├── agent.py             # AlphaZero Agent (배치 MCTS)
-│   │   └── node.py              # MCTS 노드 (Virtual Loss)
-│   ├── endgame/
-│   │   ├── dtw_calculator.py    # Alpha-Beta Search (DTW)
-│   │   └── transposition_table.py # 2-tier Tablebase (Hot/Cold)
-│   ├── training/
-│   │   ├── trainer.py           # DTW 통합 학습 루프
-│   │   ├── self_play.py         # Self-play 워커
-│   │   └── replay_buffer.py     # Position-weighted 버퍼
-│   ├── prediction/
-│   │   └── prediction_agent.py  # 실전/API용 Agent
-│   └── utils/
-│       └── batch_predictor.py   # 배치 예측 최적화
+│   ├── core/                       # Neural network (ResNet + SE blocks)
+│   │   └── network.py              # Model, SEBlock, ResidualBlock, AlphaZeroNet
+│   ├── mcts/                       # Monte Carlo Tree Search
+│   │   ├── agent.py                # AlphaZeroAgent with DTW integration
+│   │   └── node.py                 # MCTS Node with UCB selection
+│   ├── endgame/                    # DTW endgame solver
+│   │   ├── dtw_calculator.py       # Alpha-Beta search with move ordering
+│   │   └── transposition_table.py  # Hot/Cold 2-tier cache with compression
+│   ├── training/                   # Training pipeline
+│   │   ├── trainer.py              # Main training loop
+│   │   ├── self_play.py            # Self-play game generation
+│   │   └── replay_buffer.py        # Experience replay
+│   ├── prediction/                 # Inference helpers
+│   │   └── prediction_agent.py     # create_prediction_agent, create_strong_agent
+│   └── utils/                      # Utilities
+│       ├── board_symmetry.py       # D4 symmetry normalization (8x memory savings)
+│       └── position_weighting.py   # Weighted sampling for transition positions
 ├── game/
-│   └── board.py                 # Ultimate Tic-Tac-Toe (clone() 최적화)
-├── test/                        # 66개 테스트 (포괄적 검증)
-├── config.py                    # 설정 (기본/GPU/RTX 5090)
-└── train.py                     # 학습 실행
+│   └── board.py                    # Ultimate Tic-Tac-Toe game logic
+├── test/                           # Unit tests
+├── config.py                       # Configuration dataclasses
+└── train.py                        # Training script
 ```
 
-## 빠른 시작
+## Quick Start
 
-### 1. 설치
+### Installation
 
 ```bash
-# 패키지 압축 해제
-tar -xzf ultra-tictacto_YYYYMMDD_HHMMSS.tar.gz
-cd ultra-tictacto
-
-# 가상환경 생성
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-
-# 의존성 설치
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. 학습 실행
+### Training
 
 ```bash
-# RTX 5090 최적화 설정으로 학습
 python train.py
-
-# 또는 기본 GPU 설정
-# config.py에서 get_gpu_optimized_config() 사용
 ```
 
-### 3. 예측/API
+### Inference
 
 ```python
-from ai.prediction_agent import create_prediction_agent
+from ai.prediction import create_prediction_agent, create_strong_agent
 
-# 학습된 모델 + Tablebase 로드
-agent = create_prediction_agent(
-    model_path="./model/model_dtw_final.pth"
-    # tablebase_path 자동 탐색
-)
+# Standard agent (400 simulations)
+agent = create_prediction_agent(model_path="./model/model_final.pth")
 
-# 최선의 수 선택
-move = agent.select_action(board)
+# Strong agent (800 simulations, lower temperature)
+agent = create_strong_agent(model_path="./model/model_final.pth")
+
+# Play a move
+from game import Board
+board = Board()
+action = agent.select_action(board, temperature=0)
+row, col = action // 9, action % 9
 ```
 
-## 주요 기능
-
-### 1. Alpha-Beta Search + MCTS 하이브리드
+## Search Strategy
 
 ```
-엔드게임 (≤15 cells):
-├─ Alpha-Beta 완전 탐색 (depth 무제한)
-├─ 승리까지 최단 거리 (DTW) 측정
-├─ Transposition Table 캐싱 (Hot/Cold 2-tier)
-├─ 승리 확정 + DTW≤5: 최적수 직접 사용
-└─ 완벽한 수 반환 ✓
+Opening (46-81 empty cells):
+└─ Pure MCTS + Neural Network policy/value
 
-중반 (16-45 cells):
-├─ MCTS로 상위 5개 후보수 선택
-├─ 얕은 Alpha-Beta (depth=8)로 승/패 확정 체크
-├─ 승리 확정 수 발견 → 즉시 선택
-├─ 패배 확정 수 → 후보에서 제외
-└─ 나머지 → MCTS 기준 선택 ✓
+Midgame (16-45 empty cells):
+├─ MCTS selects top 5 candidate moves
+├─ Shallow Alpha-Beta (depth=8) checks for forced wins/losses
+├─ Winning move found → select immediately
+└─ Losing moves → exclude from candidates
 
-초반 (46-81 cells):
-└─ 순수 MCTS + 신경망 학습 ✓
-
-※ 파라미터: endgame=15, midgame=45, shallow_depth=8
+Endgame (≤15 empty cells):
+├─ Complete Alpha-Beta search
+├─ Transposition table caching
+├─ 8-fold symmetry normalization (D4 group)
+└─ Winning position + DTW≤5 → use optimal move directly
 ```
 
-### 2. Tablebase 저장/로드
-
-```python
-# 학습 중 자동 저장
-- Iteration 20, 40, 60... 마다 체크포인트
-- 최종: ./model/tablebase.pkl (~1 GB)
-
-# 예측 시 자동 로드
-agent = create_prediction_agent(model_path)
-# → tablebase.pkl 자동 발견 및 로드
-
-# 효과
-- 25칸 이하: 즉시 완벽한 수 (캐시 조회)
-- API 응답: <10ms
-```
-
-### 3. 배치 MCTS (GPU 최적화)
-
-```python
-기존 순차 MCTS:
-└─ GPU 활용률 20-30% (네트워크 호출 낭비)
-
-배치 MCTS:
-├─ 8-16개 시뮬레이션 동시 평가
-├─ Virtual Loss로 충돌 방지
-├─ GPU 활용률 60-80% ✓
-└─ Self-play 속도 2-3배 향상 ✓
-```
-
-## 설정 (config.py)
-
-### RTX 5090 최적화 (`get_rtx5090_config()`)
-
-```
-네트워크:
-├─ num_res_blocks: 20
-├─ num_channels: 384
-├─ SE Block: 채널 어텐션
-└─ 파라미터: ~15M
-
-학습:
-├─ batch_size: 2048 (32GB VRAM)
-├─ num_simulations: 400
-├─ num_self_play_games: 200
-├─ num_parallel_games: 32
-├─ replay_buffer_size: 500k
-└─ num_iterations: 300
-
-DTW/Tablebase:
-├─ endgame_threshold: 15 cells (완전 탐색)
-├─ midgame_threshold: 45 cells (얕은 탐색)
-├─ hot_cache: 500만 포지션
-├─ cold_cache: 2000만 포지션
-└─ 대칭 정규화 항상 사용 (8배 절약)
-```
-
-### 기본 GPU 설정 (`get_gpu_optimized_config()`)
-
-```python
-네트워크:
-├─ num_res_blocks: 10
-├─ num_channels: 256
-└─ 파라미터: ~11.8M
-
-학습:
-├─ batch_size: 1024
-├─ num_simulations: 150
-├─ num_self_play_games: 100
-└─ num_parallel_games: 16
-```
-
-### CPU 설정 (`get_cpu_config()`)
-
-```python
-├─ batch_size: 32
-├─ num_simulations: 50
-├─ num_parallel_games: 4
-└─ use_amp: False
-```
-
-## 기술 스택
-
-### 신경망 아키텍처
+## Neural Network Architecture
 
 ```
 Input: 7 channels × 9×9
-├─ Channel 0: 현재 플레이어 돌 위치
-├─ Channel 1: 상대 플레이어 돌 위치
-├─ Channel 2: 현재 플레이어가 이긴 소보드
-├─ Channel 3: 상대가 이긴 소보드
-├─ Channel 4: 무승부 소보드
-├─ Channel 5: 유효한 소보드 마스크
-└─ Channel 6: 마지막 수 위치
+├─ Ch 0: Current player stones
+├─ Ch 1: Opponent player stones
+├─ Ch 2: Won sub-boards (current player perspective)
+├─ Ch 3: Lost sub-boards (current player perspective)
+├─ Ch 4: Drawn sub-boards
+├─ Ch 5: Last move position
+└─ Ch 6: Valid sub-board mask (where next move is allowed)
 
-Backbone: ResNet + SE Block
-├─ 10-20 Residual Blocks
-├─ 256-384 channels
-├─ Squeeze-and-Excitation (채널 어텐션)
-├─ Batch Normalization
-└─ ReLU activation
+Backbone: ResNet with SE attention
+├─ 30 residual blocks
+├─ 512 channels
+└─ Squeeze-and-Excitation (reduction=16)
 
-Heads:
+Dual Heads:
 ├─ Policy Head: Conv 1×1 → FC → 81 outputs (softmax)
-└─ Value Head: Conv 1×1 → FC → 1 output (tanh, -1~1)
-
-Parameters:
-├─ 기본: ~172K (64ch, 2 blocks) - 테스트용
-├─ 중간: ~11.8M (256ch, 10 blocks) - 학습용
-└─ RTX 5090: ~15M (384ch, 20 blocks) - 고성능
+└─ Value Head: Conv 1×1 → FC → FC → 1 output (tanh)
 ```
 
-### AlphaZero + DTW 통합
+## DTW Endgame Solver
+
+The Distance to Win (DTW) calculator provides perfect play in endgame positions:
+
+- **Alpha-Beta Pruning**: Minimax search with alpha-beta cutoffs
+- **Move Ordering**: Center → corners → edges priority for better pruning
+- **Transposition Table**: Hot/Cold 2-tier LRU cache
+  - Hot cache: Fast access, no compression (5M entries)
+  - Cold cache: Compressed to 3 bytes per entry (20M entries)
+- **Symmetry Normalization**: Canonical board representation using D4 group (8x memory savings)
+
+## Position Weighting
+
+The training pipeline uses weighted sampling to focus learning on critical game phases:
 
 ```
-MCTS Search (Opening/Midgame):
-├─ Selection: UCB + Prior (Neural Net)
-├─ Expansion: Legal moves only + Neural Net prior
-├─ Evaluation: Neural Net value prediction
-├─ Backpropagation: 부호 교대 (-value)
-└─ Action Selection: Visit count 기반
-
-DTW Search (Endgame ≤15 cells):
-├─ Alpha-Beta Pruning (효율적 탐색)
-├─ Transposition Table (캐시 조회 우선)
-├─ 8방향 대칭 정규화 (8배 메모리 절약)
-├─ 완전 탐색 (depth 무제한)
-└─ 최적의 수 + DTW 값 반환
-
-Self-Play 통합:
-├─ >15 cells: MCTS로 action_probs 생성
-├─ ≤15 cells + 승리 확정 (DTW≤5): DTW 최적수 사용
-└─ 학습 데이터: (state, policy, value, dtw)
+Empty Cells | Weight | Category
+------------|--------|------------------
+50+         | 1.0    | Opening
+40-49       | 1.0    | Early Mid
+30-39       | 1.0    | Mid
+26-29       | 1.2    | ★ Transition (Most Important)
+20-25       | 0.8    | Near Endgame
+10-19       | 0.5    | Endgame
+0-9         | 0.3    | Deep Endgame
 ```
 
-### 최적화 기법
+**Rationale**:
+- **Transition (26-29 cells)**: Critical decision point where games are often decided. Higher weight ensures more training focus.
+- **Endgame (≤25 cells)**: DTW provides perfect solutions, so neural network learning is less critical. Lower weight reduces overfitting to solved positions.
+- **Opening/Mid**: Standard weight for exploratory positions where neural network guidance is essential.
 
-```
-성능 최적화:
-├─ Board.clone(): copy.deepcopy 대비 80배 빠름
-├─ 공유 DTW Calculator: 캐시 재사용
-├─ MCTS 단일 실행: search() 결과 재사용
-└─ endgame_threshold=15: 계산 시간 최적화
+The `WeightedSampleBuffer` implements O(1) weighted sampling using cumulative weights and numpy random choice.
 
-GPU 최적화:
-├─ Mixed Precision (AMP): FP16 연산으로 2배 속도
-├─ Batch Predictor: 요청 모아서 배치 처리
-├─ Virtual Loss: MCTS 병렬화
-└─ Gradient Clipping: 학습 안정성
+## Configuration
 
-메모리 최적화:
-├─ Symmetry Normalization: 8배 메모리 절약
-├─ Hot/Cold 2-tier Cache: 접근 패턴 최적화
-├─ Position Weighting: 중요 포지션 우선 샘플링
-└─ Replay Buffer Deque: 효율적 FIFO
-```
+```python
+# config.py defaults
+NetworkConfig:
+    num_res_blocks: 30
+    num_channels: 512
 
-## 학습 루프
+TrainingConfig:
+    num_iterations: 300
+    num_self_play_games: 250
+    num_simulations: 800 (adaptive: 200→800)
+    batch_size: 4096
+    lr: 0.002
+    use_amp: True  # Mixed precision
 
-```
-Train Iteration:
-│
-├─ 1. Self-Play (num_games개)
-│   ├─ MCTS로 수 선택 (>15 cells)
-│   ├─ DTW로 최적수 (≤15 cells, 승리 확정 시)
-│   └─ 데이터 수집: (state, policy, value, dtw)
-│
-├─ 2. Replay Buffer 추가
-│   ├─ Position weighting (게임 단계별)
-│   └─ 승패 결과 역전파
-│
-├─ 3. Network Training (num_epochs)
-│   ├─ Weighted sampling
-│   ├─ Policy loss: Cross Entropy
-│   ├─ Value loss: MSE
-│   └─ Gradient clipping (max_norm=1.0)
-│
-└─ 4. Scheduler Step (Cosine Annealing)
+DTWConfig:
+    endgame_threshold: 15   # Complete search threshold
+    midgame_threshold: 45   # Shallow search threshold
+    shallow_depth: 8        # Midgame search depth limit
+    hot_cache_size: 5M
+    cold_cache_size: 20M
 ```
 
-## 테스트
+## Optimizations
+
+- **Fast Board.clone()**: Manual copy vs deepcopy (80x faster)
+- **Node clone elimination**: Avoid double cloning in MCTS expansion
+- **is_terminal caching**: Memoized terminal state detection
+- **Symmetry normalization**: 8x cache memory savings via D4 group
+- **Mixed Precision (AMP)**: FP16 training for 2x memory efficiency
+- **Adaptive simulations**: Start with 200 sims, increase to 800 as training progresses
+
+## Testing
 
 ```bash
-# 전체 테스트 실행 (66개)
 python -m pytest test/ -v
-
-# 최종 검증 테스트만
-python -m pytest test/test_final_verification.py -v
-
-# 테스트 카테고리:
-# - MCTS Backpropagation (4)
-# - Network Training (4)
-# - Train Loop (4)
-# - Alpha-Beta/DTW (3)
-# - Edge Cases (6)
-# - Performance (3)
-# - 기존 테스트 (42)
 ```
 
-## 학습 결과
+## API Reference
 
-학습 준비 완료 (v1.0)
+### AlphaZeroAgent
 
-## 문서
-- **[config.py](config.py)**: 설정 파일 (주석 포함)
+```python
+agent = AlphaZeroAgent(
+    network,                    # AlphaZeroNet instance
+    num_simulations=100,        # MCTS simulations per move
+    c_puct=1.0,                 # Exploration constant
+    temperature=1.0,            # Action selection temperature
+    dtw_calculator=None         # Optional DTWCalculator
+)
 
-## 패키징
+# Select best action
+action = agent.select_action(board, temperature=0)
 
-```bash
-./package.sh
-
-# 생성물:
-# ultra-tictacto_YYYYMMDD_HHMMSS.tar.gz (~44 KB)
-
-# 포함:
-# - 모든 소스 코드
-# - requirements.txt
-# - 문서
-# - 테스트 코드
-
-# 제외:
-# - .venv (가상환경)
-# - __pycache__ (컴파일 파일)
-# - .git (버전 관리)
-# - model/ (학습된 모델)
+# Get action probability distribution
+probs = agent.get_action_probs(board, temperature=1.0)
 ```
 
-## 기여
+### DTWCalculator
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+```python
+dtw = DTWCalculator(
+    use_cache=True,
+    hot_size=5000000,
+    cold_size=20000000,
+    endgame_threshold=15,
+    midgame_threshold=45,
+    shallow_depth=8
+)
 
-## 라이센스
+# Check if endgame position
+if dtw.is_endgame(board):
+    result, distance, best_move = dtw.calculate_dtw(board)
+    # result: 1 (win), -1 (loss), 0 (draw)
+    # distance: moves to outcome
+    # best_move: (row, col) tuple
+
+# Get winning move if available
+move, distance = dtw.get_best_winning_move(board)
+```
+
+### Trainer
+
+```python
+trainer = Trainer(
+    lr=0.002,
+    batch_size=4096,
+    num_simulations=800,
+    replay_buffer_size=1000000,
+    device="cuda",
+    use_amp=True
+)
+
+# Single training iteration
+result = trainer.train_iteration(
+    num_self_play_games=250,
+    num_train_epochs=40,
+    temperature=1.0,
+    num_simulations=800
+)
+
+# Save/Load
+trainer.save("./model/model.pth")
+trainer.load("./model/model.pth")
+```
+
+## License
 
 MIT License
 
-## 참고 문헌
+## References
 
-- [AlphaZero Paper](https://arxiv.org/abs/1712.01815)
-- [MCTS Survey](https://www.ru.is/faculty/yngvi/pdf/BrowneP12TCIAIG.pdf)
+- [Mastering Chess and Shogi by Self-Play (AlphaZero)](https://arxiv.org/abs/1712.01815)
 - [Ultimate Tic-Tac-Toe Rules](https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe)

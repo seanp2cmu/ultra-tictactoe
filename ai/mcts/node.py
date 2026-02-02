@@ -23,13 +23,12 @@ class Node:
         self.children: Dict[int, 'Node'] = {}
         self.visits = 0
         self.value_sum = 0
-        self._is_terminal: Optional[bool] = None  # 캐시된 terminal 상태
+        self._is_terminal: Optional[bool] = None
         
     def is_expanded(self) -> bool:
         return len(self.children) > 0
     
     def is_terminal(self) -> bool:
-        # 캐시된 결과 반환 (반복 호출 최적화)
         if self._is_terminal is not None:
             return self._is_terminal
         
@@ -37,7 +36,6 @@ class Node:
             self._is_terminal = True
             return True
         
-        # Check if any playable cell exists (faster than computing all legal moves)
         for br in range(3):
             for bc in range(3):
                 if self.board.completed_boards[br][bc] == 0:
@@ -45,10 +43,10 @@ class Node:
                         for c in range(bc*3, bc*3+3):
                             if self.board.boards[r][c] == 0:
                                 self._is_terminal = False
-                                return False  # Found at least one empty cell
+                                return False
         
         self._is_terminal = True
-        return True  # No empty cells in incomplete boards
+        return True
     
     def value(self) -> float:
         if self.visits == 0:
@@ -61,7 +59,6 @@ class Node:
         best_action = None
         best_child = None
         
-        # 최적화: sqrt를 루프 밖으로 이동 (반복 계산 제거)
         sqrt_visits = math.sqrt(self.visits)
         exploration_factor = c_puct * sqrt_visits
         
@@ -87,7 +84,6 @@ class Node:
                 next_board = self.board.clone()
                 next_board.make_move(move[0], move[1])
                 prior = action_probs.get(action, 1e-8)
-                # _clone=False: next_board is already cloned above
                 self.children[action] = Node(next_board, parent=self, action=action, prior_prob=prior, _clone=False)
     
     def update(self, value: float) -> None:

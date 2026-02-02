@@ -1,6 +1,5 @@
 """
 Compressed Transposition Table for DTW caching
-Hot/Cold 2-tier 구조 + 보드 대칭 정규화로 메모리 효율 극대화
 """
 from collections import OrderedDict
 from game import Board
@@ -11,10 +10,8 @@ class CompressedTranspositionTable:
     def __init__(self, hot_size=50000, cold_size=500000):
         """
         Args:
-            hot_size: Hot cache 크기 (빠른 접근, 압축 안 함)
-            cold_size: Cold cache 크기 (느린 접근, 압축)
-        
-        Note: 보드 대칭 정규화 항상 사용 (8배 메모리 절약)
+            hot_size: Hot cache size (faster access, no compression)
+            cold_size: Cold cache size (slower access, compression)
         """
         self.hot = OrderedDict()
         self.hot_size = hot_size
@@ -22,7 +19,6 @@ class CompressedTranspositionTable:
         self.cold = {}
         self.cold_size = cold_size
         
-        # 대칭 정규화 항상 사용
         self.symmetry = BoardSymmetry()
         
         self.stats = {
@@ -30,30 +26,24 @@ class CompressedTranspositionTable:
             "cold_hits": 0,
             "misses": 0,
             "evictions": 0,
-            "symmetry_saves": 0  # 대칭으로 인한 중복 방지 횟수
+            "symmetry_saves": 0 
         }
     
     def get_hash(self, board: Board):
-        """
-        보드를 해시로 변환 (대칭 정규화 적용, 8배 절약)
-        """
         return self.symmetry.get_canonical_hash(board)
     
     def compress_entry(self, result, dtw, best_move):
         """
-        엔트리 압축
-        - result: -1/0/1 → 1바이트 (128=패, 129=무, 130=승)
-        - dtw: int (최대 254) → 1바이트 (255=inf)
-        - best_move: (row, col) → 1바이트 (row*9+col, 255=None)
-        총: 3바이트 (원본 16바이트 대비 5배 압축)
+        entry compression
+        - result: -1/0/1 → 1byte (128=lose, 129=draw, 130=win)
+        - dtw: int (max 255) → 1byte (255=inf)
+        - best_move: (row, col) → 1byte (row*9+col, 255=None)
+        total: 3bytes (original 16bytes compressed 5x)
         """
-        # Result 인코딩: -1→128, 0→129, 1→130
         result_byte = 128 + result + 1
         
-        # DTW 인코딩
         dtw_byte = min(dtw if dtw != float('inf') else 255, 255)
         
-        # Best move 인코딩
         if best_move is None:
             move_byte = 255
         else:
@@ -63,16 +53,13 @@ class CompressedTranspositionTable:
         return bytes([result_byte, dtw_byte, move_byte])
     
     def decompress_entry(self, compressed):
-        """압축된 엔트리 복원"""
-        # Result 디코딩
+        """decompress entry"""
         result = compressed[0] - 128 - 1
         
-        # DTW 디코딩
         dtw = compressed[1]
         if dtw == 255:
             dtw = float('inf')
         
-        # Best move 디코딩
         move_byte = compressed[2]
         if move_byte == 255:
             best_move = None
@@ -83,41 +70,37 @@ class CompressedTranspositionTable:
     
     def get(self, board):
         """
-        캐시에서 조회
-        Hot → Cold 순서
+        get entry from cache
+        Hot → Cold order
         
         Returns:
             (result, dtw, best_move) or None
         """
         key = self.get_hash(board)
         
-        # Hot 확인
         if key in self.hot:
             self.stats["hot_hits"] += 1
             self.hot.move_to_end(key)
             return self.hot[key]
         
-        # Cold 확인
         if key in self.cold:
             self.stats["cold_hits"] += 1
             compressed = self.cold[key]
             result, dtw, best_move = self.decompress_entry(compressed)
             
-            # Hot으로 승격
             self._promote_to_hot(key, result, dtw, best_move)
             return (result, dtw, best_move)
         
-        # Miss
         self.stats["misses"] += 1
         return None
     
     def put(self, board, result, dtw, best_move=None):
         """
-        Hot에 저장
+        store entry in cache
         
         Args:
-            board: Board 객체
-            result: 1 (승), -1 (패), 0 (무승부)
+            board: Board object
+            result: 1 (win), -1 (lose), 0 (draw)
             dtw: Distance to Win/Loss
             best_move: (row, col) or None
         """
@@ -131,7 +114,6 @@ class CompressedTranspositionTable:
         
         if key in self.cold:
             self.stats["symmetry_saves"] += 1
-            # Cold에서 Hot으로 승격하며 업데이트
             self._promote_to_hot(key, result, dtw, best_move)
             return
         
@@ -141,7 +123,7 @@ class CompressedTranspositionTable:
         self.hot[key] = (result, dtw, best_move)
     
     def _promote_to_hot(self, key, result, dtw, best_move):
-        """Cold → Hot 승격"""
+        """promote entry from cold to hot"""
         if key in self.cold:
             del self.cold[key]
         
@@ -151,7 +133,7 @@ class CompressedTranspositionTable:
         self.hot[key] = (result, dtw, best_move)
     
     def _evict_from_hot(self):
-        """Hot에서 가장 오래된 것을 Cold로"""
+        """evict entry from hot"""
         old_key, (old_result, old_dtw, old_best_move) = self.hot.popitem(last=False)
         self.stats["evictions"] += 1
         
@@ -162,19 +144,16 @@ class CompressedTranspositionTable:
         self.cold[old_key] = compressed
     
     def _evict_from_cold(self):
-        """Cold에서 임의의 엔트리 삭제 (FIFO)"""
+        """evict entry from cold"""
         if not self.cold:
             return
         
-        # dict의 첫 번째 엔트리 제거
         first_key = next(iter(self.cold))
         del self.cold[first_key]
     
     def get_memory_usage(self):
-        """메모리 사용량 추정 (MB)"""
-        # Hot: (result, dtw, best_move) = 튜플 약 24바이트
+        """estimate memory usage (MB)"""
         hot_memory = len(self.hot) * 24
-        # Cold: 3바이트 압축
         cold_memory = len(self.cold) * 3
         overhead = (len(self.hot) + len(self.cold)) * 8
         
@@ -189,7 +168,7 @@ class CompressedTranspositionTable:
         }
     
     def get_stats(self):
-        """통계 반환"""
+        """return statistics"""
         total = sum([self.stats["hot_hits"], self.stats["cold_hits"], self.stats["misses"]])
         hit_rate = (self.stats["hot_hits"] + self.stats["cold_hits"]) / total if total > 0 else 0
         
@@ -203,7 +182,7 @@ class CompressedTranspositionTable:
         }
     
     def clear(self):
-        """캐시 초기화"""
+        """clear cache"""
         self.hot.clear()
         self.cold.clear()
         self.stats = {
@@ -216,23 +195,21 @@ class CompressedTranspositionTable:
     
     def save_to_file(self, filepath):
         """
-        Tablebase를 디스크에 저장
+        save DTW cache to disk
         
         Args:
-            filepath: 저장할 파일 경로 (예: './model/tablebase.pkl')
+            filepath: path to save file (e.g. './model/dtw_cache.pkl')
         
-        크기: ~1 GB (2000만 포지션 기준)
-        - Hot: 200만 × 56 bytes ≈ 112 MB
-        - Cold: 2000만 × 35 bytes ≈ 700 MB
+        size: ~1 GB (20M positions example)
+        - Hot: 20M x 56 bytes ≈ 112 MB
+        - Cold: 200M x 35 bytes ≈ 700 MB
         - Overhead: ~200 MB
         """
         import pickle
         import os
         
-        # 디렉토리 생성
         os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else '.', exist_ok=True)
         
-        # Hot + Cold 모두 저장
         data = {
             'hot': dict(self.hot),
             'cold': self.cold,
@@ -243,24 +220,24 @@ class CompressedTranspositionTable:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
         
         size_mb = os.path.getsize(filepath) / 1024 / 1024
-        print(f"✓ Tablebase saved: {filepath} ({size_mb:.1f} MB)")
+        print(f"✓ DTW cache saved: {filepath} ({size_mb:.1f} MB)")
         print(f"  Entries: {len(self.hot)} hot + {len(self.cold)} cold")
     
     def load_from_file(self, filepath):
         """
-        Tablebase를 디스크에서 로드
+        load DTW cache from disk
         
         Args:
-            filepath: 로드할 파일 경로
+            filepath: path to load file
         
         Returns:
-            bool: 성공 여부
+            bool: success or failure
         """
         import pickle
         import os
         
         if not os.path.exists(filepath):
-            print(f"⚠ Tablebase not found: {filepath}")
+            print(f"⚠ DTW cache not found: {filepath}")
             return False
         
         try:
@@ -273,7 +250,7 @@ class CompressedTranspositionTable:
             self.stats = data['stats']
             
             size_mb = os.path.getsize(filepath) / 1024 / 1024
-            print(f"✓ Tablebase loaded: {filepath} ({size_mb:.1f} MB)")
+            print(f"✓ DTW cache loaded: {filepath} ({size_mb:.1f} MB)")
             print(f"  Entries: {len(self.hot)} hot + {len(self.cold)} cold")
             
             stats = self.get_stats()
@@ -283,5 +260,5 @@ class CompressedTranspositionTable:
             return True
         
         except Exception as e:
-            print(f"✗ Failed to load tablebase: {e}")
+            print(f"✗ Failed to load DTW cache: {e}")
             return False

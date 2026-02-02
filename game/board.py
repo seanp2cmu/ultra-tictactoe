@@ -1,7 +1,6 @@
 import numpy as np
 
 class Board:
-    # 클래스 변수: 모든 인스턴스가 공유 (메모리 절약)
     CHECKER = (
         ((0,0), (0,1), (0,2)),
         ((1,0), (1,1), (1,2)),
@@ -28,7 +27,6 @@ class Board:
         new_board = Board.__new__(Board)
         new_board.boards = [row[:] for row in self.boards]
         new_board.completed_boards = [row[:] for row in self.completed_boards]
-        # CHECKER는 클래스 변수이므로 복사 불필요
         new_board.current_player = self.current_player
         new_board.winner = self.winner
         new_board.last_move = self.last_move
@@ -64,33 +62,26 @@ class Board:
     
     def _is_valid_move(self, r, c) -> bool:
         """Fast validation without computing all legal moves. O(1) instead of O(81)."""
-        # 범위 체크
-        if not (0 <= r < 9 and 0 <= c < 9):
+        if not (0 <= r < 9 and 0 <= c < 9): # loop bounds
             return False
         
-        # 이미 놓인 칸인지
-        if self.boards[r][c] != 0:
+        if self.boards[r][c] != 0: # check already placed
             return False
         
-        # 해당 소보드가 완료됐는지
         board_r, board_c = r // 3, c // 3
-        if self.completed_boards[board_r][board_c] != 0:
+        if self.completed_boards[board_r][board_c] != 0: # check completed
             return False
         
-        # 첫 수는 어디든 가능
         if self.last_move is None:
             return True
         
-        # 지정된 소보드인지 확인
         last_r, last_c = self.last_move
         target_board_r = last_r % 3
         target_board_c = last_c % 3
         
-        # 지정된 소보드가 완료됐으면 어디든 가능
         if self.completed_boards[target_board_r][target_board_c] != 0:
             return True
         
-        # 지정된 소보드에만 둘 수 있음
         return board_r == target_board_r and board_c == target_board_c
     
     def make_move(self, r, c, validate=True):
@@ -136,7 +127,6 @@ class Board:
         for br in range(3):
             for bc in range(3):
                 if self.completed_boards[br][bc] == 0:
-                    # Count zeros in 3x3 small board (pure Python, no numpy)
                     start_r, start_c = br * 3, bc * 3
                     for r in range(start_r, start_r + 3):
                         for c in range(start_c, start_c + 3):
@@ -162,10 +152,8 @@ class Board:
         Uses playable empty cells (excluding completed boards).
         """
         
-        # Handle different state formats
         state = np.array(state)
         if state.ndim == 2:
-            # Single plane (9, 9) - treat as all playable, count empty
             total_empty = np.sum(state == 0)
             if total_empty >= 50:
                 return 1.0, "opening"
@@ -182,28 +170,22 @@ class Board:
             else:
                 return 0.3, "deep_endgame"
         
-        # Multi-channel state (C, 9, 9)
         player1 = state[0]
         player2 = state[1]
         
-        # Count playable empty cells (excluding completed small boards)
         playable_empty = 0
         for br in range(3):
             for bc in range(3):
-                # Extract 3x3 small board
                 start_r, start_c = br * 3, bc * 3
                 small_p1 = player1[start_r:start_r+3, start_c:start_c+3]
                 small_p2 = player2[start_r:start_r+3, start_c:start_c+3]
                 
-                # Check if small board is completed
                 if Board._is_small_board_completed(small_p1, small_p2):
-                    continue  # Skip completed boards
+                    continue
                 
-                # Count empty cells in this small board
                 small_empty = np.sum((small_p1 == 0) & (small_p2 == 0))
                 playable_empty += small_empty
         
-        # Phase classification based on playable empty cells
         if playable_empty >= 50:
             return 1.0, "opening"
         elif playable_empty >= 40:
@@ -232,21 +214,16 @@ class Board:
             bool: True if completed
         """
         
-        # Check if someone won (vectorized)
         for player_board in [p1_board, p2_board]:
-            # Check rows (vectorized)
             if np.any(np.sum(player_board, axis=1) == 3):
                 return True
-            # Check columns (vectorized)
             if np.any(np.sum(player_board, axis=0) == 3):
                 return True
-            # Check diagonals
-            if np.trace(player_board) == 3:  # main diagonal
+            if np.trace(player_board) == 3:
                 return True
-            if np.trace(np.fliplr(player_board)) == 3:  # anti-diagonal
+            if np.trace(np.fliplr(player_board)) == 3:
                 return True
         
-        # Check if full (no empty cells)
         if np.sum((p1_board == 0) & (p2_board == 0)) == 0:
             return True
         
@@ -270,7 +247,6 @@ class Board:
         - endgame: 10-19 empty
         - deep_endgame: 0-9 empty
         """
-        # 최적화: numpy 변환 없이 직접 빈 칸 수 계산
         playable_empty = self.count_playable_empty_cells()
         
         if playable_empty >= 50:

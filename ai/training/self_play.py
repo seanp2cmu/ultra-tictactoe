@@ -5,7 +5,6 @@ import numpy as np
 from game import Board
 from ai.core import AlphaZeroNet
 from ai.endgame import DTWCalculator
-from ai.utils import BatchPredictor
 from ai.mcts import AlphaZeroAgent
 
 class SelfPlayWorker:
@@ -15,7 +14,6 @@ class SelfPlayWorker:
         self,
         network: AlphaZeroNet,
         dtw_calculator: Optional[DTWCalculator] = None,
-        batch_predictor: Optional[BatchPredictor] = None,
         num_simulations: int = 100,
         temperature: float = 1.0,
         endgame_threshold: int = 15,
@@ -24,7 +22,6 @@ class SelfPlayWorker:
     ) -> None:
         self.network: AlphaZeroNet = network
         
-        # DTW always enabled
         if dtw_calculator is None:
             self.dtw_calculator = DTWCalculator(
                 use_cache=True,
@@ -35,7 +32,6 @@ class SelfPlayWorker:
         else:
             self.dtw_calculator = dtw_calculator
         
-        # Agent에 공유 DTW calculator 전달
         self.agent = AlphaZeroAgent(
             network, 
             num_simulations=num_simulations, 

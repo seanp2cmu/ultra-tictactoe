@@ -9,7 +9,7 @@ from ai.core import AlphaZeroNet
 
 
 class AlphaZeroAgent:
-    """MCTS agent with neural network and DTW tablebase."""
+    """MCTS agent with neural network and DTW endgame."""
     
     def __init__(
         self,
@@ -26,15 +26,14 @@ class AlphaZeroAgent:
         self.temperature = temperature
         self.batch_size = batch_size
         
-        # DTW: 외부 주입 또는 기본 생성
         if dtw_calculator is not None:
             self.dtw_calculator = dtw_calculator
         else:
             from ..endgame import DTWCalculator
             self.dtw_calculator = DTWCalculator(
                 use_cache=True,
-                hot_size=50000,   # 5만 (테스트용 작은 캐시)
-                cold_size=500000  # 50만
+                hot_size=50000,
+                cold_size=500000
             )
     
     def search(self, board: Board) -> Node:
@@ -53,7 +52,7 @@ class AlphaZeroAgent:
             search_paths: List[List[Node]] = []
             leaf_nodes: List[Node] = []
             leaf_boards: List[Board] = []
-            tablebase_results: List[Tuple[int, float, Dict[int, float]]] = []
+            dtw_results: List[Tuple[int, float, Dict[int, float]]] = []
             
             for _ in range(batch_size):
                 node = root
@@ -67,26 +66,25 @@ class AlphaZeroAgent:
                 node_idx = len(leaf_nodes)
                 leaf_nodes.append(node)
                 
-                tablebase_hit = False
+                dtw_hit = False
                 if not node.is_terminal() and self.dtw_calculator.is_endgame(node.board):
-                        result_data = self.dtw_calculator.calculate_dtw(node.board)
+                    result_data = self.dtw_calculator.calculate_dtw(node.board)
+                    
+                    if result_data is not None:
+                        result, _, _ = result_data
+                        value = float(result)
                         
-                        if result_data is not None:
-                            result, dtw, _ = result_data
-                            value = float(result)
-                            
-                            legal_moves = node.board.get_legal_moves()
-                            uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0
-                            expand_probs = {move[0] * 9 + move[1]: uniform_prob for move in legal_moves}
-                            
-                            tablebase_results.append((node_idx, value, expand_probs))
-                            tablebase_hit = True
+                        legal_moves = node.board.get_legal_moves()
+                        uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0
+                        expand_probs = {move[0] * 9 + move[1]: uniform_prob for move in legal_moves}
+                        
+                        dtw_results.append((node_idx, value, expand_probs))
+                        dtw_hit = True
                 
-                if not node.is_terminal() and not tablebase_hit:
+                if not node.is_terminal() and not dtw_hit:
                     leaf_boards.append(node.board)
             
-            # Convert to dict for O(1) lookup instead of O(n) search
-            tablebase_dict = {idx: (value, expand_probs) for idx, value, expand_probs in tablebase_results}
+            dtw_dict = {idx: (value, expand_probs) for idx, value, expand_probs in dtw_results}
             
             if leaf_boards:
                 policy_probs_batch, values_batch = self.network.predict_batch(leaf_boards)
@@ -101,8 +99,8 @@ class AlphaZeroAgent:
                             value = 1.0
                         else:
                             value = -1.0
-                elif i in tablebase_dict:
-                    value, expand_probs = tablebase_dict[i]
+                elif i in dtw_dict:
+                    value, expand_probs = dtw_dict[i]
                     if expand_probs:
                         node.expand(expand_probs)
                 else:

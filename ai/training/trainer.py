@@ -1,6 +1,5 @@
 """Main trainer class for AlphaZero with DTW."""
 from typing import Dict, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 from .replay_buffer import SelfPlayData
@@ -22,7 +21,6 @@ class Trainer:
         use_amp: bool = True,
         num_res_blocks: int = 10,
         num_channels: int = 256,
-        num_parallel_games: int = 1,
         endgame_threshold: int = 15,
         hot_cache_size: int = 50000,
         cold_cache_size: int = 500000,
@@ -41,7 +39,6 @@ class Trainer:
         self.batch_size = batch_size
         self.num_simulations = num_simulations
         self.replay_buffer = SelfPlayData(max_size=replay_buffer_size)
-        self.num_parallel_games = num_parallel_games
         
         self.hot_cache_size = hot_cache_size
         self.cold_cache_size = cold_cache_size
@@ -62,7 +59,6 @@ class Trainer:
         self,
         temperature: float,
         verbose: bool,
-        batch_predictor=None,
         num_simulations: Optional[int] = None
     ):
         """Play single self-play game."""
@@ -70,8 +66,7 @@ class Trainer:
         
         worker = SelfPlayWorker(
             self.network,
-            dtw_calculator=self.dtw_calculator,  # 공유 캐시 사용!
-            batch_predictor=batch_predictor,
+            dtw_calculator=self.dtw_calculator,
             num_simulations=sims,
             temperature=temperature
         )
@@ -89,61 +84,21 @@ class Trainer:
         """Generate self-play data."""
         all_data = []
         
-        if self.num_parallel_games > 1:
-            from ..utils import BatchPredictor
-            with BatchPredictor(self.network, batch_size=self.num_parallel_games,
-                              wait_time=0.005, verbose=verbose) as batch_predictor:
-                with ThreadPoolExecutor(max_workers=self.num_parallel_games) as executor:
-                    futures = [
-                        executor.submit(self._play_single_game,
-                                      temperature, verbose, batch_predictor, num_simulations)
-                        for _ in range(num_games)
-                    ]
-                    
-                    game_pbar = tqdm(total=num_games, desc="Self-play",
-                                   leave=False, disable=disable_tqdm, ncols=100)
-                    
-                    completed_games = 0
-                    total_positions = 0
-                    dtw_positions = 0
-                    
-                    for future in as_completed(futures):
-                        game_data = future.result()
-                        all_data.extend(game_data)
-                        completed_games += 1
-                        
-                        for _, _, _, dtw in game_data:
-                            total_positions += 1
-                            if dtw is not None:
-                                dtw_positions += 1
-                        
-                        avg_length = len(all_data) / completed_games if completed_games > 0 else 0
-                        dtw_rate = dtw_positions / total_positions if total_positions > 0 else 0
-                        
-                        game_pbar.update(1)
-                        game_pbar.set_postfix({
-                            "samples": len(all_data),
-                            "avg_len": f"{avg_length:.1f}",
-                            "dtw%": f"{dtw_rate:.1%}"
-                        })
-                    
-                    game_pbar.close()
-        else:
-            game_pbar = tqdm(range(num_games), desc="Self-play",
-                           leave=False, disable=disable_tqdm, ncols=100)
-            for i in game_pbar:
-                game_data = self._play_single_game(temperature, verbose, None, num_simulations)
-                all_data.extend(game_data)
-                
-                dtw_count = sum(1 for _, _, _, dtw in game_data if dtw is not None)
-                dtw_rate = dtw_count / len(game_data) if game_data else 0
-                avg_length = len(all_data) / (i + 1)
-                
-                game_pbar.set_postfix({
-                    "samples": len(all_data),
-                    "avg_len": f"{avg_length:.1f}",
-                    "dtw%": f"{dtw_rate:.1%}"
-                })
+        game_pbar = tqdm(range(num_games), desc="Self-play",
+                       leave=False, disable=disable_tqdm, ncols=100)
+        for i in game_pbar:
+            game_data = self._play_single_game(temperature, verbose, num_simulations)
+            all_data.extend(game_data)
+            
+            dtw_count = sum(1 for _, _, _, dtw in game_data if dtw is not None)
+            dtw_rate = dtw_count / len(game_data) if game_data else 0
+            avg_length = len(all_data) / (i + 1)
+            
+            game_pbar.set_postfix({
+                "samples": len(all_data),
+                "avg_len": f"{avg_length:.1f}",
+                "dtw%": f"{dtw_rate:.1%}"
+            })
         
         for state, policy, value, dtw in all_data:
             self.replay_buffer.add(state, policy, value, dtw)

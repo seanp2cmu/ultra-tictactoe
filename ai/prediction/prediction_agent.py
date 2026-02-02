@@ -8,7 +8,7 @@ from ai.core import AlphaZeroNet
 
 def create_prediction_agent(model_path=None, network=None, num_simulations=400, 
                             temperature=0.1, dtw_max_depth=18,
-                            tablebase_path=None):
+                            dtw_cache_path=None):
     """
     실전/예측용 Agent 생성 (DTW 활성화)
     
@@ -18,7 +18,7 @@ def create_prediction_agent(model_path=None, network=None, num_simulations=400,
         num_simulations: MCTS 시뮬레이션 수 (기본 400, 실전에서 높게)
         temperature: Temperature (기본 0.1, 낮을수록 결정적)
         dtw_max_depth: DTW 탐색 깊이 (기본 18, DTW는 항상 활성화)
-        tablebase_path: Tablebase 파일 경로 (.pkl, 선택사항)
+        dtw_cache_path: DTW 캐시 파일 경로 (.pkl, 선택사항)
     
     Returns:
         AlphaZeroAgent with DTW enabled
