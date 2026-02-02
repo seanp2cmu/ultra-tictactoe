@@ -50,9 +50,7 @@ def main():
     print(f"  Batch size: {config.training.batch_size}")
     print(f"  Learning rate: {config.training.lr}")
     print(f"  Parallel games: {config.training.num_parallel_games}")
-    print(f"\nDTW:")
-    print(f"  Enabled: {config.dtw.use_dtw}")
-    print(f"  Max depth: {config.dtw.max_depth}")
+    print(f"\nDTW (Always Enabled):")
     print(f"  Endgame threshold: {config.dtw.endgame_threshold} cells")
     print(f"  Cache size: {config.dtw.hot_cache_size + config.dtw.cold_cache_size:,} entries")
     print(f"\nGPU:")
@@ -73,8 +71,6 @@ def main():
         num_res_blocks=config.network.num_res_blocks,
         num_channels=config.network.num_channels,
         num_parallel_games=config.training.num_parallel_games,
-        use_dtw=config.dtw.use_dtw,
-        dtw_max_depth=config.dtw.max_depth,
         hot_cache_size=config.dtw.hot_cache_size,
         cold_cache_size=config.dtw.cold_cache_size,
         use_symmetry=config.dtw.use_symmetry,
@@ -158,7 +154,7 @@ def main():
                 print(f"✓ Tablebase checkpoint saved ({stats.get('total_mb', 0):.1f} MB, hit rate: {stats.get('hit_rate', 'N/A')})")
         
         # 주기적으로 DTW 캐시 클리어 (메모리 관리)
-        if (iteration + 1) % 20 == 0 and config.dtw.use_dtw:
+        if (iteration + 1) % 20 == 0:
             trainer.clear_dtw_cache()
     
     print("\n" + "="*80)
@@ -182,7 +178,7 @@ def main():
             print(f"  Hit rate: {stats.get('hit_rate', 'N/A')}")
     
     # 최종 통계
-    if config.dtw.use_dtw and trainer.dtw_calculator:
+    if trainer.dtw_calculator:
         final_stats = trainer.dtw_calculator.get_stats()
         print("\nFinal DTW Statistics:")
         print(f"  Total queries: {final_stats.get('total_queries', 0)}")

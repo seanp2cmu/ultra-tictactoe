@@ -15,25 +15,9 @@ class SelfPlayData:
         self._cache_dirty = True
     
     def _get_weight(self, state: np.ndarray) -> Tuple[float, str]:
-        """Calculate position weight based on empty cells."""
-        my_plane = state[0]
-        opponent_plane = state[1]
-        empty_count = np.sum((my_plane == 0) & (opponent_plane == 0))
-        
-        if empty_count >= 50:
-            return 1.0, "opening"
-        elif empty_count >= 40:
-            return 1.0, "early_mid"
-        elif empty_count >= 30:
-            return 1.0, "mid"
-        elif empty_count >= 26:
-            return 1.2, "transition"
-        elif empty_count >= 20:
-            return 0.8, "near_tablebase"
-        elif empty_count >= 10:
-            return 0.5, "tablebase"
-        else:
-            return 0.3, "deep_tablebase"
+        """Calculate position weight using Board's phase calculation."""
+        from game import Board
+        return Board.get_phase_from_state(state)
     
     def add(self, state: np.ndarray, policy: np.ndarray, value: float, dtw: Optional[int] = None) -> None:
         """Add training sample with automatic weighting."""

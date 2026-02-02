@@ -18,27 +18,25 @@ class AlphaZeroAgent:
         c_puct: float = 1.0,
         temperature: float = 1.0,
         batch_size: int = 8,
-        use_dtw: bool = False,
-        dtw_max_depth: int = 18
+        dtw_calculator=None
     ) -> None:
         self.network = network
         self.num_simulations = num_simulations
         self.c_puct = c_puct
         self.temperature = temperature
         self.batch_size = batch_size
-        self.use_dtw = use_dtw
         
-        if use_dtw:
+        # DTW: 외부 주입 또는 기본 생성
+        if dtw_calculator is not None:
+            self.dtw_calculator = dtw_calculator
+        else:
             from ..endgame import DTWCalculator
             self.dtw_calculator = DTWCalculator(
-                max_depth=dtw_max_depth,
                 use_cache=True,
-                hot_size=500000,
-                cold_size=5000000,
+                hot_size=50000,   # 5만 (테스트용 작은 캐시)
+                cold_size=500000,  # 50만
                 use_symmetry=True
             )
-        else:
-            self.dtw_calculator = None
     
     def search(self, board: Board) -> Node:
         """Run MCTS from root position."""
@@ -71,8 +69,7 @@ class AlphaZeroAgent:
                 leaf_nodes.append(node)
                 
                 tablebase_hit = False
-                if not node.is_terminal() and self.use_dtw and self.dtw_calculator:
-                    if self.dtw_calculator.is_endgame(node.board):
+                if not node.is_terminal() and self.dtw_calculator.is_endgame(node.board):
                         result_data = self.dtw_calculator.calculate_dtw(node.board)
                         
                         if result_data is not None:
@@ -127,8 +124,7 @@ class AlphaZeroAgent:
         if temperature is None:
             temperature = self.temperature
         
-        if self.use_dtw and self.dtw_calculator:
-            if self.dtw_calculator.is_endgame(board):
+        if self.dtw_calculator.is_endgame(board):
                 best_move, dtw = self.dtw_calculator.get_best_winning_move(board)
                 if best_move and dtw < float('inf'):
                     return best_move[0] * 9 + best_move[1]

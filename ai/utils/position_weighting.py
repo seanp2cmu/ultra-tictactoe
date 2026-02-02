@@ -1,70 +1,8 @@
 """
 포지션별 학습 가중치
-전환 구간(26-29칸)에 집중, Tablebase 영역은 낮게
+전환 구간(26-29칸)에 집중, 엔드게임 영역은 낮게
 """
 from game.board import Board
-
-
-def get_position_weight(board: Board):
-    """
-    보드 상태에 따른 학습 가중치 반환
-    
-    Args:
-        board: Board 객체
-        
-    Returns:
-        float: 학습 가중치 (0.3 ~ 1.2)
-    
-    가중치 전략:
-    - 50칸+:   1.0  (미드게임, 중요)
-    - 40-49칸: 1.0  (중반, 중요)
-    - 30-39칸: 1.0  (중요)
-    - 26-29칸: 1.2  (전환 구간, 가장 중요!)
-    - 20-25칸: 0.8  (Tablebase 근처, 덜 중요)
-    - 10-19칸: 0.5  (Tablebase 확실)
-    - 0-9칸:   0.3  (Tablebase 완전 확실)
-    """
-    empty_count = board.count_empty_cells()
-    
-    if empty_count >= 50:
-        return 1.0  # 미드게임
-    elif empty_count >= 40:
-        return 1.0  # 중반
-    elif empty_count >= 30:
-        return 1.0  # 중요 구간
-    elif empty_count >= 26:
-        return 1.2  # 전환 구간 - 가장 중요!
-    elif empty_count >= 20:
-        return 0.8  # Tablebase 근처
-    elif empty_count >= 10:
-        return 0.5  # Tablebase 영역
-    else:
-        return 0.3  # Tablebase 완전 확실
-
-
-def get_position_category(board: Board):
-    """
-    포지션 카테고리 반환 (통계용)
-    
-    Returns:
-        str: 카테고리 이름
-    """
-    empty_count = board.count_empty_cells()
-    
-    if empty_count >= 50:
-        return "opening"
-    elif empty_count >= 40:
-        return "early_mid"
-    elif empty_count >= 30:
-        return "mid"
-    elif empty_count >= 26:
-        return "transition"  # 전환 구간
-    elif empty_count >= 20:
-        return "near_tablebase"
-    elif empty_count >= 10:
-        return "tablebase"
-    else:
-        return "deep_tablebase"
 
 
 class WeightedSampleBuffer:
@@ -88,15 +26,15 @@ class WeightedSampleBuffer:
             "early_mid": 0,
             "mid": 0,
             "transition": 0,
-            "near_tablebase": 0,
-            "tablebase": 0,
-            "deep_tablebase": 0
+            "near_endgame": 0,
+            "endgame": 0,
+            "deep_endgame": 0
         }
         
         # 누적 가중치 (샘플링 최적화)
         self.total_weight = 0.0
     
-    def add(self, state, policy, value, board, dtw=None):
+    def add(self, state, policy, value, board: Board, dtw=None):
         """
         데이터 추가 (가중치 포함)
         
@@ -107,9 +45,8 @@ class WeightedSampleBuffer:
             board: Board 객체 (가중치 계산용)
             dtw: DTW 값 (선택)
         """
-        # 가중치 계산
-        weight = get_position_weight(board)
-        category = get_position_category(board)
+        # 가중치 계산 (Board 메서드 사용)
+        weight, category = board.get_phase()
         
         # deque가 가득 차면 자동으로 가장 오래된 것 제거
         if len(self.data) >= self.max_size:
@@ -191,13 +128,13 @@ def print_weight_schedule():
     print("40-49       | 1.0    | Early Mid")
     print("30-39       | 1.0    | Mid")
     print("26-29       | 1.2    | ★ Transition (Most Important!)")
-    print("20-25       | 0.8    | Near Tablebase")
-    print("10-19       | 0.5    | Tablebase")
-    print("0-9         | 0.3    | Deep Tablebase")
+    print("20-25       | 0.8    | Near Endgame")
+    print("10-19       | 0.5    | Endgame")
+    print("0-9         | 0.3    | Deep Endgame")
     print("=" * 60)
     print("\nRationale:")
     print("- Transition (26-29): Critical decision point")
-    print("- Tablebase (≤25): Perfect solution exists, less learning needed")
+    print("- Endgame (≤25): Perfect solution exists, less learning needed")
     print("- Focus on positions where neural net can add value")
     print("=" * 60)
 

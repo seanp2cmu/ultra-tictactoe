@@ -2,24 +2,22 @@
 Distance to Win (DTW) Calculator
 엔드게임에서 확정 승리까지의 최단 거리 계산
 """
-import copy
-
 from .transposition_table import CompressedTranspositionTable
 from game import Board
 
 
 class DTWCalculator:
-    def __init__(self, max_depth=15, use_cache=True, hot_size=50000, cold_size=500000, use_symmetry=True, endgame_threshold=25):
+    def __init__(self, use_cache=True, hot_size=50000, cold_size=500000, use_symmetry=True, endgame_threshold=15):
         """
         Args:
-            max_depth: 최대 탐색 깊이
             use_cache: Transposition Table 사용 여부
             hot_size: Hot cache 크기
             cold_size: Cold cache 크기
             use_symmetry: 보드 대칭 정규화 (8배 메모리 절약)
-            endgame_threshold: 엔드게임 판단 기준 (빈 칸 개수)
+            endgame_threshold: 엔드게임 판단 기준 (플레이 가능한 빈칸 개수)
+        
+        Note: 15칸 이하는 완전 탐색 (25칸은 너무 오래 걸림)
         """
-        self.max_depth = max_depth
         self.use_cache = use_cache
         self.endgame_threshold = endgame_threshold
         
@@ -38,10 +36,10 @@ class DTWCalculator:
     
     def calculate_dtw(self, board: Board):
         """
-        DTW 계산 (Retrograde Analysis 방식)
+        DTW 계산 (Alpha-Beta Search)
         
-        25칸 이하만 계산: 완벽한 Retrograde Analysis
-        26칸 이상: None 반환 (MCTS 사용)
+        15칸 이하만 계산: Alpha-Beta 완전 탐색
+        16칸 이상: None 반환 (MCTS 사용)
         
         Returns:
             (result, dtw, best_move) or None
@@ -59,21 +57,24 @@ class DTWCalculator:
         if board.count_playable_empty_cells() > self.endgame_threshold:
             return None
         
-        # === threshold 이하: Retrograde Analysis (완벽) ===
-        result, dtw, best_move = self._retrograde_analysis(board)
+        # === threshold 이하: Alpha-Beta 완전 탐색 ===
+        result, dtw, best_move = self._alpha_beta_search(board)
         
         if self.use_cache and self.tt:
             self.tt.put(board, result, dtw, best_move)
         
         return (result, dtw, best_move)
     
-    def _retrograde_analysis(self, board: Board, depth: int = 0, alpha: int = -2, beta: int = 2):
+    def _alpha_beta_search(self, board: Board, depth: int = 0, alpha: int = -2, beta: int = 2):
         """
-        Alpha-Beta Pruning으로 최적화된 Minimax (25칸 이하)
+        Alpha-Beta Pruning 탐색
+        
+        15칸 이하는 완전 탐색 (depth 제한 없음)
+        Alpha-Beta + 캐싱으로 효율적 탐색
         
         Args:
             board: 현재 보드
-            depth: 재귀 깊이 (안전장치)
+            depth: 현재 재귀 깊이 (DTW 계산용)
             alpha: Alpha 값 (최대화 플레이어의 최소 보장 값)
             beta: Beta 값 (최소화 플레이어의 최대 보장 값)
         
@@ -83,10 +84,6 @@ class DTWCalculator:
             - dtw: Distance to Win/Loss
             - best_move: (row, col) or None
         """
-        MAX_DEPTH = 30
-        if depth > MAX_DEPTH:
-            return (0, float('inf'), None)
-        
         # 터미널 체크
         if board.winner is not None:
             if board.winner == board.current_player:
@@ -105,7 +102,7 @@ class DTWCalculator:
         best_dtw = float('inf')
         
         for move in legal_moves:
-            next_board = copy.deepcopy(board)
+            next_board = board.clone()
             next_board.make_move(move[0], move[1])
             
             # 캐시 먼저 확인
@@ -115,12 +112,12 @@ class DTWCalculator:
                     opponent_result, opponent_dtw, _ = cached
                 else:
                     # Alpha-Beta Pruning 적용
-                    opponent_result, opponent_dtw, _ = self._retrograde_analysis(
+                    opponent_result, opponent_dtw, _ = self._alpha_beta_search(
                         next_board, depth + 1, -beta, -alpha
                     )
                     self.tt.put(next_board, opponent_result, opponent_dtw, None)
             else:
-                opponent_result, opponent_dtw, _ = self._retrograde_analysis(
+                opponent_result, opponent_dtw, _ = self._alpha_beta_search(
                     next_board, depth + 1, -beta, -alpha
                 )
             

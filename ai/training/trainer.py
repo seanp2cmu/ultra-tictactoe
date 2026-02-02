@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 from .replay_buffer import SelfPlayData
 from .self_play import SelfPlayWorker
-
+from ai.endgame import DTWCalculator
 
 class Trainer:
     """AlphaZero trainer with DTW endgame support."""
@@ -23,8 +23,7 @@ class Trainer:
         num_res_blocks: int = 10,
         num_channels: int = 256,
         num_parallel_games: int = 1,
-        use_dtw: bool = True,
-        dtw_max_depth: int = 12,
+        endgame_threshold: int = 15,
         hot_cache_size: int = 50000,
         cold_cache_size: int = 500000,
         use_symmetry: bool = True,
@@ -45,31 +44,25 @@ class Trainer:
         self.replay_buffer = SelfPlayData(max_size=replay_buffer_size)
         self.num_parallel_games = num_parallel_games
         
-        self.use_dtw = use_dtw
-        self.dtw_max_depth = dtw_max_depth
         self.hot_cache_size = hot_cache_size
         self.cold_cache_size = cold_cache_size
         self.use_symmetry = use_symmetry
         
-        if use_dtw:
-            from ..endgame import DTWCalculator
-            self.dtw_calculator = DTWCalculator(
-                max_depth=dtw_max_depth,
-                use_cache=True,
-                hot_size=hot_cache_size,
-                cold_size=cold_cache_size,
-                use_symmetry=use_symmetry
-            )
-        else:
-            self.dtw_calculator = None
+        # DTW always enabled
+        from ..endgame import DTWCalculator
+        self.dtw_calculator = DTWCalculator(
+            use_cache=True,
+            hot_size=hot_cache_size,
+            cold_size=cold_cache_size,
+            use_symmetry=use_symmetry,
+            endgame_threshold=endgame_threshold
+        )
         
         self.total_dtw_positions = 0
         self.total_dtw_wins = 0
     
     def _play_single_game(
         self,
-        game_idx: int,
-        num_games: int,
         temperature: float,
         verbose: bool,
         batch_predictor=None,
@@ -80,15 +73,10 @@ class Trainer:
         
         worker = SelfPlayWorker(
             self.network,
-            dtw_calculator=None,
+            dtw_calculator=self.dtw_calculator,  # 공유 캐시 사용!
             batch_predictor=batch_predictor,
             num_simulations=sims,
-            temperature=temperature,
-            use_dtw_endgame=self.use_dtw,
-            dtw_max_depth=self.dtw_max_depth,
-            hot_cache_size=self.hot_cache_size,
-            cold_cache_size=self.cold_cache_size,
-            use_symmetry=self.use_symmetry
+            temperature=temperature
         )
         
         return worker.play_game(verbose=verbose)
@@ -110,9 +98,9 @@ class Trainer:
                               wait_time=0.005, verbose=verbose) as batch_predictor:
                 with ThreadPoolExecutor(max_workers=self.num_parallel_games) as executor:
                     futures = [
-                        executor.submit(self._play_single_game, game_idx, num_games,
+                        executor.submit(self._play_single_game,
                                       temperature, verbose, batch_predictor, num_simulations)
-                        for game_idx in range(num_games)
+                        for _ in range(num_games)
                     ]
                     
                     game_pbar = tqdm(total=num_games, desc="Self-play",
@@ -146,13 +134,13 @@ class Trainer:
         else:
             game_pbar = tqdm(range(num_games), desc="Self-play",
                            leave=False, disable=disable_tqdm, ncols=100)
-            for game_idx in game_pbar:
-                game_data = self._play_single_game(game_idx, num_games, temperature, verbose, None, num_simulations)
+            for i in game_pbar:
+                game_data = self._play_single_game(temperature, verbose, None, num_simulations)
                 all_data.extend(game_data)
                 
                 dtw_count = sum(1 for _, _, _, dtw in game_data if dtw is not None)
                 dtw_rate = dtw_count / len(game_data) if game_data else 0
-                avg_length = len(all_data) / (game_idx + 1) if game_idx >= 0 else 0
+                avg_length = len(all_data) / (i + 1)
                 
                 game_pbar.set_postfix({
                     "samples": len(all_data),
@@ -170,7 +158,7 @@ class Trainer:
         
         if verbose:
             print(f"\nTotal samples in replay buffer: {len(self.replay_buffer)}")
-            if self.use_dtw and self.total_dtw_positions > 0:
+            if self.total_dtw_positions > 0:
                 win_rate = self.total_dtw_wins / self.total_dtw_positions
                 print(f"DTW positions: {self.total_dtw_positions}, Win rate: {win_rate:.2%}")
                 if self.dtw_calculator:
@@ -191,7 +179,7 @@ class Trainer:
         
         epoch_pbar = tqdm(range(num_epochs), desc="Training", leave=False, disable=disable_tqdm, ncols=100)
         
-        for epoch in epoch_pbar:
+        for _ in epoch_pbar:
             boards, policies, values, _ = self.replay_buffer.sample(self.batch_size)
             
             t_loss, p_loss, v_loss = self.network.train_step(boards, policies, values)
@@ -226,8 +214,7 @@ class Trainer:
         if verbose:
             print("=" * 60)
             print("Generating self-play data...")
-            if self.use_dtw:
-                print("DTW enabled for endgame improvement")
+            print("DTW enabled for endgame improvement")
             print("=" * 60)
         
         num_samples = self.generate_self_play_data(
@@ -253,7 +240,7 @@ class Trainer:
             'learning_rate': current_lr
         }
         
-        if self.use_dtw and self.dtw_calculator:
+        if self.dtw_calculator:
             result['dtw_stats'] = self.dtw_calculator.get_stats()
         
         if verbose:

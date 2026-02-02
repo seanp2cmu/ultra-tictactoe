@@ -38,21 +38,17 @@ class MCTSConfig:
 
 @dataclass
 class DTWConfig:
-    use_dtw: bool = True
-    max_depth: int = 18               # DTW 탐색 깊이 (18수 앞까지 계산) - 적절함
-    endgame_threshold: int = 25       # 빈 칸 25개 이하면 엔드게임 (Tablebase 영역) - 적절함
-    hot_cache_size: int = 5000000     # 200만→500만: 92GB RAM으로 2.5배 증가 (캐시 hit rate 향상)
-    cold_cache_size: int = 20000000   # 2000만 유지: Disk 80GB로 제한적 (압축 저장)
+    endgame_threshold: int = 15       # 플레이 가능한 빈칸 15개 이하면 완전 탐색 (25칸은 너무 느림)
+    hot_cache_size: int = 5000000     # 500만: 92GB RAM으로 2.5배 증가 (캐시 hit rate 향상)
+    cold_cache_size: int = 20000000   # 2000만: Disk 80GB로 제한적 (압축 저장)
     use_symmetry: bool = True         # 보드 대칭 정규화 (8배 메모리 절약) - 필수
-    use_tablebase: bool = True        # Retrograde Tablebase 사용 (25칸 이하 완벽) - 필수
 
 @dataclass
 class PredictionConfig:
     """실제 게임/예측 시 사용할 설정"""
     num_simulations: int = 1600       # 400→1600: RTX 5090으로 4배 증가 (더 정확한 예측)
     temperature: float = 0.1          # 낮은 temperature (더 결정적) - 적절함
-    use_dtw: bool = True              # DTW 사용 (엔드게임 완벽) - 필수
-    dtw_max_depth: int = 18           # DTW 깊이 - 적절함
+    # DTW는 항상 사용됨 (엔드게임 완벽 해결)
     
 @dataclass
 class Config:

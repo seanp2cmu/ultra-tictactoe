@@ -7,7 +7,7 @@ from ai.core import AlphaZeroNet
 
 
 def create_prediction_agent(model_path=None, network=None, num_simulations=400, 
-                            temperature=0.1, use_dtw=True, dtw_max_depth=18,
+                            temperature=0.1, dtw_max_depth=18,
                             tablebase_path=None):
     """
     실전/예측용 Agent 생성 (DTW 활성화)
@@ -17,8 +17,7 @@ def create_prediction_agent(model_path=None, network=None, num_simulations=400,
         network: 이미 로드된 네트워크 (model_path와 둘 중 하나만)
         num_simulations: MCTS 시뮬레이션 수 (기본 400, 실전에서 높게)
         temperature: Temperature (기본 0.1, 낮을수록 결정적)
-        use_dtw: DTW 사용 여부 (기본 True)
-        dtw_max_depth: DTW 탐색 깊이 (기본 18)
+        dtw_max_depth: DTW 탐색 깊이 (기본 18, DTW는 항상 활성화)
         tablebase_path: Tablebase 파일 경로 (.pkl, 선택사항)
     
     Returns:
@@ -50,13 +49,10 @@ def create_prediction_agent(model_path=None, network=None, num_simulations=400,
     agent = AlphaZeroAgent(
         network=network,
         num_simulations=num_simulations,
-        temperature=temperature,
-        use_dtw=use_dtw,
-        dtw_max_depth=dtw_max_depth
+        temperature=temperature
     )
     
-    if use_dtw:
-        print(f"✓ DTW enabled (depth={dtw_max_depth}, cache=5.5M entries)")
+    print(f"✓ DTW enabled (cache=5.5M entries)")
     
     return agent
 
@@ -72,8 +68,7 @@ def create_fast_agent(model_path=None, network=None):
         model_path=model_path,
         network=network,
         num_simulations=100,
-        temperature=0.1,
-        use_dtw=False
+        temperature=0.1
     )
 
 
@@ -88,7 +83,5 @@ def create_strong_agent(model_path=None, network=None):
         model_path=model_path,
         network=network,
         num_simulations=800,
-        temperature=0.05,
-        use_dtw=True,
-        dtw_max_depth=18
+        temperature=0.05
     )

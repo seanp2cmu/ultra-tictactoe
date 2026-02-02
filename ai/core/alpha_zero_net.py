@@ -94,7 +94,7 @@ class AlphaZeroNet:
             with autocast(device_type='cuda'):
                 policy_logits, value_preds = self.model(boards_tensor)
                 policy_loss = F.cross_entropy(policy_logits, policies_tensor)
-                value_loss = F.mse_loss(value_preds.squeeze(), values_tensor)
+                value_loss = F.mse_loss(value_preds.squeeze(-1), values_tensor.squeeze(-1))
                 total_loss = policy_loss + value_loss
             
             self.scaler.scale(total_loss).backward()
@@ -105,7 +105,7 @@ class AlphaZeroNet:
         else:
             policy_logits, value_preds = self.model(boards_tensor)
             policy_loss = F.cross_entropy(policy_logits, policies_tensor)
-            value_loss = F.mse_loss(value_preds.squeeze(), values_tensor)
+            value_loss = F.mse_loss(value_preds.squeeze(-1), values_tensor.squeeze(-1))
             total_loss = policy_loss + value_loss
             
             total_loss.backward()

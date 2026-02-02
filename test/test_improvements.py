@@ -52,9 +52,11 @@ def test_scheduler():
     initial_lr = network.get_current_lr()
     print(f"Initial LR: {initial_lr:.6f}")
     
-    # 10 iterations 시뮬레이션
+    # 10 iterations 시뮬레이션 (optimizer.step() 후 scheduler.step())
     lrs = [initial_lr]
     for i in range(10):
+        # Dummy optimizer step to prevent warning
+        network.optimizer.step()
         lr = network.step_scheduler()
         lrs.append(lr)
     
@@ -67,6 +69,7 @@ def test_scheduler():
     
     # 100 iterations까지
     for i in range(90):
+        network.optimizer.step()
         lr = network.step_scheduler()
     
     final_lr = network.get_current_lr()
@@ -166,6 +169,7 @@ def test_save_load_with_scheduler():
     network1 = AlphaZeroNet(lr=0.002, total_iterations=100)
     
     for i in range(10):
+        network1.optimizer.step()
         network1.step_scheduler()
     
     lr_before = network1.get_current_lr()

@@ -198,25 +198,6 @@ def test_terminal_node_direct_evaluation():
 # BUG #3: DTW MAX_DEPTH
 # ============================================================================
 
-def test_dtw_max_depth_limit():
-    """DTW MAX_DEPTH가 30으로 제한되는지 확인"""
-    dtw = DTWCalculator(max_depth=10, use_cache=False)
-    
-    board = create_near_endgame_board()
-    
-    # 깊이 제한 테스트 (재귀 호출)
-    # MAX_DEPTH=30이므로 크래시 없이 완료되어야 함
-    try:
-        result = dtw.calculate_dtw(board)
-        # None이거나 유효한 결과
-        if result is not None:
-            result_val, dtw_val, best_move = result
-            assert result_val in [-1, 0, 1], f"Result should be -1/0/1, got {result_val}"
-        print("✓ DTW max_depth limit test passed")
-    except RecursionError:
-        assert False, "MAX_DEPTH limit failed - RecursionError occurred"
-
-
 def test_dtw_endgame_threshold():
     """DTW가 25칸 이하에서만 계산되는지 확인 (플레이 가능한 빈칸 기준)"""
     dtw = DTWCalculator(endgame_threshold=25, use_cache=False)
@@ -256,8 +237,8 @@ def test_dtw_endgame_threshold():
 
 
 def test_dtw_depth_parameter():
-    """DTW _retrograde_analysis에 depth 파라미터가 전달되는지 확인"""
-    dtw = DTWCalculator(max_depth=10, use_cache=False)
+    """DTW _alpha_beta_search에 depth 파라미터가 전달되는지 확인"""
+    dtw = DTWCalculator(use_cache=False)
     
     board = Board()
     # 간단한 보드로 테스트
@@ -267,7 +248,7 @@ def test_dtw_depth_parameter():
             board.make_move(moves[0][0], moves[0][1])
     
     # depth=0으로 시작해서 재귀 시 depth+1 전달
-    result = dtw._retrograde_analysis(board, depth=0)
+    result = dtw._alpha_beta_search(board, depth=0)
     
     assert result is not None, "Should return result"
     assert len(result) == 3, "Should return (result, dtw, best_move)"
@@ -342,8 +323,7 @@ def test_full_mcts_with_all_fixes():
     agent = AlphaZeroAgent(
         network,
         num_simulations=100,
-        batch_size=10,
-        use_dtw=False  # DTW 없이 순수 MCTS
+        batch_size=10
     )
     
     board = Board()
@@ -375,9 +355,7 @@ def test_mcts_with_dtw():
     agent = AlphaZeroAgent(
         network,
         num_simulations=50,
-        batch_size=5,
-        use_dtw=True,
-        dtw_max_depth=10
+        batch_size=5
     )
     
     board = Board()

@@ -1,7 +1,6 @@
 """MCTS node for AlphaZero."""
 from typing import Dict, Optional, Tuple
 import math
-import copy
 
 from game import Board
 
@@ -16,7 +15,7 @@ class Node:
         action: Optional[int] = None,
         prior_prob: float = 0
     ) -> None:
-        self.board = copy.deepcopy(board)
+        self.board = board.clone()
         self.parent = parent
         self.action = action
         self.prior_prob = prior_prob
@@ -60,7 +59,7 @@ class Node:
         for move in legal_moves:
             action = move[0] * 9 + move[1]
             if action not in self.children:
-                next_board = copy.deepcopy(self.board)
+                next_board = self.board.clone()
                 next_board.make_move(move[0], move[1])
                 prior = action_probs.get(action, 1e-8)
                 self.children[action] = Node(next_board, parent=self, action=action, prior_prob=prior)

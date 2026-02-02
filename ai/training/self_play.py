@@ -18,31 +18,34 @@ class SelfPlayWorker:
         batch_predictor: Optional[BatchPredictor] = None,
         num_simulations: int = 100,
         temperature: float = 1.0,
-        use_dtw_endgame: bool = True,
-        dtw_max_depth: int = 12,
+        endgame_threshold: int = 15,
         hot_cache_size: int = 50000,
         cold_cache_size: int = 500000,
         use_symmetry: bool = True
     ) -> None:
-        self.agent = AlphaZeroAgent(network, num_simulations=num_simulations, temperature=temperature)
         self.network: AlphaZeroNet = network
-        self.use_dtw_endgame = use_dtw_endgame
         
-        if use_dtw_endgame:
-            if dtw_calculator is None:
-                self.dtw_calculator = DTWCalculator(
-                    max_depth=dtw_max_depth,
-                    use_cache=True,
-                    hot_size=hot_cache_size,
-                    cold_size=cold_cache_size,
-                    use_symmetry=use_symmetry
-                )
-            else:
-                self.dtw_calculator = dtw_calculator
+        # DTW always enabled
+        if dtw_calculator is None:
+            self.dtw_calculator = DTWCalculator(
+                use_cache=True,
+                hot_size=hot_cache_size,
+                cold_size=cold_cache_size,
+                use_symmetry=use_symmetry,
+                endgame_threshold=endgame_threshold
+            )
         else:
-            self.dtw_calculator = None
+            self.dtw_calculator = dtw_calculator
+        
+        # Agent에 공유 DTW calculator 전달
+        self.agent = AlphaZeroAgent(
+            network, 
+            num_simulations=num_simulations, 
+            temperature=temperature,
+            dtw_calculator=self.dtw_calculator
+        )
     
-    def play_game(self) -> List[Tuple]:
+    def play_game(self, verbose: bool = False) -> List[Tuple]:
         """Play one self-play game."""
         board = Board()
         game_data = []
@@ -56,8 +59,7 @@ class SelfPlayWorker:
             current_player = board.current_player
             dtw = None
             
-            if self.use_dtw_endgame and self.dtw_calculator:
-                if self.dtw_calculator.is_endgame(board):
+            if self.dtw_calculator.is_endgame(board):
                     result_data = self.dtw_calculator.calculate_dtw(board)
                     if result_data is not None:
                         result, dtw, best_move = result_data
@@ -81,12 +83,19 @@ class SelfPlayWorker:
             for action, child in root.children.items():
                 action_probs[action] = child.visits
             
+            if np.sum(action_probs) == 0:
+                break
             action_probs = action_probs / np.sum(action_probs)
             
             state = self._board_to_input(board)
             game_data.append((state, action_probs, current_player, dtw))
             
-            action = self.agent.select_action(board, temperature=self.agent.temperature)
+            # 이미 계산된 action_probs에서 선택 (MCTS 재실행 방지!)
+            if self.agent.temperature == 0:
+                action = int(np.argmax(action_probs))
+            else:
+                action = int(np.random.choice(81, p=action_probs))
+            
             row, col = action // 9, action % 9
             
             if (row, col) not in legal_moves:

@@ -103,8 +103,7 @@ def test_agent_compatibility():
         num_simulations=10,
         c_puct=1.0,
         temperature=1.0,
-        batch_size=4,
-        use_dtw=False
+        batch_size=4
     )
     
     board = Board()
@@ -189,8 +188,7 @@ def test_full_game_simulation():
     agent = AlphaZeroAgent(
         network=network,
         num_simulations=10,
-        batch_size=4,
-        use_dtw=False
+        batch_size=4
     )
     
     board = Board()
