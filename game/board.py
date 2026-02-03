@@ -164,11 +164,11 @@ class Board:
             elif total_empty >= 25:
                 return 1.2, "transition"
             elif total_empty >= 20:
-                return 0.8, "near_endgame"
+                return 1.0, "near_endgame"
             elif total_empty >= 10:
-                return 0.5, "endgame"
+                return 0.6, "endgame"
             else:
-                return 0.3, "deep_endgame"
+                return 0.4, "deep_endgame"
         
         player1 = state[0]
         player2 = state[1]
@@ -195,11 +195,11 @@ class Board:
         elif playable_empty >= 25:
             return 1.2, "transition"
         elif playable_empty >= 20:
-            return 0.8, "near_endgame"
+            return 1.0, "near_endgame"
         elif playable_empty >= 10:
-            return 0.5, "endgame"
+            return 0.6, "endgame"
         else:
-            return 0.3, "deep_endgame"
+            return 0.4, "deep_endgame"
     
     @staticmethod
     def _is_small_board_completed(p1_board, p2_board):
@@ -258,8 +258,8 @@ class Board:
         elif playable_empty >= 25:
             return 1.2, "transition"
         elif playable_empty >= 20:
-            return 0.8, "near_endgame"
+            return 1.0, "near_endgame"
         elif playable_empty >= 10:
-            return 0.5, "endgame"
+            return 0.6, "endgame"
         else:
-            return 0.3, "deep_endgame"
+            return 0.4, "deep_endgame"

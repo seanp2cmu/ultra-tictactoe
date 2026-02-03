@@ -44,7 +44,7 @@ def main():
     print(f"  Channels: {config.network.num_channels}")
     print(f"\nTraining:")
     print(f"  Iterations: {config.training.num_iterations}")
-    print(f"  Games per iteration: {config.training.num_self_play_games}")
+    print(f"  Games per iteration: {config.training.num_self_play_games // 3} → {config.training.num_self_play_games} (adaptive)")
     print(f"  Training epochs: {config.training.num_train_epochs}")
     print(f"  MCTS simulations: 200 → {config.training.num_simulations} (adaptive)")
     print(f"  Batch size: {config.training.batch_size}")
@@ -108,6 +108,23 @@ def main():
         else:
             return max_sim
     
+    MIN_GAMES = config.training.num_self_play_games // 3
+    MAX_GAMES = config.training.num_self_play_games       
+    
+    def get_num_games(iteration, total_iterations):
+        progress = iteration / total_iterations
+        min_games = MIN_GAMES
+        max_games = MAX_GAMES
+        
+        if progress < 0.2:
+            return min_games
+        elif progress < 0.5:
+            return min_games + int((max_games - min_games) * 0.3)
+        elif progress < 0.8:
+            return min_games + int((max_games - min_games) * 0.6)
+        else:
+            return max_games
+    
     print("=" * 80)
     print("Starting training...")
     print("=" * 80 + "\n")
@@ -117,12 +134,13 @@ def main():
         num_sims = get_num_simulations(iteration, config.training.num_iterations)
         
         print(f"\n{'='*80}")
-        print(f"Iteration {iteration + 1}/{config.training.num_iterations} (Temp: {temp:.2f}, Sims: {num_sims})")
+        num_games = get_num_games(iteration, config.training.num_iterations)
+        print(f"Iteration {iteration + 1}/{config.training.num_iterations} (Temp: {temp:.2f}, Sims: {num_sims}, Games: {num_games})")
         print(f"{'='*80}")
         
         # Self-play + Training
         result = trainer.train_iteration(
-            num_self_play_games=config.training.num_self_play_games,
+            num_self_play_games=num_games,
             num_train_epochs=config.training.num_train_epochs,
             temperature=temp,
             verbose=False,

@@ -134,17 +134,52 @@ Empty Cells | Weight | Category
 40-49       | 1.0    | Early Mid
 30-39       | 1.0    | Mid
 26-29       | 1.2    | ★ Transition (Most Important)
-20-25       | 0.8    | Near Endgame
-10-19       | 0.5    | Endgame
-0-9         | 0.3    | Deep Endgame
+20-25       | 1.0    | Near Endgame
+10-19       | 0.6    | Endgame
+0-9         | 0.4    | Deep Endgame
 ```
 
 **Rationale**:
 - **Transition (26-29 cells)**: Critical decision point where games are often decided. Higher weight ensures more training focus.
-- **Endgame (≤25 cells)**: DTW provides perfect solutions, so neural network learning is less critical. Lower weight reduces overfitting to solved positions.
-- **Opening/Mid**: Standard weight for exploratory positions where neural network guidance is essential.
+- **Near Endgame (20-25 cells)**: Shallow Alpha-Beta only (DTW threshold=15). NN guidance still important, so standard weight.
+- **Endgame (10-19 cells)**: DTW provides perfect solutions, reduced weight but still maintains pattern learning.
+- **Deep Endgame (0-9 cells)**: DTW solves completely, but some weight retained for NN to learn endgame patterns for MCTS initial evaluation.
 
 The `WeightedSampleBuffer` implements O(1) weighted sampling using cumulative weights and numpy random choice.
+
+## Training Strategy
+
+### Adaptive Scheduling
+
+Training uses progressive scheduling to optimize learning efficiency:
+
+```
+Progress   | Simulations | Games | Temperature
+-----------|-------------|-------|------------
+0-20%      | 200         | 83    | 1.0 (exploration)
+20-50%     | 380         | 133   | 1.0
+50-80%     | 560         | 183   | 0.65
+80-100%    | 800         | 250   | 0.3 (exploitation)
+```
+
+**Rationale**:
+- **Early training**: Network is near-random, so fewer games/sims suffice. High temperature encourages diverse exploration.
+- **Mid training**: Gradual increase as network improves and data quality matters more.
+- **Late training**: Maximum resources for fine-tuning with low temperature for precise play.
+
+### Training Loop
+
+Each iteration:
+1. **Self-play**: Generate games using current network + MCTS + DTW
+2. **Replay buffer**: Add samples with phase-based weights
+3. **Training**: Sample weighted batch, train for 40 epochs
+4. **Checkpoint**: Save model and DTW cache every 10 iterations
+
+### Replay Buffer
+
+- Size: 1,000,000 samples (sliding window)
+- Sampling: Weighted by game phase (transition positions prioritized)
+- Accumulation: Data persists across iterations for diversity
 
 ## Configuration
 
