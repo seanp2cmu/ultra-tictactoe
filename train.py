@@ -86,19 +86,16 @@ def find_latest_checkpoint(save_dir: str) -> tuple:
 def main():
     config = Config()
     
-    # 체크포인트 찾기 (checkpoint_*.pt 우선, 없으면 best.pt)
-    checkpoint_path, start_iteration = find_latest_checkpoint(config.training.save_dir)
-    if not checkpoint_path:
-        checkpoint_path = find_best_checkpoint(config.training.save_dir)
-        # best.pt에서 iteration 정보 읽기
-        if checkpoint_path:
-            import torch
-            ckpt = torch.load(checkpoint_path, map_location='cpu')
-            saved_iter = ckpt.get('iteration', None)
-            if saved_iter is not None:
-                start_iteration = saved_iter + 1  # 다음 iteration부터 시작
-            else:
-                start_iteration = 0 
+    checkpoint_path = find_best_checkpoint(config.training.save_dir)
+    start_iteration = 0
+    
+    # best.pt에서 iteration 정보 읽기
+    if checkpoint_path:
+        import torch
+        ckpt = torch.load(checkpoint_path, map_location='cpu')
+        saved_iter = ckpt.get('iteration', None)
+        if saved_iter is not None:
+            start_iteration = saved_iter + 1  # 다음 iteration부터 시작 
     
     # 디바이스 자동 설정
     if config.gpu.device == "auto":
