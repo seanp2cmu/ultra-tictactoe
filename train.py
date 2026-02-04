@@ -21,27 +21,37 @@ from ai.training import Trainer
 HF_REPO_ID = os.environ.get("HF_REPO_ID", "sean2474/ultra-tictactoe-models")
 HF_UPLOAD_ENABLED = os.environ.get("HF_UPLOAD", "false").lower() == "true"
 
-def upload_to_hf(local_path: str, repo_path: str = None):
-    """Upload file to HuggingFace Hub"""
-    if not HF_UPLOAD_ENABLED:
-        return
-    
+import threading
+_upload_threads = []
+
+def _upload_worker(local_path: str, repo_path: str):
+    """Background upload worker"""
     try:
         from huggingface_hub import HfApi
         api = HfApi()
-        
-        if repo_path is None:
-            repo_path = os.path.basename(local_path)
-        
         api.upload_file(
             path_or_fileobj=local_path,
             path_in_repo=repo_path,
             repo_id=HF_REPO_ID,
             repo_type="model"
         )
-        print(f"  ↑ Uploaded to HF: {repo_path}")
+        print(f"  ↑ [Async] Uploaded to HF: {repo_path}")
     except Exception as e:
-        print(f"  ⚠ HF upload failed: {e}")
+        print(f"  ⚠ [Async] HF upload failed: {e}")
+
+def upload_to_hf(local_path: str, repo_path: str = None):
+    """Upload file to HuggingFace Hub (async background)"""
+    if not HF_UPLOAD_ENABLED:
+        return
+    
+    if repo_path is None:
+        repo_path = os.path.basename(local_path)
+    
+    # 백그라운드 스레드로 업로드
+    thread = threading.Thread(target=_upload_worker, args=(local_path, repo_path), daemon=True)
+    thread.start()
+    _upload_threads.append(thread)
+    print(f"  ↑ [Async] Upload started: {repo_path}")
 
 
 def find_best_checkpoint(save_dir: str) -> str:
