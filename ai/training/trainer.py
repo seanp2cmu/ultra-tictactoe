@@ -1,10 +1,21 @@
 """Main trainer class for AlphaZero with DTW."""
 from typing import Dict, Optional
 from tqdm import tqdm
+import time
+from functools import wraps
 
 from .replay_buffer import SelfPlayData
-from .self_play import SelfPlayWorker
-from ai.endgame import DTWCalculator
+from .self_play import SelfPlayWorker, get_timing_stats, reset_timing_stats, set_slow_log_file
+from ai.mcts.agent import get_mcts_timing, reset_mcts_timing
+
+def timing(f):
+    @wraps(f)
+    def wrap(*args, **kwargs):
+        ts = time.time()
+        result = f(*args, **kwargs)
+        te = time.time()
+        return result, te-ts
+    return wrap
 
 class Trainer:
     """AlphaZero trainer with DTW endgame support."""
@@ -84,6 +95,10 @@ class Trainer:
         """Generate self-play data."""
         all_data = []
         
+        # Reset timing stats
+        reset_timing_stats()
+        reset_mcts_timing()
+        
         game_pbar = tqdm(range(num_games), desc="Self-play",
                        leave=False, disable=disable_tqdm, ncols=100)
         for i in game_pbar:
@@ -117,7 +132,48 @@ class Trainer:
                     cache_stats = self.dtw_calculator.get_stats()
                     print(f"DTW Cache: {cache_stats}")
         
+        # Print timing stats
+        self._print_timing_stats()
+        
         return len(all_data)
+    
+    def _print_timing_stats(self):
+        """Print detailed timing breakdown."""
+        sp_stats = get_timing_stats()
+        mcts_stats = get_mcts_timing()
+        
+        print("\n" + "="*60)
+        print("⏱️  TIMING BREAKDOWN")
+        print("="*60)
+        
+        # Self-play level
+        print("\n[Self-Play Level]")
+        if sp_stats['mcts_count'] > 0:
+            print(f"  MCTS Search: {sp_stats['mcts_search']:.2f}s ({sp_stats['mcts_count']} calls, avg {sp_stats['mcts_search']/sp_stats['mcts_count']:.3f}s)")
+        if sp_stats['dtw_endgame_count'] > 0:
+            print(f"  DTW Endgame: {sp_stats['dtw_endgame']:.2f}s ({sp_stats['dtw_endgame_count']} calls, avg {sp_stats['dtw_endgame']/sp_stats['dtw_endgame_count']:.3f}s)")
+        if sp_stats['dtw_midgame_count'] > 0:
+            print(f"  DTW Midgame: {sp_stats['dtw_midgame']:.2f}s ({sp_stats['dtw_midgame_count']} calls, avg {sp_stats['dtw_midgame']/sp_stats['dtw_midgame_count']:.3f}s)")
+        print(f"  Board to Input: {sp_stats['board_to_input']:.2f}s")
+        print(f"  Total Steps: {sp_stats['total_steps']}")
+        
+        # MCTS level
+        print("\n[MCTS Level]")
+        print(f"  Network Predict (root): {mcts_stats['network_predict']:.2f}s")
+        print(f"  Network Predict Batch: {mcts_stats['network_predict_batch']:.2f}s")
+        if mcts_stats['dtw_in_mcts_count'] > 0:
+            print(f"  DTW in MCTS: {mcts_stats['dtw_in_mcts']:.2f}s ({mcts_stats['dtw_in_mcts_count']} calls)")
+        print(f"  Select: {mcts_stats['select']:.2f}s")
+        print(f"  Expand: {mcts_stats['expand']:.2f}s")
+        print(f"  Backprop: {mcts_stats['backprop']:.2f}s")
+        
+        # Slow steps summary
+        if sp_stats['slow_steps']:
+            print(f"\n[⚠️ SLOW STEPS (>5s)] - {len(sp_stats['slow_steps'])} found (see slow_steps.txt)")
+        else:
+            print(f"\n[✅ No slow steps (>5s)]")
+        
+        print("="*60)
     
     def train(self, num_epochs: int = 10, verbose: bool = False, disable_tqdm: bool = False) -> Dict:
         """Train network on replay buffer."""
@@ -200,13 +256,13 @@ class Trainer:
         
         return result
     
-    def save(self, filepath: str) -> None:
-        """Save network."""
-        self.network.save(filepath)
+    def save(self, filepath: str, iteration: int = None) -> None:
+        """Save network with optional iteration info."""
+        self.network.save(filepath, iteration=iteration)
     
-    def load(self, filepath: str) -> None:
-        """Load network."""
-        self.network.load(filepath)
+    def load(self, filepath: str) -> int:
+        """Load network and return iteration number."""
+        return self.network.load(filepath)
     
     def clear_dtw_cache(self) -> None:
         """Clear DTW cache to free memory."""

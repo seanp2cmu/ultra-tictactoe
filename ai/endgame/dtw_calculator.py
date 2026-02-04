@@ -29,7 +29,8 @@ class DTWCalculator:
         return 2
     
     def __init__(self, use_cache=True, hot_size=50000, cold_size=500000,
-                 endgame_threshold=15, midgame_threshold=45, shallow_depth=8):
+                 endgame_threshold=15, midgame_threshold=45, shallow_depth=8,
+                 max_nodes=100000):
         """
         Args:
             use_cache: if True, use transposition table
@@ -38,6 +39,7 @@ class DTWCalculator:
             endgame_threshold: endgame threshold (complete search)
             midgame_threshold: midgame threshold (shallow search)
             shallow_depth: middle shallow depth limit
+            max_nodes: maximum nodes to search before giving up
         
         Note: 
             - ≤15 cells: complete search
@@ -48,6 +50,16 @@ class DTWCalculator:
         self.endgame_threshold = endgame_threshold
         self.midgame_threshold = midgame_threshold
         self.shallow_depth = shallow_depth
+        self.max_nodes = max_nodes
+        self._node_count = 0
+        
+        # Statistics
+        self._total_searches = 0
+        self._total_nodes = 0
+        self._aborted_searches = 0
+        self._shallow_searches = 0
+        self._shallow_nodes = 0
+        self._shallow_aborted = 0
         
         if use_cache:
             self.tt = CompressedTranspositionTable(
@@ -86,7 +98,16 @@ class DTWCalculator:
         if empty_count > self.endgame_threshold:
             return None
         
+        self._node_count = 0  # Reset node counter
         result, dtw, best_move = self._alpha_beta_search(board)
+        
+        self._total_searches += 1
+        self._total_nodes += self._node_count
+        
+        # If search was aborted due to node limit, return None
+        if result == -2:
+            self._aborted_searches += 1
+            return None
         
         if self.use_cache and self.tt:
             self.tt.put(board, result, dtw, best_move)
@@ -108,10 +129,14 @@ class DTWCalculator:
         
         Returns:
             (result, dtw, best_move)
-            - result: 1 (win), -1 (loss), 0 (draw)
+            - result: 1 (win), -1 (loss), 0 (draw), -2 (aborted)
             - dtw: Distance to Win/Loss
             - best_move: (row, col) or None
         """
+        self._node_count += 1
+        if self._node_count > self.max_nodes:
+            return (-2, float('inf'), None)  # Abort: too many nodes
+        
         if board.winner is not None:
             if board.winner == board.current_player:
                 return (1, 0, None)
@@ -142,11 +167,15 @@ class DTWCalculator:
                     opponent_result, opponent_dtw, _ = self._alpha_beta_search(
                         next_board, depth + 1, -beta, -alpha
                     )
+                    if opponent_result == -2:  # Aborted
+                        return (-2, float('inf'), None)
                     self.tt.put(next_board, opponent_result, opponent_dtw, None)
             else:
                 opponent_result, opponent_dtw, _ = self._alpha_beta_search(
                     next_board, depth + 1, -beta, -alpha
                 )
+                if opponent_result == -2:  # Aborted
+                    return (-2, float('inf'), None)
             
             my_result = -opponent_result
             my_dtw = opponent_dtw + 1 if opponent_dtw != float('inf') else float('inf')
@@ -222,9 +251,26 @@ class DTWCalculator:
         return float(result)
     
     def get_stats(self):
+        stats = {}
         if self.use_cache and self.tt:
-            return self.tt.get_stats()
-        return {}
+            stats = self.tt.get_stats()
+        stats['dtw_searches'] = self._total_searches
+        stats['dtw_nodes'] = self._total_nodes
+        stats['dtw_aborted'] = self._aborted_searches
+        stats['dtw_avg_nodes'] = self._total_nodes / max(1, self._total_searches)
+        stats['shallow_searches'] = self._shallow_searches
+        stats['shallow_nodes'] = self._shallow_nodes
+        stats['shallow_aborted'] = self._shallow_aborted
+        stats['shallow_avg_nodes'] = self._shallow_nodes / max(1, self._shallow_searches)
+        return stats
+    
+    def reset_search_stats(self):
+        self._total_searches = 0
+        self._total_nodes = 0
+        self._aborted_searches = 0
+        self._shallow_searches = 0
+        self._shallow_nodes = 0
+        self._shallow_aborted = 0
     
     def check_candidate_moves(self, board: Board, candidate_moves: list):
         """
@@ -261,7 +307,16 @@ class DTWCalculator:
             next_board = board.clone()
             next_board.make_move(move[0], move[1])
             
+            self._node_count = 0  # Reset for each candidate
             move_result, _, _ = self._shallow_alpha_beta(next_board, depth=0)
+            self._shallow_searches += 1
+            self._shallow_nodes += self._node_count
+            
+            if move_result == -2:  # Aborted - treat as safe (unknown)
+                self._shallow_aborted += 1
+                result['safe_moves'].append(move)
+                continue
+                
             my_result = -move_result
             
             if my_result == 1:
@@ -275,6 +330,10 @@ class DTWCalculator:
         return result
     
     def _shallow_alpha_beta(self, board: Board, depth: int = 0, alpha: int = -2, beta: int = 2):
+        self._node_count += 1
+        if self._node_count > self.max_nodes:
+            return (-2, depth, None)  # Abort
+        
         if board.winner is not None:
             if board.winner == board.current_player:
                 return (1, depth, None)
@@ -300,6 +359,9 @@ class DTWCalculator:
             opponent_result, _, _ = self._shallow_alpha_beta(
                 next_board, depth + 1, -beta, -alpha
             )
+            
+            if opponent_result == -2:  # Aborted
+                return (-2, depth, None)
             
             my_result = -opponent_result
             

@@ -1,11 +1,30 @@
 """AlphaZero MCTS agent with DTW endgame support."""
 from typing import List, Tuple, Dict, Optional
 import random
+import time
 import numpy as np
 from game import Board
 
 from .node import Node
 from ai.core import AlphaZeroNet
+
+# 디버깅용 타이밍
+_mcts_timing = {
+    'network_predict': 0.0,
+    'network_predict_batch': 0.0,
+    'dtw_in_mcts': 0.0,
+    'dtw_in_mcts_count': 0,
+    'expand': 0.0,
+    'select': 0.0,
+    'backprop': 0.0,
+}
+
+def reset_mcts_timing():
+    global _mcts_timing
+    _mcts_timing = {k: 0.0 if isinstance(v, float) else 0 for k, v in _mcts_timing.items()}
+
+def get_mcts_timing():
+    return _mcts_timing.copy()
 
 
 class AlphaZeroAgent:
@@ -38,9 +57,13 @@ class AlphaZeroAgent:
     
     def search(self, board: Board) -> Node:
         """Run MCTS from root position."""
+        global _mcts_timing
         root = Node(board)
         
+        t0 = time.time()
         policy_probs, _ = self.network.predict(board)
+        _mcts_timing['network_predict'] += time.time() - t0
+        
         action_probs = dict(enumerate(policy_probs))
         root.expand(action_probs)
         
@@ -52,42 +75,27 @@ class AlphaZeroAgent:
             search_paths: List[List[Node]] = []
             leaf_nodes: List[Node] = []
             leaf_boards: List[Board] = []
-            dtw_results: List[Tuple[int, float, Dict[int, float]]] = []
             
             for _ in range(batch_size):
                 node = root
                 search_path = [node]
                 
+                t0 = time.time()
                 while node.is_expanded() and not node.is_terminal():
                     _, node = node.select_child(self.c_puct)
                     search_path.append(node)
+                _mcts_timing['select'] += time.time() - t0
                 
                 search_paths.append(search_path)
-                node_idx = len(leaf_nodes)
                 leaf_nodes.append(node)
                 
-                dtw_hit = False
-                if not node.is_terminal() and self.dtw_calculator.is_endgame(node.board):
-                    result_data = self.dtw_calculator.calculate_dtw(node.board)
-                    
-                    if result_data is not None:
-                        result, _, _ = result_data
-                        value = float(result)
-                        
-                        legal_moves = node.board.get_legal_moves()
-                        uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0
-                        expand_probs = {move[0] * 9 + move[1]: uniform_prob for move in legal_moves}
-                        
-                        dtw_results.append((node_idx, value, expand_probs))
-                        dtw_hit = True
-                
-                if not node.is_terminal() and not dtw_hit:
+                if not node.is_terminal():
                     leaf_boards.append(node.board)
             
-            dtw_dict = {idx: (value, expand_probs) for idx, value, expand_probs in dtw_results}
-            
             if leaf_boards:
+                t0 = time.time()
                 policy_probs_batch, values_batch = self.network.predict_batch(leaf_boards)
+                _mcts_timing['network_predict_batch'] += time.time() - t0
             
             leaf_idx = 0
             for i, node in enumerate(leaf_nodes):
@@ -99,21 +107,21 @@ class AlphaZeroAgent:
                             value = 1.0
                         else:
                             value = -1.0
-                elif i in dtw_dict:
-                    value, expand_probs = dtw_dict[i]
-                    if expand_probs:
-                        node.expand(expand_probs)
                 else:
                     policy_probs = policy_probs_batch[leaf_idx]
                     value = values_batch[leaf_idx].item() if hasattr(values_batch[leaf_idx], 'item') else float(values_batch[leaf_idx].squeeze())
                     leaf_idx += 1
                     
+                    t0 = time.time()
                     action_probs = dict(enumerate(policy_probs))
                     node.expand(action_probs)
+                    _mcts_timing['expand'] += time.time() - t0
                 
+                t0 = time.time()
                 for path_node in reversed(search_paths[i]):
                     path_node.update(value)
                     value = -value
+                _mcts_timing['backprop'] += time.time() - t0
         
         return root
     

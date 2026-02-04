@@ -10,15 +10,50 @@ RTX 5090 (32GB VRAM) 최적화 설정:
 - 500만/2000만 DTW cache
 """
 import os
+import re
+import glob
+import time
 from tqdm import tqdm
 from config import Config
 from ai.training import Trainer
+from ai.training.self_play import set_slow_log_file
+
+
+def find_best_checkpoint(save_dir: str) -> str:
+    """Find best.pt checkpoint if exists."""
+    best_path = os.path.join(save_dir, 'best.pt')
+    if os.path.exists(best_path):
+        return best_path
+    return None
+
+def find_latest_checkpoint(save_dir: str) -> tuple:
+    """Find the latest checkpoint_*.pt and return (path, iteration)."""
+    pattern = os.path.join(save_dir, 'checkpoint_*.pt')
+    checkpoints = glob.glob(pattern)
+    
+    if not checkpoints:
+        return None, 0
+    
+    iterations = []
+    for ckpt in checkpoints:
+        match = re.search(r'checkpoint_(\d+)\.pt', ckpt)
+        if match:
+            iterations.append((int(match.group(1)), ckpt))
+    
+    if not iterations:
+        return None, 0
+    
+    iterations.sort(key=lambda x: x[0], reverse=True)
+    return iterations[0][1], iterations[0][0]
 
 def main():
     config = Config()
     
-    # 기존 모델 로드할 경로 (None이면 새로 시작)
-    load_model_path = None 
+    # 체크포인트 찾기 (checkpoint_*.pt 우선, 없으면 best.pt)
+    checkpoint_path, start_iteration = find_latest_checkpoint(config.training.save_dir)
+    if not checkpoint_path:
+        checkpoint_path = find_best_checkpoint(config.training.save_dir)
+        start_iteration = 0 
     
     # 디바이스 자동 설정
     if config.gpu.device == "auto":
@@ -74,11 +109,19 @@ def main():
         total_iterations=config.training.num_iterations
     )
     
+    # Initialize slow steps log file
+    slow_log_path = os.path.join(config.training.save_dir, 'slow_steps.txt')
+    set_slow_log_file(slow_log_path)
+    print(f"📝 Slow steps (>5s) will be logged to: {slow_log_path}")
+    
     # Load existing model
-    if load_model_path:
-        print(f"\nLoading model from {load_model_path}")
-        trainer.load(load_model_path)
-        print("✓ Model loaded successfully\n")
+    best_loss = float('inf')
+    if checkpoint_path:
+        print(f"\n  Loading checkpoint: {checkpoint_path}")
+        loaded_iter = trainer.load(checkpoint_path)
+        if loaded_iter:
+            start_iteration = loaded_iter
+        print(f"✓ Model loaded (will resume from iteration {start_iteration + 1})\n")
     
     # Temperature Schedule
     def get_temperature(iteration, total_iterations):
@@ -129,7 +172,8 @@ def main():
     print("Starting training...")
     print("=" * 80 + "\n")
     
-    for iteration in tqdm(range(config.training.num_iterations), desc="Training Progress", ncols=100):
+    for iteration in tqdm(range(start_iteration, config.training.num_iterations), desc="Training Progress", ncols=100, initial=start_iteration, total=config.training.num_iterations):
+        iter_start_time = time.time()
         temp = get_temperature(iteration, config.training.num_iterations)
         num_sims = get_num_simulations(iteration, config.training.num_iterations)
         
@@ -168,29 +212,49 @@ def main():
             stats = result['dtw_stats']
             print(f"  DTW Cache Hit Rate: {stats.get('hit_rate', 'N/A')}")
             print(f"  DTW Cache Size: {stats.get('total_mb', 0):.2f} MB")
+            print(f"  DTW Searches: {stats.get('dtw_searches', 0):,} (Aborted: {stats.get('dtw_aborted', 0)}) Avg: {stats.get('dtw_avg_nodes', 0):.0f} nodes")
+            print(f"  Shallow Searches: {stats.get('shallow_searches', 0):,} (Aborted: {stats.get('shallow_aborted', 0)}) Avg: {stats.get('shallow_avg_nodes', 0):.0f} nodes")
+            # Reset DTW stats for next iteration
+            if trainer.dtw_calculator:
+                trainer.dtw_calculator.reset_search_stats()
         
-        if (iteration + 1) % config.training.save_interval == 0:
-            save_path = os.path.join(config.training.save_dir, f'model_dtw_iter_{iteration + 1}.pth')
-            trainer.save(save_path)
-            print(f"\n✓ Model saved to {save_path}")
+        # Iteration 소요 시간 및 완료 시각 출력
+        iter_elapsed = time.time() - iter_start_time
+        iter_mins, iter_secs = divmod(int(iter_elapsed), 60)
+        iter_hours, iter_mins = divmod(iter_mins, 60)
+        current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"  Iteration Time: {iter_hours:02d}:{iter_mins:02d}:{iter_secs:02d}")
+        print(f"  Completed at: {current_time}")
+        
+        # Save best model
+        current_loss = result['avg_loss']['total_loss']
+        if current_loss < best_loss:
+            best_loss = current_loss
+            save_path = os.path.join(config.training.save_dir, 'best.pt')
+            trainer.save(save_path, iteration=iteration)
+            print(f"\n✓ New best! (loss: {best_loss:.4f})")
+        
+        # Rolling checkpoint: save every 5, keep only 2 most recent
+        if (iteration + 1) % 5 == 0:
+            ckpt_path = os.path.join(config.training.save_dir, f'checkpoint_{iteration + 1}.pt')
+            trainer.save(ckpt_path, iteration=iteration)
+            print(f"✓ Checkpoint saved: checkpoint_{iteration + 1}.pt")
             
-            if trainer.dtw_calculator and trainer.dtw_calculator.tt:
-                dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
-                trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
-                stats = trainer.dtw_calculator.get_stats()
-                print(f"✓ DTW cache checkpoint saved ({stats.get('total_mb', 0):.1f} MB, hit rate: {stats.get('hit_rate', 'N/A')})")
+            # Delete old checkpoint (keep only 2)
+            old_iter = iteration + 1 - 10  # e.g., iter 15 saves -> delete iter 5
+            if old_iter > 0:
+                old_path = os.path.join(config.training.save_dir, f'checkpoint_{old_iter}.pt')
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+                    print(f"  (Deleted old checkpoint: checkpoint_{old_iter}.pt)")
         
         #  DTW cache clear
         if (iteration + 1) % 20 == 0:
             trainer.clear_dtw_cache()
     
     print("\n" + "="*80)
-    print("Training completed!")
+    print(f"Training completed! Best loss: {best_loss:.4f}")
     print("="*80)
-    
-    final_path = os.path.join(config.training.save_dir, 'model_dtw_final.pth')
-    trainer.save(final_path)
-    print(f"\n✓ Final model saved to {final_path}")
     
     if trainer.dtw_calculator and trainer.dtw_calculator.tt:
         dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')

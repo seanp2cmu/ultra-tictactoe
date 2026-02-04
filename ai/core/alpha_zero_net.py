@@ -123,7 +123,7 @@ class AlphaZeroNet:
         """Get current learning rate."""
         return self.optimizer.param_groups[0]['lr']
     
-    def save(self, filepath: str) -> None:
+    def save(self, filepath: str, iteration: int = None) -> None:
         """Save model, optimizer, and scheduler states."""
         save_dict = {
             'model_state_dict': self.model.state_dict(),
@@ -131,13 +131,14 @@ class AlphaZeroNet:
             'scheduler_state_dict': self.scheduler.state_dict(),
             'num_res_blocks': len(self.model.res_blocks),
             'num_channels': self.model.num_channels,
+            'iteration': iteration,
         }
         if self.scaler is not None:
             save_dict['scaler_state_dict'] = self.scaler.state_dict()
         torch.save(save_dict, filepath)
     
-    def load(self, filepath: str) -> None:
-        """Load model, optimizer, and scheduler states."""
+    def load(self, filepath: str) -> int:
+        """Load model, optimizer, and scheduler states. Returns iteration number."""
         checkpoint = torch.load(filepath, map_location=self.device)
         
         if 'num_res_blocks' in checkpoint and 'num_channels' in checkpoint:
@@ -169,3 +170,5 @@ class AlphaZeroNet:
         
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+        return checkpoint.get('iteration', 0)

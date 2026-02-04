@@ -18,7 +18,7 @@ class TrainingConfig:
     replay_buffer_size: int = 1000000  
     
     save_dir: str = "./model"
-    save_interval: int = 10
+    save_interval: int = 5  # 5 iteration마다 저장 (자동 복구 지원)
     
     use_amp: bool = True
     
@@ -39,9 +39,8 @@ class DTWConfig:
     endgame_threshold: int = 15       
     midgame_threshold: int = 45       
     shallow_depth: int = 8            
-    hot_cache_size: int = 5000000     
-    cold_cache_size: int = 20000000   
-
+    hot_cache_size: int = 2000000 
+    cold_cache_size: int = 8000000
 @dataclass
 class PredictionConfig:
     """실제 게임/예측 시 사용할 설정"""
