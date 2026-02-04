@@ -1,3 +1,15 @@
+---
+title: Ultra Tic-Tac-Toe AI
+emoji: 🎮
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: "6.5.1"
+python_version: "3.12"
+app_file: app.py
+pinned: false
+---
+
 # Ultimate Tic-Tac-Toe AlphaZero + DTW
 
 A hybrid AI for Ultimate Tic-Tac-Toe combining AlphaZero (ResNet + MCTS) with Distance to Win (DTW) endgame solver.
