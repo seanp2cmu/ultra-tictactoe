@@ -195,7 +195,7 @@ Each iteration:
 1. **Self-play**: Generate games using current network + MCTS + DTW
 2. **Replay buffer**: Add samples with phase-based weights
 3. **Training**: Sample weighted batch, train for 40 epochs
-4. **Checkpoint**: Save model and DTW cache every 10 iterations
+4. **Checkpoint**: Save model every 20 iterations and DTW cache every 10 iterations to huggingface
 
 ### Replay Buffer
 

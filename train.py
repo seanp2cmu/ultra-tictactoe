@@ -99,7 +99,6 @@ def main():
         print(f"Iteration {iteration + 1}/{config.training.num_iterations} (Temp: {temp:.2f}, Sims: {num_sims}, Games: {num_games})")
         print(f"{'='*80}")
         
-        # Self-play + Training
         result = trainer.train_iteration(
             num_self_play_games=num_games,
             num_train_epochs=config.training.num_train_epochs,
@@ -131,11 +130,8 @@ def main():
             print(f"  DTW Cache Size: {stats.get('total_mb', 0):.2f} MB")
             print(f"  DTW Searches: {stats.get('dtw_searches', 0):,} (Aborted: {stats.get('dtw_aborted', 0)}) Avg: {stats.get('dtw_avg_nodes', 0):.0f} nodes")
             print(f"  Shallow Searches: {stats.get('shallow_searches', 0):,} (Aborted: {stats.get('shallow_aborted', 0)}) Avg: {stats.get('shallow_avg_nodes', 0):.0f} nodes")
-            # Reset DTW stats for next iteration
-            if trainer.dtw_calculator:
-                trainer.dtw_calculator.reset_search_stats()
+            trainer.dtw_calculator.reset_search_stats()
         
-        # Iteration 소요 시간 및 완료 시각 출력
         iter_elapsed = time.time() - iter_start_time
         iter_mins, iter_secs = divmod(int(iter_elapsed), 60)
         iter_hours, iter_mins = divmod(iter_mins, 60)
@@ -143,7 +139,6 @@ def main():
         print(f"  Iteration Time: {iter_hours:02d}:{iter_mins:02d}:{iter_secs:02d}")
         print(f"  Completed at: {current_time}")
         
-        # Save best model
         current_loss = result['avg_loss']['total_loss']
         if current_loss < best_loss:
             best_loss = current_loss
@@ -152,28 +147,24 @@ def main():
             print(f"\n✓ New best! (loss: {best_loss:.4f})")
             upload_to_hf(save_path, 'best.pt')
         
-        # Rolling checkpoint: save every 5, keep only 2 most recent
         if (iteration + 1) % 5 == 0:
             ckpt_path = os.path.join(config.training.save_dir, f'checkpoint_{iteration + 1}.pt')
             trainer.save(ckpt_path, iteration=iteration)
             print(f"✓ Checkpoint saved: checkpoint_{iteration + 1}.pt")
             
-            # Delete old checkpoint (keep only 2)
-            old_iter = iteration + 1 - 10  # e.g., iter 15 saves -> delete iter 5
+            old_iter = iteration + 1 - 10
             if old_iter > 0:
                 old_path = os.path.join(config.training.save_dir, f'checkpoint_{old_iter}.pt')
                 if os.path.exists(old_path):
                     os.remove(old_path)
                     print(f"  (Deleted old checkpoint: checkpoint_{old_iter}.pt)")
         
-        # Permanent model save every 10 iterations
-        if (iteration + 1) % 10 == 0:
+        if (iteration + 1) % 20 == 0:
             model_path = os.path.join(config.training.save_dir, f'model_{iteration + 1}.pt')
             trainer.save(model_path, iteration=iteration)
             print(f"✓ Model saved: model_{iteration + 1}.pt")
             upload_to_hf(model_path, f'model_{iteration + 1}.pt')
         
-        # Save DTW cache every iteration, upload every 10
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:
             dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
             trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
