@@ -15,7 +15,7 @@ from ai.endgame import DTWCalculator
 from game import Board
 
 MODEL_DIR = "model"
-HF_REPO_ID = os.environ.get("sean2474", "ultra-tictactoe-models") 
+HF_REPO_ID = "sean2474/ultra-tictactoe-models" 
 models = {}
 dtw_calculator = None
 
