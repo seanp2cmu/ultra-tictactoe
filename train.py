@@ -1,103 +1,22 @@
-"""
-Ultimate Tic-Tac-Toe AlphaZero + DTW 학습 스크립트
-
-RTX 5090 (32GB VRAM) 최적화 설정:
-- 30 ResNet blocks with SE (512 channels)
-- 7-channel input (perspective normalized, last move, valid mask)
-- 4096 batch size, 800 simulations
-- Cosine Annealing LR (0.002 → 0.00002)
-- Gradient clipping (max_norm=1.0)
-- 500만/2000만 DTW cache
-"""
 import os
-import re
-import glob
 import time
 from tqdm import tqdm
 from config import Config
 from ai.training import Trainer
+from utils import (
+    upload_to_hf,
+    get_start_iteration,
+    create_temperature_schedule,
+    create_simulation_schedule,
+    create_games_schedule
+)
 
-# HuggingFace 업로드 설정
-HF_REPO_ID = os.environ.get("HF_REPO_ID", "sean2474/ultra-tictactoe-models")
-HF_UPLOAD_ENABLED = os.environ.get("HF_UPLOAD", "false").lower() == "true"
-
-import threading
-_upload_threads = []
-
-def _upload_worker(local_path: str, repo_path: str):
-    """Background upload worker"""
-    try:
-        from huggingface_hub import HfApi
-        api = HfApi()
-        api.upload_file(
-            path_or_fileobj=local_path,
-            path_in_repo=repo_path,
-            repo_id=HF_REPO_ID,
-            repo_type="model"
-        )
-        print(f"  ↑ [Async] Uploaded to HF: {repo_path}")
-    except Exception as e:
-        print(f"  ⚠ [Async] HF upload failed: {e}")
-
-def upload_to_hf(local_path: str, repo_path: str = None):
-    """Upload file to HuggingFace Hub (async background)"""
-    if not HF_UPLOAD_ENABLED:
-        return
-    
-    if repo_path is None:
-        repo_path = os.path.basename(local_path)
-    
-    # 백그라운드 스레드로 업로드
-    thread = threading.Thread(target=_upload_worker, args=(local_path, repo_path), daemon=True)
-    thread.start()
-    _upload_threads.append(thread)
-    print(f"  ↑ [Async] Upload started: {repo_path}")
-
-
-def find_best_checkpoint(save_dir: str) -> str:
-    """Find best.pt checkpoint if exists."""
-    best_path = os.path.join(save_dir, 'best.pt')
-    if os.path.exists(best_path):
-        return best_path
-    return None
-
-def find_latest_checkpoint(save_dir: str) -> tuple:
-    """Find the latest checkpoint_*.pt and return (path, next_iteration).
-    checkpoint_5.pt means iterations 0-4 done, returns 5 as next iteration."""
-    pattern = os.path.join(save_dir, 'checkpoint_*.pt')
-    checkpoints = glob.glob(pattern)
-    
-    if not checkpoints:
-        return None, 0
-    
-    iterations = []
-    for ckpt in checkpoints:
-        match = re.search(r'checkpoint_(\d+)\.pt', ckpt)
-        if match:
-            iterations.append((int(match.group(1)), ckpt))
-    
-    if not iterations:
-        return None, 0
-    
-    iterations.sort(key=lambda x: x[0], reverse=True)
-    # checkpoint_N.pt: N iterations done (0 to N-1), next is N
-    return iterations[0][1], iterations[0][0]
 
 def main():
     config = Config()
     
-    checkpoint_path = find_best_checkpoint(config.training.save_dir)
-    start_iteration = 0
+    checkpoint_path, start_iteration = get_start_iteration(config.training.save_dir) 
     
-    # best.pt에서 iteration 정보 읽기
-    if checkpoint_path:
-        import torch
-        ckpt = torch.load(checkpoint_path, map_location='cpu')
-        saved_iter = ckpt.get('iteration', None)
-        if saved_iter is not None:
-            start_iteration = saved_iter + 1  # 다음 iteration부터 시작 
-    
-    # 디바이스 자동 설정
     if config.gpu.device == "auto":
         import torch
         if torch.cuda.is_available():
@@ -109,10 +28,8 @@ def main():
     else:
         device = config.gpu.device
     
-    # 저장 디렉토리 생성
     os.makedirs(config.training.save_dir, exist_ok=True)
     
-    # 설정 출력
     print("=" * 80)
     print("AlphaZero Training with DTW + Compressed Transposition Table")
     print("=" * 80)
@@ -134,7 +51,6 @@ def main():
     print(f"  AMP: {config.training.use_amp}")
     print("=" * 80)
     
-    # Trainer 초기화
     trainer = Trainer(
         network=None,
         lr=config.training.lr,
@@ -151,7 +67,6 @@ def main():
         total_iterations=config.training.num_iterations
     )
     
-    # Load existing model
     best_loss = float('inf')
     if checkpoint_path:
         print(f"\n  Loading checkpoint: {checkpoint_path}")
@@ -160,50 +75,15 @@ def main():
             start_iteration = loaded_iter
         print(f"✓ Model loaded (will resume from iteration {start_iteration + 1})\n")
     
-    # Temperature Schedule
-    def get_temperature(iteration, total_iterations):
-        progress = iteration / total_iterations
-        if progress < 0.3:
-            return config.mcts.temperature_start
-        elif progress < 0.7:
-            return (config.mcts.temperature_start + config.mcts.temperature_end) / 2
-        else:
-            return config.mcts.temperature_end
-    
-    # Simulation Schedule
-    MIN_SIM = config.training.num_simulations // 4
-    MAX_SIM = config.training.num_simulations  
-    
-    def get_num_simulations(iteration, total_iterations):
-        progress = iteration / total_iterations
-        min_sim = MIN_SIM
-        max_sim = MAX_SIM
-        
-        if progress < 0.2:
-            return min_sim
-        elif progress < 0.5:
-            return min_sim + int((max_sim - min_sim) * 0.3)
-        elif progress < 0.8:
-            return min_sim + int((max_sim - min_sim) * 0.6)
-        else:
-            return max_sim
-    
-    MIN_GAMES = config.training.num_self_play_games // 3
-    MAX_GAMES = config.training.num_self_play_games       
-    
-    def get_num_games(iteration, total_iterations):
-        progress = iteration / total_iterations
-        min_games = MIN_GAMES
-        max_games = MAX_GAMES
-        
-        if progress < 0.2:
-            return min_games
-        elif progress < 0.5:
-            return min_games + int((max_games - min_games) * 0.3)
-        elif progress < 0.8:
-            return min_games + int((max_games - min_games) * 0.6)
-        else:
-            return max_games
+    get_temperature = create_temperature_schedule(
+        config.mcts.temperature_start, config.mcts.temperature_end
+    )
+    get_num_simulations = create_simulation_schedule(
+        config.training.num_simulations // 4, config.training.num_simulations
+    )
+    get_num_games = create_games_schedule(
+        config.training.num_self_play_games // 3, config.training.num_self_play_games
+    )
     
     print("=" * 80)
     print("Starting training...")
