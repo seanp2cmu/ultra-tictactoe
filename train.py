@@ -17,6 +17,32 @@ from tqdm import tqdm
 from config import Config
 from ai.training import Trainer
 
+# HuggingFace 업로드 설정
+HF_REPO_ID = os.environ.get("HF_REPO_ID", "sean2474/ultra-tictactoe-models")
+HF_UPLOAD_ENABLED = os.environ.get("HF_UPLOAD", "false").lower() == "true"
+
+def upload_to_hf(local_path: str, repo_path: str = None):
+    """Upload file to HuggingFace Hub"""
+    if not HF_UPLOAD_ENABLED:
+        return
+    
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        
+        if repo_path is None:
+            repo_path = os.path.basename(local_path)
+        
+        api.upload_file(
+            path_or_fileobj=local_path,
+            path_in_repo=repo_path,
+            repo_id=HF_REPO_ID,
+            repo_type="model"
+        )
+        print(f"  ↑ Uploaded to HF: {repo_path}")
+    except Exception as e:
+        print(f"  ⚠ HF upload failed: {e}")
+
 
 def find_best_checkpoint(save_dir: str) -> str:
     """Find best.pt checkpoint if exists."""
@@ -227,6 +253,7 @@ def main():
             save_path = os.path.join(config.training.save_dir, 'best.pt')
             trainer.save(save_path, iteration=iteration)
             print(f"\n✓ New best! (loss: {best_loss:.4f})")
+            upload_to_hf(save_path, 'best.pt')
         
         # Rolling checkpoint: save every 5, keep only 2 most recent
         if (iteration + 1) % 5 == 0:
@@ -247,11 +274,14 @@ def main():
             model_path = os.path.join(config.training.save_dir, f'model_{iteration + 1}.pt')
             trainer.save(model_path, iteration=iteration)
             print(f"✓ Model saved: model_{iteration + 1}.pt")
+            upload_to_hf(model_path, f'model_{iteration + 1}.pt')
         
-        # Save DTW cache every iteration
+        # Save DTW cache every iteration, upload every 10
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:
             dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
             trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
+            if (iteration + 1) % 10 == 0:
+                upload_to_hf(dtw_cache_path, 'dtw_cache.pkl')
     
     print("\n" + "="*80)
     print(f"Training completed! Best loss: {best_loss:.4f}")
