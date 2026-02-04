@@ -8,14 +8,62 @@ import time
 import gradio as gr
 import torch
 import spaces
+from huggingface_hub import hf_hub_download, list_repo_files
 from ai.core import AlphaZeroNet
 from ai.mcts import AlphaZeroAgent
 from ai.endgame import DTWCalculator
 from game import Board
 
 MODEL_DIR = "model"
+HF_REPO_ID = os.environ.get("sean2474", "ultra-tictactoe-models") 
 models = {}
 dtw_calculator = None
+
+def load_models_from_hf(repo_id: str):
+    """Load models from Hugging Face Hub"""
+    global models, dtw_calculator
+    
+    if not repo_id:
+        print("No HF_REPO_ID set, skipping HF model loading")
+        return []
+    
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif torch.backends.mps.is_available():
+        device = 'mps'
+    else:
+        device = 'cpu'
+    
+    print(f"Loading models from Hugging Face: {repo_id}")
+    
+    try:
+        files = list_repo_files(repo_id)
+        model_files = [f for f in files if f.endswith('.pt')]
+        
+        # DTW 캐시 다운로드
+        if 'dtw_cache.pkl' in files:
+            cache_path = hf_hub_download(repo_id, 'dtw_cache.pkl')
+            if dtw_calculator and dtw_calculator.tt:
+                dtw_calculator.tt.load_from_file(cache_path)
+                print(f"✓ DTW cache loaded from HF")
+        
+        for model_file in model_files:
+            model_name = model_file.replace('.pt', '')
+            try:
+                print(f"Downloading: {model_file}")
+                model_path = hf_hub_download(repo_id, model_file)
+                
+                network = AlphaZeroNet(device=device)
+                network.load(model_path)
+                models[model_name] = network
+                print(f"✓ Loaded: {model_name}")
+            except Exception as e:
+                print(f"✗ Failed to load {model_name}: {e}")
+        
+        return list(models.keys())
+    except Exception as e:
+        print(f"✗ Failed to access HF repo: {e}")
+        return []
 
 def load_models_from_local():
     """Load all .pt models from the model directory"""
@@ -314,8 +362,23 @@ def predict(model_name, board_json, num_simulations=200):
             'type': type(e).__name__
         }, indent=2)
 
+# DTW Calculator 초기화 (HF 로딩 전에)
+dtw_calculator = DTWCalculator(
+    use_cache=True,
+    endgame_threshold=15,
+    midgame_threshold=45,
+    shallow_depth=8
+)
+
 print("Loading models...")
+# 1. 로컬에서 로드 시도
 available_models = load_models_from_local()
+
+# 2. HF에서 추가 로드 (HF_REPO_ID 설정된 경우)
+if HF_REPO_ID:
+    hf_models = load_models_from_hf(HF_REPO_ID)
+    available_models = list(models.keys())
+
 print(f"Loaded {len(models)} models: {available_models}")
 
 with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
