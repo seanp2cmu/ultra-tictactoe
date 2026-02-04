@@ -52,7 +52,8 @@ def find_best_checkpoint(save_dir: str) -> str:
     return None
 
 def find_latest_checkpoint(save_dir: str) -> tuple:
-    """Find the latest checkpoint_*.pt and return (path, iteration)."""
+    """Find the latest checkpoint_*.pt and return (path, next_iteration).
+    checkpoint_5.pt means iterations 0-4 done, returns 5 as next iteration."""
     pattern = os.path.join(save_dir, 'checkpoint_*.pt')
     checkpoints = glob.glob(pattern)
     
@@ -69,6 +70,7 @@ def find_latest_checkpoint(save_dir: str) -> tuple:
         return None, 0
     
     iterations.sort(key=lambda x: x[0], reverse=True)
+    # checkpoint_N.pt: N iterations done (0 to N-1), next is N
     return iterations[0][1], iterations[0][0]
 
 def main():
@@ -78,7 +80,15 @@ def main():
     checkpoint_path, start_iteration = find_latest_checkpoint(config.training.save_dir)
     if not checkpoint_path:
         checkpoint_path = find_best_checkpoint(config.training.save_dir)
-        start_iteration = 0 
+        # best.pt에서 iteration 정보 읽기
+        if checkpoint_path:
+            import torch
+            ckpt = torch.load(checkpoint_path, map_location='cpu')
+            saved_iter = ckpt.get('iteration', None)
+            if saved_iter is not None:
+                start_iteration = saved_iter + 1  # 다음 iteration부터 시작
+            else:
+                start_iteration = 0 
     
     # 디바이스 자동 설정
     if config.gpu.device == "auto":
