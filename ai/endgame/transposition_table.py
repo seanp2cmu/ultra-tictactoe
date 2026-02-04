@@ -181,18 +181,6 @@ class CompressedTranspositionTable:
             **memory
         }
     
-    def clear(self):
-        """clear cache"""
-        self.hot.clear()
-        self.cold.clear()
-        self.stats = {
-            "hot_hits": 0,
-            "cold_hits": 0,
-            "misses": 0,
-            "evictions": 0,
-            "symmetry_saves": 0
-        }
-    
     def save_to_file(self, filepath):
         """
         save DTW cache to disk

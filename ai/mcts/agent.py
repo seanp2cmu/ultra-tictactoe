@@ -112,6 +112,12 @@ class AlphaZeroAgent:
                     value = values_batch[leaf_idx].item() if hasattr(values_batch[leaf_idx], 'item') else float(values_batch[leaf_idx].squeeze())
                     leaf_idx += 1
                     
+                    if self.dtw_calculator.is_endgame(node.board):
+                        cached = self.dtw_calculator.lookup_cache(node.board)
+                        if cached is not None:
+                            result, _, _ = cached
+                            value = float(result)
+                    
                     t0 = time.time()
                     action_probs = dict(enumerate(policy_probs))
                     node.expand(action_probs)

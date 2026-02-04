@@ -5,7 +5,7 @@ import time
 from functools import wraps
 
 from .replay_buffer import SelfPlayData
-from .self_play import SelfPlayWorker, get_timing_stats, reset_timing_stats, set_slow_log_file
+from .self_play import SelfPlayWorker, get_timing_stats, reset_timing_stats
 from ai.mcts.agent import get_mcts_timing, reset_mcts_timing
 
 def timing(f):
@@ -167,11 +167,13 @@ class Trainer:
         print(f"  Expand: {mcts_stats['expand']:.2f}s")
         print(f"  Backprop: {mcts_stats['backprop']:.2f}s")
         
-        # Slow steps summary
+        # Slow steps
         if sp_stats['slow_steps']:
-            print(f"\n[⚠️ SLOW STEPS (>5s)] - {len(sp_stats['slow_steps'])} found (see slow_steps.txt)")
-        else:
-            print(f"\n[✅ No slow steps (>5s)]")
+            print(f"\n[⚠️ SLOW STEPS (>1s)] - {len(sp_stats['slow_steps'])} found")
+            for step, section, elapsed in sp_stats['slow_steps'][:10]:  # Show max 10
+                print(f"  Step {step}: {section} = {elapsed:.2f}s")
+            if len(sp_stats['slow_steps']) > 10:
+                print(f"  ... and {len(sp_stats['slow_steps']) - 10} more")
         
         print("="*60)
     
@@ -263,8 +265,3 @@ class Trainer:
     def load(self, filepath: str) -> int:
         """Load network and return iteration number."""
         return self.network.load(filepath)
-    
-    def clear_dtw_cache(self) -> None:
-        """Clear DTW cache to free memory."""
-        if self.dtw_calculator:
-            self.dtw_calculator.clear_cache()

@@ -16,7 +16,6 @@ import time
 from tqdm import tqdm
 from config import Config
 from ai.training import Trainer
-from ai.training.self_play import set_slow_log_file
 
 
 def find_best_checkpoint(save_dir: str) -> str:
@@ -108,11 +107,6 @@ def main():
         cold_cache_size=config.dtw.cold_cache_size,
         total_iterations=config.training.num_iterations
     )
-    
-    # Initialize slow steps log file
-    slow_log_path = os.path.join(config.training.save_dir, 'slow_steps.txt')
-    set_slow_log_file(slow_log_path)
-    print(f"📝 Slow steps (>5s) will be logged to: {slow_log_path}")
     
     # Load existing model
     best_loss = float('inf')
@@ -248,9 +242,16 @@ def main():
                     os.remove(old_path)
                     print(f"  (Deleted old checkpoint: checkpoint_{old_iter}.pt)")
         
-        #  DTW cache clear
-        if (iteration + 1) % 20 == 0:
-            trainer.clear_dtw_cache()
+        # Permanent model save every 10 iterations
+        if (iteration + 1) % 10 == 0:
+            model_path = os.path.join(config.training.save_dir, f'model_{iteration + 1}.pt')
+            trainer.save(model_path, iteration=iteration)
+            print(f"✓ Model saved: model_{iteration + 1}.pt")
+        
+        # Save DTW cache every iteration
+        if trainer.dtw_calculator and trainer.dtw_calculator.tt:
+            dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
+            trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
     
     print("\n" + "="*80)
     print(f"Training completed! Best loss: {best_loss:.4f}")

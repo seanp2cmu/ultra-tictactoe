@@ -6,7 +6,7 @@ A hybrid AI for Ultimate Tic-Tac-Toe combining AlphaZero (ResNet + MCTS) with Di
 
 - **AlphaZero**: Deep ResNet with SE attention + Monte Carlo Tree Search
 - **DTW (Distance to Win)**: Alpha-Beta complete search for endgame positions
-- **Hybrid Search**: MCTS for opening, shallow Alpha-Beta for midgame, complete search for endgame
+- **Hybrid Search**: Pure MCTS with cache-only DTW lookup, shallow Alpha-Beta for midgame candidates, complete search for endgame
 
 ## Project Structure
 
@@ -78,17 +78,27 @@ Opening (46-81 empty cells):
 └─ Pure MCTS + Neural Network policy/value
 
 Midgame (16-45 empty cells):
-├─ MCTS selects top 5 candidate moves
-├─ Shallow Alpha-Beta (depth=8) checks for forced wins/losses
+├─ MCTS with cache-only DTW lookup (O(1), no search overhead)
+├─ Self-play: Shallow Alpha-Beta (depth=8) checks candidate moves
 ├─ Winning move found → select immediately
 └─ Losing moves → exclude from candidates
 
 Endgame (≤15 empty cells):
-├─ Complete Alpha-Beta search
-├─ Transposition table caching
-├─ 8-fold symmetry normalization (D4 group)
+├─ Complete Alpha-Beta search (self-play level)
+├─ MCTS: Cache lookup only (reuses self-play DTW results)
+├─ Transposition table with 8-fold symmetry (D4 group)
 └─ Winning position + DTW≤5 → use optimal move directly
 ```
+
+### MCTS + DTW Cache Integration
+
+MCTS does NOT perform DTW searches during tree expansion (which would cause exponential slowdown).
+Instead, it uses **cache-only lookup**:
+
+1. Self-play generates games and caches DTW results in transposition table
+2. MCTS checks cache for endgame positions (O(1) lookup)
+3. Cache hit → Use exact DTW value instead of network prediction
+4. Cache miss → Use network prediction (no search penalty)
 
 ## Neural Network Architecture
 
@@ -209,6 +219,7 @@ DTWConfig:
 
 - **Fast Board.clone()**: Manual copy vs deepcopy (80x faster)
 - **Node clone elimination**: Avoid double cloning in MCTS expansion
+- **Cache-only DTW in MCTS**: O(1) lookup, no search overhead
 - **is_terminal caching**: Memoized terminal state detection
 - **Symmetry normalization**: 8x cache memory savings via D4 group
 - **Mixed Precision (AMP)**: FP16 training for 2x memory efficiency
@@ -261,6 +272,11 @@ if dtw.is_endgame(board):
 
 # Get winning move if available
 move, distance = dtw.get_best_winning_move(board)
+
+# Cache-only lookup (O(1), no search)
+cached = dtw.lookup_cache(board)
+if cached:
+    result, distance, best_move = cached
 ```
 
 ### Trainer

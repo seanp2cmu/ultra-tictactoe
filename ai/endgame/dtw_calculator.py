@@ -76,6 +76,12 @@ class DTWCalculator:
         cells = board.count_playable_empty_cells()
         return self.endgame_threshold < cells <= self.midgame_threshold
     
+    def lookup_cache(self, board: Board):
+        """Cache lookup only (no search). Returns cached result or None."""
+        if self.use_cache and self.tt:
+            return self.tt.get(board)
+        return None
+    
     def calculate_dtw(self, board: Board, _empty_count: int = None):
         """
         DTW calculation (Alpha-Beta Search)
@@ -307,12 +313,12 @@ class DTWCalculator:
             next_board = board.clone()
             next_board.make_move(move[0], move[1])
             
-            self._node_count = 0  # Reset for each candidate
+            self._node_count = 0  
             move_result, _, _ = self._shallow_alpha_beta(next_board, depth=0)
             self._shallow_searches += 1
             self._shallow_nodes += self._node_count
             
-            if move_result == -2:  # Aborted - treat as safe (unknown)
+            if move_result == -2:  
                 self._shallow_aborted += 1
                 result['safe_moves'].append(move)
                 continue
@@ -332,7 +338,7 @@ class DTWCalculator:
     def _shallow_alpha_beta(self, board: Board, depth: int = 0, alpha: int = -2, beta: int = 2):
         self._node_count += 1
         if self._node_count > self.max_nodes:
-            return (-2, depth, None)  # Abort
+            return (-2, depth, None) 
         
         if board.winner is not None:
             if board.winner == board.current_player:
@@ -360,7 +366,7 @@ class DTWCalculator:
                 next_board, depth + 1, -beta, -alpha
             )
             
-            if opponent_result == -2:  # Aborted
+            if opponent_result == -2:
                 return (-2, depth, None)
             
             my_result = -opponent_result
@@ -377,7 +383,3 @@ class DTWCalculator:
                 break
         
         return (best_result, depth, best_move)
-    
-    def clear_cache(self):
-        if self.use_cache and self.tt:
-            self.tt.clear()
