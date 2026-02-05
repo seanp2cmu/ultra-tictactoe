@@ -8,6 +8,9 @@ import threading
 HF_REPO_ID = os.environ.get("HF_REPO_ID", "sean2474/ultra-tictactoe-models")
 HF_UPLOAD_ENABLED = os.environ.get("HF_UPLOAD", "false").lower() == "true"
 
+# Debug: print upload status on import
+print(f"[HF Upload] Enabled: {HF_UPLOAD_ENABLED} (HF_UPLOAD={os.environ.get('HF_UPLOAD', 'not set')})")
+
 _upload_threads = []
 
 
