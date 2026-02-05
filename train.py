@@ -71,9 +71,9 @@ def main():
     if checkpoint_path:
         print(f"\n  Loading checkpoint: {checkpoint_path}")
         loaded_iter = trainer.load(checkpoint_path)
-        if loaded_iter:
-            start_iteration = loaded_iter
-        print(f"✓ Model loaded (will resume from iteration {start_iteration + 1})\n")
+        if loaded_iter is not None:
+            start_iteration = loaded_iter + 1
+        print(f"✓ Model loaded (will resume from iteration {start_iteration})\n")
     
     get_temperature = create_temperature_schedule(
         config.mcts.temperature_start, config.mcts.temperature_end
