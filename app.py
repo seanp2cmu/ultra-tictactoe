@@ -47,18 +47,23 @@ def load_models_from_hf(repo_id: str):
                 dtw_calculator.tt.load_from_file(cache_path)
                 print(f"✓ DTW cache loaded from HF")
         
+        print(f"Found {len(model_files)} model files: {model_files}")
+        
         for model_file in model_files:
             model_name = model_file.replace('.pt', '')
             try:
                 print(f"Downloading: {model_file}")
                 model_path = hf_hub_download(repo_id, model_file)
+                print(f"  Downloaded to: {model_path}")
                 
                 network = AlphaZeroNet(device=device)
                 network.load(model_path)
                 models[model_name] = network
                 print(f"✓ Loaded: {model_name}")
             except Exception as e:
+                import traceback
                 print(f"✗ Failed to load {model_name}: {e}")
+                traceback.print_exc()
         
         return list(models.keys())
     except Exception as e:
@@ -274,9 +279,12 @@ def compare_models(model1_name, model2_name, num_games, num_simulations, tempera
         yield json.dumps(results, indent=2)
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         yield json.dumps({
             'error': str(e),
-            'type': type(e).__name__
+            'type': type(e).__name__,
+            'traceback': traceback.format_exc()
         }, indent=2)
 
 @spaces.GPU
