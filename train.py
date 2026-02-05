@@ -73,7 +73,13 @@ def main():
         loaded_iter = trainer.load(checkpoint_path)
         if loaded_iter is not None:
             start_iteration = loaded_iter + 1
-        print(f"✓ Model loaded (will resume from iteration {start_iteration})\n")
+        print(f"✓ Model loaded (will resume from iteration {start_iteration})")
+        
+        # Load DTW cache if exists
+        dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
+        if os.path.exists(dtw_cache_path) and trainer.dtw_calculator and trainer.dtw_calculator.tt:
+            trainer.dtw_calculator.tt.load_from_file(dtw_cache_path)
+        print()
     
     get_temperature = create_temperature_schedule(
         config.mcts.temperature_start, config.mcts.temperature_end
