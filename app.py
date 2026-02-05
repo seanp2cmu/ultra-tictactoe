@@ -172,6 +172,10 @@ def compare_models(model1_name, model2_name, num_games, num_simulations, tempera
     """
     Compare two models by playing multiple self-play games
     """
+    # Ensure integer types from sliders
+    num_games = int(num_games)
+    num_simulations = int(num_simulations)
+    
     try:
         if model1_name not in models or model2_name not in models:
             yield json.dumps({
@@ -292,6 +296,8 @@ def predict(model_name, board_json, num_simulations=200):
     """
     Predict best moves for given board state using specified model
     """
+    num_simulations = int(num_simulations)
+    
     try:
         board_data = json.loads(board_json)
         
