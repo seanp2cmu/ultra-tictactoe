@@ -167,7 +167,7 @@ def get_models_list():
         'count': len(models)
     }
 
-@spaces.GPU
+@spaces.GPU(duration=600)
 def compare_models(model1_name, model2_name, num_games, num_simulations, temperature):
     """
     Compare two models by playing multiple self-play games
