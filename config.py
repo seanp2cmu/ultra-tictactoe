@@ -39,8 +39,8 @@ class DTWConfig:
     endgame_threshold: int = 15       
     midgame_threshold: int = 45       
     shallow_depth: int = 8            
-    hot_cache_size: int = 2000000 
-    cold_cache_size: int = 8000000
+    hot_cache_size: int = 60000000 
+    cold_cache_size: int = 240000000
 @dataclass
 class PredictionConfig:
     """실제 게임/예측 시 사용할 설정"""
