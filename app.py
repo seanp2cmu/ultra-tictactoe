@@ -12,6 +12,7 @@ from huggingface_hub import hf_hub_download, list_repo_files
 from ai.core import AlphaZeroNet
 from ai.mcts import AlphaZeroAgent
 from ai.endgame import DTWCalculator
+from ai.baselines import RandomAgent, HeuristicAgent, MinimaxAgent
 from game import Board
 
 MODEL_DIR = "model"
@@ -376,6 +377,159 @@ def predict(model_name, board_json, num_simulations=200):
             'type': type(e).__name__
         }, indent=2)
 
+# Baseline agents
+baseline_agents = {
+    'Random': RandomAgent(),
+    'Heuristic': HeuristicAgent(),
+    'Minimax-2': MinimaxAgent(depth=2),
+    'Minimax-3': MinimaxAgent(depth=3),
+    'Minimax-4': MinimaxAgent(depth=4),
+}
+
+@spaces.GPU(duration=300)
+def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
+    """Test AlphaZero model against baseline opponent."""
+    num_games = int(num_games)
+    num_simulations = int(num_simulations)
+    
+    try:
+        if model_name not in models:
+            yield json.dumps({
+                'error': f'Model {model_name} not found',
+                'available_models': list(models.keys())
+            }, indent=2)
+            return
+        
+        if baseline_name not in baseline_agents:
+            yield json.dumps({
+                'error': f'Baseline {baseline_name} not found',
+                'available_baselines': list(baseline_agents.keys())
+            }, indent=2)
+            return
+        
+        az_agent = AlphaZeroAgent(
+            network=models[model_name],
+            num_simulations=num_simulations,
+            c_puct=1.0,
+            temperature=0.0,
+            batch_size=8,
+            dtw_calculator=dtw_calculator
+        )
+        baseline = baseline_agents[baseline_name]
+        
+        results = {
+            'model': model_name,
+            'baseline': baseline_name,
+            'num_simulations': num_simulations,
+            'games': [],
+            'summary': {
+                'model_wins': 0,
+                'baseline_wins': 0,
+                'draws': 0,
+                'model_as_p1_wins': 0,
+                'model_as_p2_wins': 0,
+                'total_time': 0
+            }
+        }
+        
+        for game_num in range(1, num_games + 1):
+            game_start_time = time.time()
+            model_is_p1 = (game_num % 2 == 1)
+            
+            board = Board()
+            game_record = {
+                'game_number': game_num,
+                'model_plays_as': 1 if model_is_p1 else 2,
+                'moves': [],
+                'winner': None,
+                'elapsed_time': 0
+            }
+            
+            move_count = 0
+            while board.winner is None and move_count < 81:
+                is_model_turn = (board.current_player == 1) == model_is_p1
+                
+                if is_model_turn:
+                    action = az_agent.select_action(board, temperature=0.0)
+                else:
+                    action = baseline.select_action(board)
+                
+                move_r = action // 9
+                move_c = action % 9
+                
+                game_record['moves'].append({
+                    'move_number': move_count + 1,
+                    'player': 'model' if is_model_turn else 'baseline',
+                    'action': int(action),
+                    'position': [int(move_r), int(move_c)]
+                })
+                
+                board.make_move(move_r, move_c)
+                move_count += 1
+                
+                if board.winner is not None:
+                    break
+            
+            game_elapsed = time.time() - game_start_time
+            game_record['winner'] = int(board.winner) if board.winner is not None else None
+            game_record['elapsed_time'] = round(game_elapsed, 2)
+            game_record['total_moves'] = move_count
+            
+            if board.winner == 3 or board.winner is None:
+                results['summary']['draws'] += 1
+                game_record['result'] = 'draw'
+            elif (board.winner == 1 and model_is_p1) or (board.winner == 2 and not model_is_p1):
+                results['summary']['model_wins'] += 1
+                if model_is_p1:
+                    results['summary']['model_as_p1_wins'] += 1
+                else:
+                    results['summary']['model_as_p2_wins'] += 1
+                game_record['result'] = 'model_win'
+            else:
+                results['summary']['baseline_wins'] += 1
+                game_record['result'] = 'baseline_win'
+            
+            results['summary']['total_time'] = round(
+                results['summary']['total_time'] + game_elapsed, 2
+            )
+            results['games'].append(game_record)
+            
+            win_rate = results['summary']['model_wins'] / game_num * 100
+            
+            progress = {
+                'status': 'in_progress',
+                'completed_games': game_num,
+                'total_games': num_games,
+                'win_rate': f"{win_rate:.1f}%",
+                'latest_game': {
+                    'game_number': game_num,
+                    'model_played_as': 'P1 (X)' if model_is_p1 else 'P2 (O)',
+                    'result': game_record['result'],
+                    'moves': move_count,
+                    'time': f"{game_elapsed:.1f}s"
+                },
+                'current_summary': results['summary'].copy()
+            }
+            
+            yield json.dumps(progress, indent=2)
+        
+        results['status'] = 'completed'
+        results['summary']['win_rate'] = f"{results['summary']['model_wins'] / num_games * 100:.1f}%"
+        results['summary']['avg_time_per_game'] = round(
+            results['summary']['total_time'] / num_games, 2
+        )
+        
+        yield json.dumps(results, indent=2)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        yield json.dumps({
+            'error': str(e),
+            'type': type(e).__name__,
+            'traceback': traceback.format_exc()
+        }, indent=2)
+
 # DTW Calculator 초기화 (HF 로딩 전에)
 dtw_calculator = DTWCalculator(
     use_cache=True,
@@ -521,6 +675,67 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
         **Final Result**:
         - Complete game records for all matches
         - Summary statistics (wins, draws, avg time)
+        """)
+    
+    with gr.Tab("Baseline Test"):
+        gr.Markdown("### 🎯 Baseline Test - Sanity Check")
+        gr.Markdown("Test your AlphaZero model against baseline opponents to verify training progress.")
+        
+        with gr.Row():
+            baseline_model_dropdown = gr.Dropdown(
+                choices=available_models,
+                label="AlphaZero Model",
+                value=available_models[0] if available_models else None
+            )
+            baseline_dropdown = gr.Dropdown(
+                choices=list(baseline_agents.keys()),
+                label="Baseline Opponent",
+                value="Random"
+            )
+        
+        with gr.Row():
+            baseline_games_slider = gr.Slider(
+                minimum=2,
+                maximum=100,
+                value=20,
+                step=2,
+                label="Number of Games (alternating first player)"
+            )
+            baseline_sims_slider = gr.Slider(
+                minimum=50,
+                maximum=800,
+                value=200,
+                step=50,
+                label="MCTS Simulations"
+            )
+        
+        baseline_btn = gr.Button("🧪 Run Baseline Test", variant="primary", size="lg")
+        
+        baseline_output = gr.Textbox(
+            label="Results (Updates in Real-Time)",
+            lines=20,
+            interactive=False
+        )
+        
+        baseline_btn.click(
+            fn=test_vs_baseline,
+            inputs=[baseline_model_dropdown, baseline_dropdown, baseline_games_slider, baseline_sims_slider],
+            outputs=baseline_output,
+            api_name="baseline_test"
+        )
+        
+        gr.Markdown("""
+        ### 📊 Baseline Opponents
+        
+        | Opponent | Description | Expected Win Rate |
+        |----------|-------------|-------------------|
+        | **Random** | Random legal moves | >95% (if training works) |
+        | **Heuristic** | Greedy one-step lookahead | >80% |
+        | **Minimax-2** | Alpha-beta depth 2 | >70% |
+        | **Minimax-3** | Alpha-beta depth 3 | >60% |
+        | **Minimax-4** | Alpha-beta depth 4 | >50% |
+        
+        ⚠️ If your model can't beat Random, something is wrong!
         """)
     
     with gr.Tab("Models"):
