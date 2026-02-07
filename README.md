@@ -10,43 +10,58 @@ app_file: app.py
 pinned: false
 ---
 
-# Ultimate Tic-Tac-Toe AlphaZero + DTW
+# Ultimate Tic-Tac-Toe AlphaZero
 
-A hybrid AI for Ultimate Tic-Tac-Toe combining AlphaZero (ResNet + MCTS) with Distance to Win (DTW) endgame solver.
+A pure AlphaZero implementation for Ultimate Tic-Tac-Toe, following Leela Chess Zero (Lc0) best practices.
 
 ## Key Features
 
-- **AlphaZero**: Deep ResNet with SE attention + Monte Carlo Tree Search
-- **DTW (Distance to Win)**: Alpha-Beta complete search for endgame positions
-- **Hybrid Search**: Pure MCTS with cache-only DTW lookup, shallow Alpha-Beta for midgame candidates, complete search for endgame
+- **Pure AlphaZero**: ResNet with SE attention + Monte Carlo Tree Search
+- **Lc0-style Training**: Temperature only for first 8 moves, FPU=-1, value range 0~1
+- **DTW Endgame Solver**: Alpha-Beta complete search for endgame positions (≤15 cells)
 
-## Project Structure
+## Architecture
+
+### Neural Network
 
 ```
-ultra-tictacto/
-├── ai/
-│   ├── core/                       # Neural network (ResNet + SE blocks)
-│   │   └── network.py              # Model, SEBlock, ResidualBlock, AlphaZeroNet
-│   ├── mcts/                       # Monte Carlo Tree Search
-│   │   ├── agent.py                # AlphaZeroAgent with DTW integration
-│   │   └── node.py                 # MCTS Node with UCB selection
-│   ├── endgame/                    # DTW endgame solver
-│   │   ├── dtw_calculator.py       # Alpha-Beta search with move ordering
-│   │   └── transposition_table.py  # Hot/Cold 2-tier cache with compression
-│   ├── training/                   # Training pipeline
-│   │   ├── trainer.py              # Main training loop
-│   │   ├── self_play.py            # Self-play game generation
-│   │   └── replay_buffer.py        # Experience replay
-│   ├── prediction/                 # Inference helpers
-│   │   └── prediction_agent.py     # create_prediction_agent, create_strong_agent
-│   └── utils/                      # Utilities
-│       ├── board_symmetry.py       # D4 symmetry normalization (8x memory savings)
-│       └── position_weighting.py   # Weighted sampling for transition positions
-├── game/
-│   └── board.py                    # Ultimate Tic-Tac-Toe game logic
-├── test/                           # Unit tests
-├── config.py                       # Configuration dataclasses
-└── train.py                        # Training script
+Input: 7 channels × 9×9
+├─ Ch 0-1: Current/Opponent stones
+├─ Ch 2-4: Won/Lost/Drawn sub-boards
+├─ Ch 5: Last move position
+└─ Ch 6: Valid move mask
+
+Backbone: 30 ResBlocks × 512 channels + SE attention
+
+Dual Heads:
+├─ Policy: Conv 1×1 → FC → 81 (softmax)
+└─ Value: Conv 1×1 → FC → 1 (sigmoid, 0~1)
+```
+
+### Value Range (Lc0-style)
+
+| Value | Meaning |
+|-------|---------|
+| 0.0 | Loss |
+| 0.5 | Draw |
+| 1.0 | Win |
+
+### MCTS Settings
+
+- **FPU (First Play Urgency)**: -1 for unvisited nodes
+- **Temperature**: Applied only for first 8 moves (exploration), greedy after
+- **c_puct**: 1.0
+
+## Search Strategy
+
+```
+Opening/Midgame (>15 empty cells):
+└─ Pure MCTS + Neural Network
+
+Endgame (≤15 empty cells):
+├─ Complete Alpha-Beta DTW search
+├─ Transposition table with D4 symmetry (8x savings)
+└─ Winning move with DTW≤5 → use directly
 ```
 
 ## Quick Start
@@ -54,8 +69,6 @@ ultra-tictacto/
 ### Installation
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -65,148 +78,21 @@ pip install -r requirements.txt
 python train.py
 ```
 
-### Inference
+### Play
 
 ```python
-from ai.prediction import create_prediction_agent, create_strong_agent
-
-# Standard agent (400 simulations)
-agent = create_prediction_agent(model_path="./model/model_final.pth")
-
-# Strong agent (800 simulations, lower temperature)
-agent = create_strong_agent(model_path="./model/model_final.pth")
-
-# Play a move
+from ai.prediction import create_prediction_agent
 from game import Board
+
+agent = create_prediction_agent(model_path="./model/best.pt")
 board = Board()
 action = agent.select_action(board, temperature=0)
 row, col = action // 9, action % 9
 ```
 
-## Search Strategy
-
-```
-Opening (46-81 empty cells):
-└─ Pure MCTS + Neural Network policy/value
-
-Midgame (16-45 empty cells):
-├─ MCTS with cache-only DTW lookup (O(1), no search overhead)
-├─ Self-play: Shallow Alpha-Beta (depth=8) checks candidate moves
-├─ Winning move found → select immediately
-└─ Losing moves → exclude from candidates
-
-Endgame (≤15 empty cells):
-├─ Complete Alpha-Beta search (self-play level)
-├─ MCTS: Cache lookup only (reuses self-play DTW results)
-├─ Transposition table with 8-fold symmetry (D4 group)
-└─ Winning position + DTW≤5 → use optimal move directly
-```
-
-### MCTS + DTW Cache Integration
-
-MCTS does NOT perform DTW searches during tree expansion (which would cause exponential slowdown).
-Instead, it uses **cache-only lookup**:
-
-1. Self-play generates games and caches DTW results in transposition table
-2. MCTS checks cache for endgame positions (O(1) lookup)
-3. Cache hit → Use exact DTW value instead of network prediction
-4. Cache miss → Use network prediction (no search penalty)
-
-## Neural Network Architecture
-
-```
-Input: 7 channels × 9×9
-├─ Ch 0: Current player stones
-├─ Ch 1: Opponent player stones
-├─ Ch 2: Won sub-boards (current player perspective)
-├─ Ch 3: Lost sub-boards (current player perspective)
-├─ Ch 4: Drawn sub-boards
-├─ Ch 5: Last move position
-└─ Ch 6: Valid sub-board mask (where next move is allowed)
-
-Backbone: ResNet with SE attention
-├─ 30 residual blocks
-├─ 512 channels
-└─ Squeeze-and-Excitation (reduction=16)
-
-Dual Heads:
-├─ Policy Head: Conv 1×1 → FC → 81 outputs (softmax)
-└─ Value Head: Conv 1×1 → FC → FC → 1 output (tanh)
-```
-
-## DTW Endgame Solver
-
-The Distance to Win (DTW) calculator provides perfect play in endgame positions:
-
-- **Alpha-Beta Pruning**: Minimax search with alpha-beta cutoffs
-- **Move Ordering**: Center → corners → edges priority for better pruning
-- **Transposition Table**: Hot/Cold 2-tier LRU cache
-  - Hot cache: Fast access, no compression (5M entries)
-  - Cold cache: Compressed to 3 bytes per entry (20M entries)
-- **Symmetry Normalization**: Canonical board representation using D4 group (8x memory savings)
-
-## Position Weighting
-
-The training pipeline uses weighted sampling to focus learning on critical game phases:
-
-```
-Empty Cells | Weight | Category
-------------|--------|------------------
-50+         | 1.0    | Opening
-40-49       | 1.0    | Early Mid
-30-39       | 1.0    | Mid
-26-29       | 1.2    | ★ Transition (Most Important)
-20-25       | 1.0    | Near Endgame
-10-19       | 0.6    | Endgame
-0-9         | 0.4    | Deep Endgame
-```
-
-**Rationale**:
-- **Transition (26-29 cells)**: Critical decision point where games are often decided. Higher weight ensures more training focus.
-- **Near Endgame (20-25 cells)**: Shallow Alpha-Beta only (DTW threshold=15). NN guidance still important, so standard weight.
-- **Endgame (10-19 cells)**: DTW provides perfect solutions, reduced weight but still maintains pattern learning.
-- **Deep Endgame (0-9 cells)**: DTW solves completely, but some weight retained for NN to learn endgame patterns for MCTS initial evaluation.
-
-The `WeightedSampleBuffer` implements O(1) weighted sampling using cumulative weights and numpy random choice.
-
-## Training Strategy
-
-### Adaptive Scheduling
-
-Training uses progressive scheduling to optimize learning efficiency:
-
-```
-Progress   | Simulations | Games | Temperature
------------|-------------|-------|------------
-0-20%      | 200         | 83    | 1.0 (exploration)
-20-50%     | 380         | 133   | 1.0
-50-80%     | 560         | 183   | 0.65
-80-100%    | 800         | 250   | 0.3 (exploitation)
-```
-
-**Rationale**:
-- **Early training**: Network is near-random, so fewer games/sims suffice. High temperature encourages diverse exploration.
-- **Mid training**: Gradual increase as network improves and data quality matters more.
-- **Late training**: Maximum resources for fine-tuning with low temperature for precise play.
-
-### Training Loop
-
-Each iteration:
-1. **Self-play**: Generate games using current network + MCTS + DTW
-2. **Replay buffer**: Add samples with phase-based weights
-3. **Training**: Sample weighted batch, train for 40 epochs
-4. **Checkpoint**: Save model every 20 iterations and DTW cache every 10 iterations to huggingface
-
-### Replay Buffer
-
-- Size: 1,000,000 samples (sliding window)
-- Sampling: Weighted by game phase (transition positions prioritized)
-- Accumulation: Data persists across iterations for diversity
-
 ## Configuration
 
 ```python
-# config.py defaults
 NetworkConfig:
     num_res_blocks: 30
     num_channels: 512
@@ -214,28 +100,25 @@ NetworkConfig:
 TrainingConfig:
     num_iterations: 300
     num_self_play_games: 250
-    num_simulations: 800 (adaptive: 200→800)
-    batch_size: 4096
+    num_simulations: 800
+    batch_size: 1024
     lr: 0.002
-    use_amp: True  # Mixed precision
 
 DTWConfig:
-    endgame_threshold: 15   # Complete search threshold
-    midgame_threshold: 45   # Shallow search threshold
-    shallow_depth: 8        # Midgame search depth limit
-    hot_cache_size: 5M
-    cold_cache_size: 20M
+    endgame_threshold: 15
 ```
 
-## Optimizations
+## Training Notes
 
-- **Fast Board.clone()**: Manual copy vs deepcopy (80x faster)
-- **Node clone elimination**: Avoid double cloning in MCTS expansion
-- **Cache-only DTW in MCTS**: O(1) lookup, no search overhead
-- **is_terminal caching**: Memoized terminal state detection
-- **Symmetry normalization**: 8x cache memory savings via D4 group
-- **Mixed Precision (AMP)**: FP16 training for 2x memory efficiency
-- **Adaptive simulations**: Start with 200 sims, increase to 800 as training progresses
+Based on Leela Chess Zero findings:
+
+1. **Temperature only for first N moves** - AlphaZero applies temperature only for opening moves (30 ply in chess, 8 moves here). This prevents random blunders in mid/endgame.
+
+2. **Value range 0~1** - Loss=0, Draw=0.5, Win=1 (not -1~1). Simpler for sigmoid output.
+
+3. **FPU = -1** - Unvisited nodes are assumed to be losses, encouraging exploitation of known-good moves.
+
+4. **No shallow search** - Pure MCTS + NN for all non-endgame positions. DTW only for complete endgame solving.
 
 ## Testing
 
@@ -243,84 +126,8 @@ DTWConfig:
 python -m pytest test/ -v
 ```
 
-## API Reference
-
-### AlphaZeroAgent
-
-```python
-agent = AlphaZeroAgent(
-    network,                    # AlphaZeroNet instance
-    num_simulations=100,        # MCTS simulations per move
-    c_puct=1.0,                 # Exploration constant
-    temperature=1.0,            # Action selection temperature
-    dtw_calculator=None         # Optional DTWCalculator
-)
-
-# Select best action
-action = agent.select_action(board, temperature=0)
-
-# Get action probability distribution
-probs = agent.get_action_probs(board, temperature=1.0)
-```
-
-### DTWCalculator
-
-```python
-dtw = DTWCalculator(
-    use_cache=True,
-    hot_size=5000000,
-    cold_size=20000000,
-    endgame_threshold=15,
-    midgame_threshold=45,
-    shallow_depth=8
-)
-
-# Check if endgame position
-if dtw.is_endgame(board):
-    result, distance, best_move = dtw.calculate_dtw(board)
-    # result: 1 (win), -1 (loss), 0 (draw)
-    # distance: moves to outcome
-    # best_move: (row, col) tuple
-
-# Get winning move if available
-move, distance = dtw.get_best_winning_move(board)
-
-# Cache-only lookup (O(1), no search)
-cached = dtw.lookup_cache(board)
-if cached:
-    result, distance, best_move = cached
-```
-
-### Trainer
-
-```python
-trainer = Trainer(
-    lr=0.002,
-    batch_size=4096,
-    num_simulations=800,
-    replay_buffer_size=1000000,
-    device="cuda",
-    use_amp=True
-)
-
-# Single training iteration
-result = trainer.train_iteration(
-    num_self_play_games=250,
-    num_train_epochs=40,
-    temperature=1.0,
-    num_simulations=800
-)
-
-# Save/Load
-trainer.save("./model/model.pth")
-trainer.load("./model/model.pth")
-```
-
-## License
-
-MIT License
-
 ## References
 
-- [Mastering Chess and Shogi by Self-Play (AlphaZero)](https://arxiv.org/abs/1712.01815)
-- [Ultimate Tic-Tac-Toe Rules](https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe)
+- [AlphaZero Paper](https://arxiv.org/abs/1712.01815)
+- [Leela Chess Zero](https://lczero.org/)
+- [Lc0 AlphaZero Findings](https://lczero.org/blog/2018/12/alphazero-paper-and-lc0-v0191/)

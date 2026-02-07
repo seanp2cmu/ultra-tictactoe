@@ -63,7 +63,8 @@ class Node:
         exploration_factor = c_puct * sqrt_visits
         
         for action, child in self.children.items():
-            q_value = child.value_sum / child.visits if child.visits > 0 else 0
+            # FPU (First Play Urgency) = -1 for unvisited nodes (AlphaZero style)
+            q_value = child.value_sum / child.visits if child.visits > 0 else -1.0
             u_value = exploration_factor * child.prior_prob / (1 + child.visits)
             score = q_value + u_value
             

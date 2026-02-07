@@ -16,8 +16,6 @@ _timing_stats = {
     'mcts_count': 0,
     'dtw_endgame': 0.0,
     'dtw_endgame_count': 0,
-    'dtw_midgame': 0.0,
-    'dtw_midgame_count': 0,
     'board_to_input': 0.0,
     'total_steps': 0,
     'slow_steps': [],  # (step, section, elapsed) for steps > 5s
@@ -43,8 +41,6 @@ def reset_timing_stats():
         'mcts_count': 0,
         'dtw_endgame': 0.0,
         'dtw_endgame_count': 0,
-        'dtw_midgame': 0.0,
-        'dtw_midgame_count': 0,
         'board_to_input': 0.0,
         'total_steps': 0,
         'slow_steps': [],
@@ -150,35 +146,6 @@ class SelfPlayWorker:
                 break
             action_probs = action_probs / np.sum(action_probs)
             
-            # === DTW Midgame Check ===
-            selected_move = None
-            if self.dtw_calculator.is_midgame(board):
-                top_k = 5
-                top_actions = np.argsort(action_probs)[-top_k:][::-1]
-                candidate_moves = [(a // 9, a % 9) for a in top_actions if action_probs[a] > 0]
-                
-                if candidate_moves:
-                    t0 = time.time()
-                    check_result = self.dtw_calculator.check_candidate_moves(board, candidate_moves)
-                    elapsed = time.time() - t0
-                    _timing_stats['dtw_midgame'] += elapsed
-                    _timing_stats['dtw_midgame_count'] += 1
-                    if elapsed > SLOW_THRESHOLD:
-                        _timing_stats['slow_steps'].append((step, f'dtw_midgame(empty={empty_cells})', elapsed))
-                        _log_slow_step(step, f'dtw_midgame(empty={empty_cells})', elapsed)
-                    
-                    if check_result['winning_move']:
-                        selected_move = check_result['winning_move']
-                        action = selected_move[0] * 9 + selected_move[1]
-                        action_probs = np.zeros(81, dtype=np.float32)
-                        action_probs[action] = 1.0
-                    elif check_result['safe_moves']:
-                        losing_actions = set(m[0] * 9 + m[1] for m in check_result['losing_moves'])
-                        for la in losing_actions:
-                            action_probs[la] = 0.0
-                        if np.sum(action_probs) > 0:
-                            action_probs = action_probs / np.sum(action_probs)
-            
             t0 = time.time()
             state = self._board_to_input(board)
             _timing_stats['board_to_input'] += time.time() - t0
@@ -186,14 +153,15 @@ class SelfPlayWorker:
             game_data.append((state, action_probs, current_player, dtw))
             _timing_stats['total_steps'] += 1
             
-            if selected_move:
-                row, col = selected_move
-            elif self.agent.temperature == 0:
-                action = int(np.argmax(action_probs))
-                row, col = action // 9, action % 9
-            else:
+            # Temperature only for first 8 moves (AlphaZero style)
+            TEMP_MOVES = 8
+            if step < TEMP_MOVES and self.agent.temperature > 0:
+                # Apply temperature for exploration in opening
                 action = int(np.random.choice(81, p=action_probs))
-                row, col = action // 9, action % 9
+            else:
+                # Greedy selection after opening
+                action = int(np.argmax(action_probs))
+            row, col = action // 9, action % 9
             
             if (row, col) not in legal_moves:
                 break
@@ -208,12 +176,13 @@ class SelfPlayWorker:
         
         training_data = []
         for state, policy, player, dtw in game_data:
+            # Value range: 0~1 (loss=0, draw=0.5, win=1) - AlphaZero style
             if winner is None:
-                value = 0.0
+                value = 0.5  # draw
             elif winner == player:
-                value = 1.0
+                value = 1.0  # win
             else:
-                value = -1.0
+                value = 0.0  # loss
             
             training_data.append((state, policy, value, dtw))
         

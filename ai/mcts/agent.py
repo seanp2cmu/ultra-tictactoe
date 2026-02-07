@@ -100,23 +100,26 @@ class AlphaZeroAgent:
             leaf_idx = 0
             for i, node in enumerate(leaf_nodes):
                 if node.is_terminal():
+                    # Terminal value in MCTS range (-1~1)
                     if node.board.winner is None or node.board.winner == 3:
-                        value = 0.0
+                        value = 0.0  # draw
                     else:
                         if node.board.winner == node.board.current_player:
-                            value = 1.0
+                            value = 1.0  # win
                         else:
-                            value = -1.0
+                            value = -1.0  # loss
                 else:
                     policy_probs = policy_probs_batch[leaf_idx]
-                    value = values_batch[leaf_idx].item() if hasattr(values_batch[leaf_idx], 'item') else float(values_batch[leaf_idx].squeeze())
+                    # Network outputs 0~1, convert to MCTS range -1~1
+                    net_value = values_batch[leaf_idx].item() if hasattr(values_batch[leaf_idx], 'item') else float(values_batch[leaf_idx].squeeze())
+                    value = 2.0 * net_value - 1.0  # 0~1 -> -1~1
                     leaf_idx += 1
                     
                     if self.dtw_calculator.is_endgame(node.board):
                         cached = self.dtw_calculator.lookup_cache(node.board)
                         if cached is not None:
                             result, _, _ = cached
-                            value = float(result)
+                            value = float(result)  # DTW result is already -1/0/1
                     
                     t0 = time.time()
                     action_probs = dict(enumerate(policy_probs))

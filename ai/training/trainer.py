@@ -152,8 +152,6 @@ class Trainer:
             print(f"  MCTS Search: {sp_stats['mcts_search']:.2f}s ({sp_stats['mcts_count']} calls, avg {sp_stats['mcts_search']/sp_stats['mcts_count']:.3f}s)")
         if sp_stats['dtw_endgame_count'] > 0:
             print(f"  DTW Endgame: {sp_stats['dtw_endgame']:.2f}s ({sp_stats['dtw_endgame_count']} calls, avg {sp_stats['dtw_endgame']/sp_stats['dtw_endgame_count']:.3f}s)")
-        if sp_stats['dtw_midgame_count'] > 0:
-            print(f"  DTW Midgame: {sp_stats['dtw_midgame']:.2f}s ({sp_stats['dtw_midgame_count']} calls, avg {sp_stats['dtw_midgame']/sp_stats['dtw_midgame_count']:.3f}s)")
         print(f"  Board to Input: {sp_stats['board_to_input']:.2f}s")
         print(f"  Total Steps: {sp_stats['total_steps']}")
         

@@ -5,15 +5,15 @@ Temperature, simulation count, and game count schedules
 
 
 def create_temperature_schedule(temp_start: float, temp_end: float):
-    """Create temperature schedule function."""
+    """Create temperature schedule function.
+    
+    Note: Temperature is now only applied for first 8 moves in self-play.
+    This schedule controls the temperature value used during those moves.
+    """
     def get_temperature(iteration: int, total_iterations: int) -> float:
-        progress = iteration / total_iterations
-        if progress < 0.3:
-            return temp_start
-        elif progress < 0.7:
-            return (temp_start + temp_end) / 2
-        else:
-            return temp_end
+        # Use constant temperature=1.0 for exploration in first 8 moves
+        # After 8 moves, greedy selection is used regardless of this value
+        return 1.0
     return get_temperature
 
 

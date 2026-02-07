@@ -47,9 +47,7 @@ def create_prediction_agent(model_path=None, network=None, num_simulations=400,
     # DTW Calculator 생성 (endgame threshold=15 고정)
     dtw_calculator = DTWCalculator(
         use_cache=True,
-        endgame_threshold=15,
-        midgame_threshold=45,
-        shallow_depth=8
+        endgame_threshold=15
     )
     
     # DTW 캐시 로드 (있으면)
