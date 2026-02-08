@@ -100,8 +100,6 @@ class TablebaseSolver:
             target_sub = (move[0] % 3) * 3 + (move[1] % 3)
             target_sub_r, target_sub_c = move[0] % 3, move[1] % 3
             
-            child_hash = self._hash_board(child)
-            
             # Check if child is terminal first
             if child.winner is not None:
                 child_result = -1 if child.winner != 3 else 0
@@ -110,10 +108,12 @@ class TablebaseSolver:
                 child_result, child_dtw = 0, 0
             elif child.completed_boards[target_sub_r][target_sub_c] != 0:
                 # Target sub-board is completed - "any" constraint
+                child_hash = self._hash_board(child)
                 child_result, child_dtw = self._lookup_best_constraint(child_hash, child)
             else:
-                # Specific constraint
-                child_result, child_dtw = self._lookup_constraint(child_hash, target_sub, child)
+                # Specific constraint - use canonical hash + transformed constraint
+                child_hash, canonical_constraint = self._hash_board_with_constraint(child, target_sub)
+                child_result, child_dtw = self._lookup_constraint(child_hash, canonical_constraint, child)
             
             # Negate for perspective switch
             value = -child_result
@@ -186,8 +186,11 @@ class TablebaseSolver:
         [8, 5, 2, 7, 4, 1, 6, 3, 0],  # flip anti-diagonal
     ]
     
-    def _hash_board(self, board: Board) -> int:
-        """Create hash for board position with D4 symmetry + X/O flip normalization."""
+    def _hash_board_with_constraint(self, board: Board, constraint: int) -> Tuple[int, int]:
+        """Create canonical hash and transformed constraint.
+        
+        Returns: (hash, canonical_constraint)
+        """
         # Build raw sub_data
         raw_sub_data = []
         for sub_idx in range(9):
@@ -204,21 +207,30 @@ class TablebaseSolver:
                 raw_sub_data.append((0, x_count, o_count))
         
         # Try all 8 D4 symmetries × 2 X/O flips = 16 combinations
+        # Track (data, transformed_constraint) pairs
         candidates = []
         for perm in self.D4_TRANSFORMS:
             # Apply symmetry permutation
             sym_data = tuple(raw_sub_data[perm[i]] for i in range(9))
-            candidates.append(sym_data)
+            # Transform constraint: find where original constraint maps to
+            sym_constraint = perm.index(constraint) if constraint >= 0 else -1
+            candidates.append((sym_data, sym_constraint))
             
-            # Try with X/O flip
+            # Try with X/O flip (constraint unchanged by X/O flip)
             flipped_data = tuple(
                 (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
                 for s, x, o in sym_data
             )
-            candidates.append(flipped_data)
+            candidates.append((flipped_data, sym_constraint))
         
-        # Return hash of minimum (canonical)
-        return hash(min(candidates))
+        # Find minimum (canonical) and return hash + constraint
+        canonical_data, canonical_constraint = min(candidates)
+        return hash(canonical_data), canonical_constraint
+    
+    def _hash_board(self, board: Board) -> int:
+        """Create hash for board position (without constraint transformation)."""
+        h, _ = self._hash_board_with_constraint(board, -1)
+        return h
 
 
 class ReachabilityChecker:
