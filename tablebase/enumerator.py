@@ -246,19 +246,9 @@ class PositionEnumerator:
             x_remaining -= x_here
             o_remaining -= o_here
             
-            cells = [1] * x_here + [2] * o_here + [0] * empty_count
-            import random
-            
-            # Try multiple shuffles to find a valid configuration
-            found_valid = False
-            for attempt in range(100):
-                random.seed(sub_idx * 1000 + empty_count + x_here + attempt * 7)
-                random.shuffle(cells)
-                if self._check_cells_winner(cells) == 0:
-                    found_valid = True
-                    break
-            
-            if not found_valid:
+            # Find first valid cell configuration (no winner)
+            cells = self._find_valid_cell_config(x_here, o_here, empty_count)
+            if cells is None:
                 return None
             
             for j, val in enumerate(cells):
@@ -284,6 +274,23 @@ class PositionEnumerator:
             if cells[a] == cells[b] == cells[c] != 0:
                 return cells[a]
         return 0
+    
+    def _find_valid_cell_config(self, x_count: int, o_count: int, empty_count: int) -> List[int]:
+        """Find first valid 9-cell configuration with no winner."""
+        from itertools import permutations
+        
+        cells = [1] * x_count + [2] * o_count + [0] * empty_count
+        
+        # Try all unique permutations (use set to avoid duplicates)
+        seen = set()
+        for perm in permutations(cells):
+            if perm in seen:
+                continue
+            seen.add(perm)
+            if self._check_cells_winner(list(perm)) == 0:
+                return list(perm)
+        
+        return None
     
     def _check_subboard_winner(self, board: Board, sub_r: int, sub_c: int) -> int:
         """Check winner of a sub-board. Returns 0/1/2/3."""
