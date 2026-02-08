@@ -73,22 +73,8 @@ class PositionEnumerator:
                 if board is None:
                     continue
                 
-                # Step 3: Dedup using (meta, x_counts, o_counts) per sub-board
-                # This captures the essential position without symmetry issues
-                sub_data = []
-                for sub_idx in range(9):
-                    sub_r, sub_c = sub_idx // 3, sub_idx % 3
-                    state = board.completed_boards[sub_r][sub_c]
-                    if state != 0:
-                        sub_data.append((state, 0, 0))
-                    else:
-                        x_count = sum(1 for dr in range(3) for dc in range(3) 
-                                     if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
-                        o_count = sum(1 for dr in range(3) for dc in range(3) 
-                                     if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
-                        sub_data.append((0, x_count, o_count))
-                
-                dedup_key = (tuple(sub_data), getattr(board, 'constraint', -1))
+                # Step 3: Dedup using normalized (meta, x_counts, o_counts) with X/O flip
+                dedup_key = self._compute_normalized_key(board)
                 if dedup_key in self.seen_hashes:
                     self.stats['duplicate'] += 1
                     continue
@@ -114,6 +100,67 @@ class PositionEnumerator:
         
         if pbar is not None:
             pbar.close()
+    
+    def _compute_normalized_key(self, board: Board) -> Tuple:
+        """
+        Compute normalized dedup key with X/O flip.
+        
+        Normalization:
+        1. If o_wins > x_wins: flip
+        2. If equal, first non-empty cell in OPEN sub-boards should be X
+        """
+        # Count X_WIN and O_WIN
+        x_wins = 0
+        o_wins = 0
+        for r in range(3):
+            for c in range(3):
+                if board.completed_boards[r][c] == 1:
+                    x_wins += 1
+                elif board.completed_boards[r][c] == 2:
+                    o_wins += 1
+        
+        # Determine if we need to flip
+        need_flip = False
+        if o_wins > x_wins:
+            need_flip = True
+        elif o_wins == x_wins:
+            # Check first non-empty cell in OPEN sub-boards
+            for sub_idx in range(9):
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                if board.completed_boards[sub_r][sub_c] == 0:  # OPEN
+                    for cell_idx in range(9):
+                        dr, dc = cell_idx // 3, cell_idx % 3
+                        cell = board.boards[sub_r*3 + dr][sub_c*3 + dc]
+                        if cell == 1:  # X first - no flip
+                            break
+                        elif cell == 2:  # O first - flip
+                            need_flip = True
+                            break
+                    break
+        
+        # Build sub_data with optional flip
+        sub_data = []
+        for sub_idx in range(9):
+            sub_r, sub_c = sub_idx // 3, sub_idx % 3
+            state = board.completed_boards[sub_r][sub_c]
+            
+            if state != 0:
+                # Completed - flip state if needed (1<->2, 3 stays)
+                if need_flip and state in (1, 2):
+                    state = 3 - state
+                sub_data.append((state, 0, 0))
+            else:
+                # OPEN - count X and O
+                x_count = sum(1 for dr in range(3) for dc in range(3) 
+                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
+                o_count = sum(1 for dr in range(3) for dc in range(3) 
+                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
+                # Flip counts if needed
+                if need_flip:
+                    x_count, o_count = o_count, x_count
+                sub_data.append((0, x_count, o_count))
+        
+        return (tuple(sub_data), getattr(board, 'constraint', -1))
     
     def _enumerate_meta_boards(self) -> Generator[Tuple[Tuple[int, ...], int, int], None, None]:
         """
