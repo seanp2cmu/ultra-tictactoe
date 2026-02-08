@@ -243,10 +243,24 @@ class TablebaseSolver:
         [8, 5, 2, 7, 4, 1, 6, 3, 0],  # flip anti-diagonal
     ]
     
+    # Precompute inverse maps for O(1) constraint transformation
+    # INV_TRANSFORMS[perm_id][original_pos] = new_pos after transform
+    INV_TRANSFORMS = [[perm.index(i) for i in range(9)] for perm in D4_TRANSFORMS]
+    
+    @staticmethod
+    def pack_canonical_key(canonical_data: Tuple) -> int:
+        """Pack canonical tuple into deterministic 90-bit integer for storage.
+        Each sub-board: (state:2bit, x_count:4bit, o_count:4bit) = 10 bits
+        """
+        result = 0
+        for state, x_count, o_count in canonical_data:
+            result = (result << 10) | (state << 8) | (x_count << 4) | o_count
+        return result
+    
     def _hash_board_with_constraint(self, board: Board, constraint: int) -> Tuple[int, int]:
         """Create canonical hash and transformed constraint.
         
-        Returns: (hash, canonical_constraint)
+        Returns: (deterministic_packed_key, canonical_constraint)
         """
         # Build raw sub_data using cached sub_counts (O(9) instead of O(81))
         raw_sub_data = []
@@ -260,26 +274,31 @@ class TablebaseSolver:
                 x_count, o_count = board.sub_counts[sub_idx]
                 raw_sub_data.append((0, x_count, o_count))
         
-        # Try all 8 D4 symmetries × 2 X/O flips = 16 combinations
-        # Track (data, transformed_constraint) pairs
-        candidates = []
-        for perm in self.D4_TRANSFORMS:
-            # Apply symmetry permutation
-            sym_data = tuple(raw_sub_data[perm[i]] for i in range(9))
-            # Transform constraint: find where original constraint maps to
-            sym_constraint = perm.index(constraint) if constraint >= 0 else -1
-            candidates.append((sym_data, sym_constraint))
+        # Find minimum canonical form using tuple comparison (fast)
+        min_data = None
+        min_constraint = -1
+        
+        for perm_id, perm in enumerate(self.D4_TRANSFORMS):
+            inv = self.INV_TRANSFORMS[perm_id]
+            sym_constraint = inv[constraint] if constraint >= 0 else -1
             
-            # Try with X/O flip (constraint unchanged by X/O flip)
+            # Apply permutation
+            sym_data = tuple(raw_sub_data[perm[i]] for i in range(9))
+            if min_data is None or (sym_data, sym_constraint) < (min_data, min_constraint):
+                min_data = sym_data
+                min_constraint = sym_constraint
+            
+            # X/O flip: state 1<->2, swap x_count/o_count
             flipped_data = tuple(
                 (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
                 for s, x, o in sym_data
             )
-            candidates.append((flipped_data, sym_constraint))
+            if (flipped_data, sym_constraint) < (min_data, min_constraint):
+                min_data = flipped_data
+                min_constraint = sym_constraint
         
-        # Find minimum (canonical) and return hash + constraint
-        canonical_data, canonical_constraint = min(candidates)
-        return hash(canonical_data), canonical_constraint
+        # Pack only at the end for deterministic storage key
+        return self.pack_canonical_key(min_data), min_constraint
     
     def _hash_board(self, board: Board) -> int:
         """Create hash for board position (without constraint transformation)."""

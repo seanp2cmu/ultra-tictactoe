@@ -234,13 +234,19 @@ class TablebaseBuilder:
         return True
     
     def _mark_children_reached(self, board: Board):
-        """Mark all child positions as reached."""
+        """Mark all child positions as reached (using make/undo, no clone)."""
         moves = board.get_legal_moves()
-        for move in moves:
-            child = board.clone()
-            child.make_move(move[0], move[1])
-            child_hash = self.solver._hash_board(child)
+        prev_last_move = board.last_move
+        prev_winner = board.winner
+        
+        for r, c in moves:
+            sub_r, sub_c = r // 3, c // 3
+            prev_completed = board.completed_boards[sub_r][sub_c]
+            
+            board.make_move(r, c, validate=False)
+            child_hash = self.solver._hash_board(board)
             self.reached_hashes.add(child_hash)
+            board.undo_move(r, c, prev_completed, prev_winner, prev_last_move)
     
     def _prune_unreachable(self, level: int, verbose: bool = True):
         """Remove unreachable positions from a level."""
@@ -250,9 +256,12 @@ class TablebaseBuilder:
                 to_delete.append(h)
         
         for h in to_delete:
+            # Remove all constraints for this hash from seen_hashes
+            if h in self.positions:
+                for constraint in self.positions[h]:
+                    self.seen_hashes.discard((h, constraint))
             del self.positions[h]
             del self.position_levels[h]
-            self.seen_hashes.discard(h)
         
         if verbose and to_delete:
             print(f"  🗑 Pruned {len(to_delete)} unreachable positions from level {level}")

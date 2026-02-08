@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from game import Board
 from .local_boards import OPEN_BOARDS, _make_key as local_key
-from .meta_boards import META_BOARDS, D4_TRANSFORMS, _make_key as meta_key
+from .meta_boards import META_BOARDS, D4_TRANSFORMS, INV_TRANSFORMS, pack_sub_data, _make_key as meta_key
 
 
 class PositionEnumerator:
@@ -91,27 +91,38 @@ class PositionEnumerator:
                 open_idx += 1
         return tuple(raw_data)
     
-    def _get_canonical_keys(self, raw_data: Tuple, open_indices: List[int]) -> List[Tuple[int, Tuple]]:
-        """Return (constraint, canonical_key) pairs for dedup."""
-        # Step 3: Precompute all 16 transformed data ONCE (not per constraint)
-        transformed = []
-        for perm in D4_TRANSFORMS:
+    def _get_canonical_keys(self, raw_data: Tuple, open_indices: List[int]) -> List[Tuple[int, Tuple[int, int]]]:
+        """Return (constraint, (packed_key, canonical_constraint)) pairs for dedup.
+        
+        Uses tuple comparison (fast) + INV_TRANSFORMS for O(1) constraint mapping.
+        """
+        # Precompute all 16 transformed tuples ONCE
+        transformed = []  # [(tuple_data, perm_id), ...]
+        for perm_id, perm in enumerate(D4_TRANSFORMS):
             sym_data = tuple(raw_data[perm[i]] for i in range(9))
-            transformed.append((sym_data, perm))
+            transformed.append((sym_data, perm_id))
             
             flipped = tuple(
                 (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
                 for s, x, o in sym_data
             )
-            transformed.append((flipped, perm))
+            transformed.append((flipped, perm_id))
         
         seen_canonical = set()
         result = []
         
         for constraint in open_indices:
-            # Just lookup constraint mapping for each precomputed transform
-            candidates = [(data, perm.index(constraint)) for data, perm in transformed]
-            canonical = min(candidates)
+            # Find min canonical using tuple comparison + O(1) inverse lookup
+            min_data = None
+            min_constraint = -1
+            for tuple_data, perm_id in transformed:
+                sym_constraint = INV_TRANSFORMS[perm_id][constraint]
+                if min_data is None or (tuple_data, sym_constraint) < (min_data, min_constraint):
+                    min_data = tuple_data
+                    min_constraint = sym_constraint
+            
+            # Pack only for storage key
+            canonical = (pack_sub_data(min_data), min_constraint)
             if canonical not in seen_canonical:
                 seen_canonical.add(canonical)
                 result.append((constraint, canonical))

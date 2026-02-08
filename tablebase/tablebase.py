@@ -189,15 +189,34 @@ class CompactTablebase:
         if path and os.path.exists(path):
             self.load(path)
     
-    def build_from_dict(self, positions: Dict[int, Tuple[int, int]]):
-        """Build compact representation from position dict."""
-        n = len(positions)
+    def build_from_dict(self, positions: Dict):
+        """Build compact representation from position dict.
         
+        Handles nested dict: positions[hash] = {constraint: (result, dtw, move)}
+        Stores best result per hash (min dtw among winning, or best available).
+        """
+        # Flatten nested dict: pick best result per hash
+        flattened = {}
+        for h, constraint_dict in positions.items():
+            best_result = -2
+            best_dtw = 999
+            for constraint, entry in constraint_dict.items():
+                if len(entry) == 3:
+                    r, d, _ = entry  # (result, dtw, move)
+                else:
+                    r, d = entry  # (result, dtw)
+                # Prefer wins, then draws, then losses; minimize dtw
+                if r > best_result or (r == best_result and d < best_dtw):
+                    best_result = r
+                    best_dtw = d
+            flattened[h] = (best_result, best_dtw)
+        
+        n = len(flattened)
         self.hashes = np.zeros(n, dtype=np.uint64)
         self.results = np.zeros(n, dtype=np.int8)
         self.dtws = np.zeros(n, dtype=np.uint8)
         
-        for i, (h, (r, d)) in enumerate(positions.items()):
+        for i, (h, (r, d)) in enumerate(flattened.items()):
             self.hashes[i] = h & 0xFFFFFFFFFFFFFFFF  # Ensure positive
             self.results[i] = r
             self.dtws[i] = min(d, 255)

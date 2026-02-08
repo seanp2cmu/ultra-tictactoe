@@ -35,6 +35,19 @@ D4_TRANSFORMS = [
     [8, 5, 2, 7, 4, 1, 6, 3, 0],  # flip anti-diagonal
 ]
 
+# Precompute inverse maps for O(1) constraint transformation
+INV_TRANSFORMS = [[perm.index(i) for i in range(9)] for perm in D4_TRANSFORMS]
+
+
+def pack_sub_data(sub_data) -> int:
+    """Pack 9 sub-boards into deterministic 90-bit integer.
+    Each sub-board: (state:2bit, x_count:4bit, o_count:4bit) = 10 bits
+    """
+    result = 0
+    for state, x_count, o_count in sub_data:
+        result = (result << 10) | (state << 8) | (x_count << 4) | o_count
+    return result
+
 
 def _make_key(num_open: int, empty_cells: int) -> str:
     return f"{num_open}_{empty_cells}"
