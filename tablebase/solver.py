@@ -175,19 +175,51 @@ class TablebaseSolver:
         return (best_result, best_dtw)
     
     def _hash_board(self, board: Board) -> int:
-        """Create hash for board position (without constraint).
+        """Create hash for board position with X/O normalization.
         
-        For OPEN sub-boards: hash (x_count, o_count) instead of actual cell positions
-        For COMPLETED sub-boards: hash state only (cells ignored)
+        Normalization: flip X/O so that:
+        1. If o_wins > x_wins in completed_boards: flip
+        2. If equal, first non-empty cell in OPEN sub-boards should be X
         """
-        # For each sub-board, store (x_count, o_count) if OPEN, or state if completed
+        # Count X_WIN and O_WIN
+        x_wins = 0
+        o_wins = 0
+        for r in range(3):
+            for c in range(3):
+                if board.completed_boards[r][c] == 1:
+                    x_wins += 1
+                elif board.completed_boards[r][c] == 2:
+                    o_wins += 1
+        
+        # Determine if we need to flip
+        need_flip = False
+        if o_wins > x_wins:
+            need_flip = True
+        elif o_wins == x_wins:
+            # Check first non-empty cell in OPEN sub-boards
+            for sub_idx in range(9):
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                if board.completed_boards[sub_r][sub_c] == 0:  # OPEN
+                    for cell_idx in range(9):
+                        dr, dc = cell_idx // 3, cell_idx % 3
+                        cell = board.boards[sub_r*3 + dr][sub_c*3 + dc]
+                        if cell == 1:  # X first - no flip
+                            break
+                        elif cell == 2:  # O first - flip
+                            need_flip = True
+                            break
+                    break
+        
+        # Build sub_data with optional flip
         sub_data = []
         for sub_idx in range(9):
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
             state = board.completed_boards[sub_r][sub_c]
             
             if state != 0:
-                # Completed - just store state
+                # Completed - flip state if needed (1<->2, 3 stays)
+                if need_flip and state in (1, 2):
+                    state = 3 - state
                 sub_data.append((state, 0, 0))
             else:
                 # OPEN - count X and O
@@ -200,9 +232,11 @@ class TablebaseSolver:
                             x_count += 1
                         elif cell == 2:
                             o_count += 1
+                # Flip counts if needed
+                if need_flip:
+                    x_count, o_count = o_count, x_count
                 sub_data.append((0, x_count, o_count))
         
-        # Don't include current_player - it's implied by constraint and game flow
         return hash(tuple(sub_data))
 
 
