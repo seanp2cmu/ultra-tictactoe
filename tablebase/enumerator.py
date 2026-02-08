@@ -240,20 +240,18 @@ class PositionEnumerator:
             
             # Distribute empty cells and pieces
             for empty_dist in self._distribute_empty(num_open, self.empty_cells):
-                base_board = self._create_board_with_counts(meta, open_indices, empty_dist, x_total, o_total)
-                if base_board is None:
-                    continue
-                
-                # Enumerate only specific constraints (OPEN boards)
-                # "any" (-1) is handled at lookup time by taking best of all OPEN constraints
-                for constraint in open_indices:
-                    board = base_board.clone()
-                    board.constraint = constraint
-                    # Set last_move so get_legal_moves() returns moves for this constraint
-                    # last_move = (r, c) where (r % 3, c % 3) = (constraint // 3, constraint % 3)
-                    sub_r, sub_c = constraint // 3, constraint % 3
-                    board.last_move = (sub_r, sub_c)  # Any move that sends to this sub-board
-                    yield board
+                # Enumerate ALL valid X/O distributions
+                for base_board in self._create_boards_with_counts(meta, open_indices, empty_dist, x_total, o_total):
+                    # Enumerate only specific constraints (OPEN boards)
+                    # "any" (-1) is handled at lookup time by taking best of all OPEN constraints
+                    for constraint in open_indices:
+                        board = base_board.clone()
+                        board.constraint = constraint
+                        # Set last_move so get_legal_moves() returns moves for this constraint
+                        # last_move = (r, c) where (r % 3, c % 3) = (constraint // 3, constraint % 3)
+                        sub_r, sub_c = constraint // 3, constraint % 3
+                        board.last_move = (sub_r, sub_c)  # Any move that sends to this sub-board
+                        yield board
     
     def _distribute_empty(self, num_open: int, total_empty: int) -> Generator[Tuple[int, ...], None, None]:
         """
@@ -278,60 +276,102 @@ class PositionEnumerator:
             for rest in self._distribute_empty(num_open - 1, total_empty - first):
                 yield (first,) + rest
     
-    def _create_board_with_counts(self, meta: Tuple[int, ...], open_indices: List[int], 
-                                   empty_dist: Tuple[int, ...], x_total: int, o_total: int) -> Board:
-        """Create a board with exact X and O counts in OPEN boards."""
-        board = Board()
+    def _create_boards_with_counts(self, meta: Tuple[int, ...], open_indices: List[int], 
+                                    empty_dist: Tuple[int, ...], x_total: int, o_total: int) -> Generator[Board, None, None]:
+        """Create boards with all valid X/O distributions across OPEN sub-boards."""
+        num_open = len(open_indices)
+        filled_per_sub = [9 - empty_dist[i] for i in range(num_open)]
         
-        # Distribute X and O across OPEN boards proportionally
-        x_remaining = x_total
-        o_remaining = o_total
+        # Generate all valid (x_count, o_count) per sub-board
+        # Constraint: sum(x_counts) = x_total, sum(o_counts) = o_total
+        # For each sub: 0 <= x <= filled, 0 <= o <= filled, x + o = filled
         
-        for i, sub_idx in enumerate(open_indices):
-            sub_r, sub_c = sub_idx // 3, sub_idx % 3
-            empty_count = empty_dist[i]
-            filled = 9 - empty_count
+        def distribute_x(idx: int, x_remaining: int) -> Generator[Tuple[int, ...], None, None]:
+            """Recursively distribute x_remaining across sub-boards starting at idx."""
+            if idx == num_open:
+                if x_remaining == 0:
+                    yield ()
+                return
             
-            # Calculate pieces for this sub-board
-            if i == len(open_indices) - 1:
-                # Last board gets remaining
-                x_here = x_remaining
-                o_here = o_remaining
-            else:
-                # Proportional distribution
-                x_here = min(x_remaining, (filled + 1) // 2)
+            filled = filled_per_sub[idx]
+            o_remaining = o_total - (x_total - x_remaining)  # O's already placed
+            
+            # x_here can range from max(0, filled - o_remaining_for_rest) to min(filled, x_remaining)
+            o_available_for_rest = sum(filled_per_sub[j] for j in range(idx + 1, num_open))
+            min_x = max(0, filled - (o_total - (x_total - x_remaining - 0)))  # ensure o_here >= 0
+            
+            for x_here in range(max(0, x_remaining - sum(filled_per_sub[j] for j in range(idx + 1, num_open))),
+                                min(filled, x_remaining) + 1):
                 o_here = filled - x_here
-                if o_here > o_remaining:
-                    o_here = o_remaining
-                    x_here = filled - o_here
-            
-            if x_here < 0 or o_here < 0 or x_here + o_here != filled:
-                return None
-            
-            x_remaining -= x_here
-            o_remaining -= o_here
-            
-            # Find first valid cell configuration (no winner)
-            cells = self._find_valid_cell_config(x_here, o_here, empty_count)
-            if cells is None:
-                return None
-            
-            for j, val in enumerate(cells):
-                r = sub_r * 3 + j // 3
-                c = sub_c * 3 + j % 3
-                board.boards[r][c] = val
+                # Check o_here is valid
+                if o_here < 0:
+                    continue
+                o_used_so_far = x_total - x_remaining  # This is wrong, let me fix
+                
+                for rest in distribute_x(idx + 1, x_remaining - x_here):
+                    yield (x_here,) + rest
         
-        # Set completed boards state
-        for sub_idx in range(9):
-            sub_r, sub_c = sub_idx // 3, sub_idx % 3
-            board.completed_boards[sub_r][sub_c] = meta[sub_idx]
+        # Simpler approach: enumerate x_counts for each sub-board
+        def gen_x_distributions(remaining_x: int, remaining_subs: List[int]) -> Generator[Tuple[int, ...], None, None]:
+            if not remaining_subs:
+                if remaining_x == 0:
+                    yield ()
+                return
+            
+            filled = filled_per_sub[remaining_subs[0]]
+            # x_here: min is 0 or (remaining_x - sum of max possible for rest)
+            # max is min(filled, remaining_x)
+            rest_max_x = sum(filled_per_sub[i] for i in remaining_subs[1:])
+            min_x_here = max(0, remaining_x - rest_max_x)
+            max_x_here = min(filled, remaining_x)
+            
+            for x_here in range(min_x_here, max_x_here + 1):
+                for rest in gen_x_distributions(remaining_x - x_here, remaining_subs[1:]):
+                    yield (x_here,) + rest
         
-        # diff = x_total - o_total, already validated
-        board.current_player = 1 if x_total == o_total else 2
-        board.winner = None
-        
-        # Return base board - caller will set last_move for each constraint
-        return board
+        for x_dist in gen_x_distributions(x_total, list(range(num_open))):
+            # Compute o_dist from x_dist (o_here = filled - x_here)
+            o_dist = tuple(filled_per_sub[i] - x_dist[i] for i in range(num_open))
+            
+            # Verify o_total matches
+            if sum(o_dist) != o_total:
+                continue
+            
+            # Verify no negative
+            if any(o < 0 for o in o_dist):
+                continue
+            
+            # Create board with this distribution
+            board = Board()
+            valid = True
+            
+            for i, sub_idx in enumerate(open_indices):
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                x_here, o_here = x_dist[i], o_dist[i]
+                empty_here = empty_dist[i]
+                
+                cells = self._find_valid_cell_config(x_here, o_here, empty_here)
+                if cells is None:
+                    valid = False
+                    break
+                
+                for j, val in enumerate(cells):
+                    r = sub_r * 3 + j // 3
+                    c = sub_c * 3 + j % 3
+                    board.boards[r][c] = val
+            
+            if not valid:
+                continue
+            
+            # Set completed boards state
+            for sub_idx in range(9):
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                board.completed_boards[sub_r][sub_c] = meta[sub_idx]
+            
+            board.current_player = 1 if x_total == o_total else 2
+            board.winner = None
+            
+            yield board
     
     def _check_cells_winner(self, cells: List[int]) -> int:
         """Check winner of 9-cell sub-board."""
