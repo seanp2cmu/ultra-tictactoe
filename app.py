@@ -762,9 +762,38 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
             info = get_models_list()
             return f"**Total Models:** {info['count']}\n\n**Models:**\n" + "\n".join(f"- {m}" for m in info['models'])
         
+        def reload_models():
+            """Reload all models from HuggingFace and local directory"""
+            global models, available_models
+            
+            old_count = len(models)
+            
+            # Clear existing models
+            models.clear()
+            
+            # Reload from local
+            load_models_from_local()
+            
+            # Reload from HF
+            if HF_REPO_ID:
+                load_models_from_hf(HF_REPO_ID)
+            
+            new_count = len(models)
+            available_models = list(models.keys())
+            
+            info = get_models_list()
+            status = f"🔄 **Reloaded!** {old_count} → {new_count} models\n\n"
+            status += f"**Total Models:** {info['count']}\n\n**Models:**\n"
+            status += "\n".join(f"- {m}" for m in info['models'])
+            
+            return status, gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models)
+        
         models_output = gr.Markdown(show_models())
-        refresh_btn = gr.Button("Refresh Models")
-        refresh_btn.click(fn=show_models, outputs=models_output)
+        refresh_btn = gr.Button("🔄 Reload Models from HF", variant="primary")
+        refresh_btn.click(
+            fn=reload_models, 
+            outputs=[models_output, model_dropdown, model1_dropdown, model2_dropdown, baseline_model_dropdown, model_dropdown]
+        )
     
     with gr.Tab("API"):
         gr.Markdown("""
