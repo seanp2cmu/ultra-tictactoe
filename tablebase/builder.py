@@ -55,9 +55,11 @@ class TablebaseBuilder:
         
         self.solver = TablebaseSolver(max_depth=30, base_tablebase=base_positions)
         
-        # Storage - hash -> (result, dtw, best_move)
-        self.positions: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
-        self.seen_hashes: Set[int] = set()
+        # Storage - hash -> {constraint: (result, dtw, best_move)}
+        # Share dict with solver.cache so lookups work during build
+        self.positions: Dict[int, Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]]] = {}
+        self.solver.cache = self.positions  # Share reference
+        self.seen_hashes: Set[Tuple[int, int]] = set()  # (hash, constraint) pairs
         
         # Track which empty counts are complete
         self.completed_empty: Set[int] = set()
@@ -94,9 +96,17 @@ class TablebaseBuilder:
                 with open(self.save_path, 'rb') as f:
                     data = pickle.load(f)
                 self.positions = data.get('positions', {})
-                self.seen_hashes = set(self.positions.keys())
+                # Rebuild seen_hashes as (hash, constraint) pairs
+                self.seen_hashes = set()
+                for h, constraints in self.positions.items():
+                    for c in constraints:
+                        self.seen_hashes.add((h, c))
                 self.stats = defaultdict(int, data.get('stats', {}))
                 self.completed_empty = set(data.get('completed_empty', []))
+                
+                # Share positions with solver cache for child lookups
+                self.solver.cache = self.positions
+                
                 print(f"✓ Loaded existing tablebase: {len(self.positions)} positions")
                 if self.completed_empty:
                     print(f"  Completed empty counts: {sorted(self.completed_empty)}")
