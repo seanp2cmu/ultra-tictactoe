@@ -94,6 +94,51 @@ class BoardSymmetry:
     def get_canonical_hash(board) -> bytes:
         return BoardSymmetry.get_canonical_bytes(board)
     
+    @staticmethod
+    def swap_xo(board: Board) -> Board:
+        """
+        Create a new board with X and O swapped.
+        Used for X-O symmetry deduplication.
+        """
+        swapped = board.clone()
+        
+        # Swap pieces on board (1 <-> 2)
+        for r in range(9):
+            for c in range(9):
+                if swapped.boards[r][c] == 1:
+                    swapped.boards[r][c] = 2
+                elif swapped.boards[r][c] == 2:
+                    swapped.boards[r][c] = 1
+        
+        # Swap completed_boards (1 <-> 2, keep 0 and 3)
+        for r in range(3):
+            for c in range(3):
+                if swapped.completed_boards[r][c] == 1:
+                    swapped.completed_boards[r][c] = 2
+                elif swapped.completed_boards[r][c] == 2:
+                    swapped.completed_boards[r][c] = 1
+        
+        # Swap current player
+        swapped.current_player = 3 - swapped.current_player
+        
+        return swapped
+    
+    @staticmethod
+    def get_canonical_hash_with_swap(board: Board) -> bytes:
+        """
+        Get canonical hash considering both D4 symmetry AND X-O swap.
+        Returns min(canonical(board), canonical(swap_xo(board))).
+        
+        This ensures:
+        - Storage: only 1 entry per equivalence class
+        - Lookup: compute same hash, 1 dict lookup
+        """
+        original_hash = BoardSymmetry.get_canonical_bytes(board)
+        swapped = BoardSymmetry.swap_xo(board)
+        swapped_hash = BoardSymmetry.get_canonical_bytes(swapped)
+        
+        return min(original_hash, swapped_hash)
+    
     # Transform indices for policy vector (81 cells flattened)
     _TRANSFORMS = None
     

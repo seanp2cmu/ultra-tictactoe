@@ -56,7 +56,6 @@ class PositionEnumerator:
             'generated': 0,
             'valid_structure': 0,
             'duplicate': 0,
-            'swap_duplicate': 0,
             'reachable': 0,
             'unreachable': 0
         }
@@ -85,16 +84,10 @@ class PositionEnumerator:
                     continue
                 
                 # Step 3: Symmetry dedup (D4 + X-O swap)
-                canonical = BoardSymmetry.get_canonical_hash(board)
+                # Use min(original, swapped) canonical hash for both storage and lookup
+                canonical = BoardSymmetry.get_canonical_hash_with_swap(board)
                 if canonical in self.seen_hashes:
                     self.stats['duplicate'] += 1
-                    continue
-                
-                # X-O swap dedup: check if swapped version exists
-                swapped = self._swap_xo(board)
-                swap_canonical = BoardSymmetry.get_canonical_hash(swapped)
-                if swap_canonical in self.seen_hashes:
-                    self.stats['swap_duplicate'] += 1
                     continue
                 
                 self.stats['valid_structure'] += 1
@@ -172,34 +165,6 @@ class PositionEnumerator:
             return False
         
         return True
-    
-    def _swap_xo(self, board: Board) -> Board:
-        """
-        Create a new board with X and O swapped.
-        Used for deduplication (X-O symmetric positions).
-        """
-        swapped = board.clone()
-        
-        # Swap pieces on board
-        for r in range(9):
-            for c in range(9):
-                if swapped.boards[r][c] == 1:
-                    swapped.boards[r][c] = 2
-                elif swapped.boards[r][c] == 2:
-                    swapped.boards[r][c] = 1
-        
-        # Swap completed_boards
-        for r in range(3):
-            for c in range(3):
-                if swapped.completed_boards[r][c] == 1:
-                    swapped.completed_boards[r][c] = 2
-                elif swapped.completed_boards[r][c] == 2:
-                    swapped.completed_boards[r][c] = 1
-        
-        # Swap current player
-        swapped.current_player = 3 - swapped.current_player
-        
-        return swapped
     
     def _fill_subboards(self, meta: Tuple[int, ...]) -> Generator[Board, None, None]:
         """
