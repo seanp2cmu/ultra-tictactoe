@@ -5,10 +5,7 @@ Uses BFS from terminal positions with memoization.
 Includes 4-move DFS reachability check to filter illegal positions.
 """
 
-from typing import Dict, Tuple, Optional, Set, List
-from collections import deque
-from functools import lru_cache
-import numpy as np
+from typing import Dict, Tuple, Optional, List
 from game import Board
 
 

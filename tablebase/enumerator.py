@@ -62,12 +62,12 @@ class PositionEnumerator:
         count = 0
         pbar = tqdm(desc="Enumerating") if show_progress else None
         
-        # Step 1: Enumerate all meta-board configurations
-        for meta in self._enumerate_meta_boards():
+        # Step 1: Enumerate all meta-board configurations with valid diff range
+        for meta, min_diff, max_diff in self._enumerate_meta_boards():
             self.stats['meta_boards'] += 1
             
-            # Step 2: For each meta-board, fill sub-boards
-            for board in self._fill_subboards(meta):
+            # Step 2: For each meta-board, fill sub-boards with valid X/O counts
+            for board in self._fill_subboards(meta, min_diff, max_diff):
                 self.stats['generated'] += 1
                 
                 if board is None:
@@ -101,23 +101,21 @@ class PositionEnumerator:
         if pbar is not None:
             pbar.close()
     
-    def _enumerate_meta_boards(self) -> Generator[Tuple[int, ...], None, None]:
+    def _enumerate_meta_boards(self) -> Generator[Tuple[Tuple[int, ...], int, int], None, None]:
         """
-        Enumerate valid meta-board configurations with O(1) pre-filtering.
+        Enumerate valid meta-board configurations with valid diff range.
         
-        Each sub-board can be: OPEN(0), X_WIN(1), O_WIN(2), DRAW(3)
-        Filter out configurations where game is already over or impossible.
+        Yields: (meta, min_valid_diff, max_valid_diff)
+        The diff range tells how many more X than O can be in OPEN boards.
         """
         for meta in product([0, 1, 2, 3], repeat=9):
-            # Check big board winner
             if self._check_meta_winner(meta) != 0:
-                continue  # Game already over
+                continue
             
             num_open = meta.count(0)
             if num_open == 0:
                 continue
             
-            # Check if empty_cells can fit in OPEN boards
             if self.empty_cells > num_open * 8 or self.empty_cells < num_open:
                 continue
             
@@ -125,27 +123,26 @@ class PositionEnumerator:
             o_wins = meta.count(2)
             draws = meta.count(3)
             
-            # X wins - O wins should be reasonable
             if abs(x_wins - o_wins) > 2:
                 continue
             
-            # O(1) pre-filter: check if ANY valid piece distribution exists
-            # OPEN boards: total filled = 9 * num_open - empty_cells
             total_filled = 9 * num_open - self.empty_cells
-            max_open_diff = total_filled   # All X
-            min_open_diff = -total_filled  # All O
             
             # Completed boards diff ranges
             min_completed = x_wins * (-3) + o_wins * (-7) + draws * (-1)
             max_completed = x_wins * 7 + o_wins * 3 + draws * 1
             
-            # Check overlap with [0, 1]
-            total_max = max_open_diff + max_completed
-            total_min = min_open_diff + min_completed
-            if total_max < 0 or total_min > 1:
+            # Valid open_diff: 0 <= open_diff + completed_diff <= 1
+            # open_diff >= -max_completed (to get total >= 0)
+            # open_diff <= 1 - min_completed (to get total <= 1)
+            # Also bounded by: -total_filled <= open_diff <= total_filled
+            min_valid_diff = max(-max_completed, -total_filled)
+            max_valid_diff = min(1 - min_completed, total_filled)
+            
+            if min_valid_diff > max_valid_diff:
                 continue
             
-            yield meta
+            yield (meta, min_valid_diff, max_valid_diff)
     
     def _check_meta_winner(self, meta: Tuple[int, ...]) -> int:
         """Check if meta-board has a winner."""
@@ -154,14 +151,13 @@ class PositionEnumerator:
                 return meta[a]
         return 0
     
-    def _fill_subboards(self, meta: Tuple[int, ...]) -> Generator[Board, None, None]:
+    def _fill_subboards(self, meta: Tuple[int, ...], min_diff: int, max_diff: int) -> Generator[Board, None, None]:
         """
-        Fill sub-boards for a given meta-board configuration.
+        Fill sub-boards using pre-calculated valid diff range.
         
-        For OPEN boards: place actual pieces
-        For completed boards: just set state, no pieces (hash ignores them)
-        
-        Target: exactly self.empty_cells PLAYABLE empty cells
+        Args:
+            meta: Meta-board configuration
+            min_diff, max_diff: Valid range for (X - O) in OPEN boards
         """
         open_indices = [i for i, s in enumerate(meta) if s == 0]
         num_open = len(open_indices)
@@ -169,16 +165,26 @@ class PositionEnumerator:
         if num_open == 0:
             return
         
-        if self.empty_cells > num_open * 8:
-            return
-        if self.empty_cells < num_open:
-            return
+        total_filled = 9 * num_open - self.empty_cells
         
-        # Just distribute empty cells - completed boards are ignored
-        for empty_dist in self._distribute_empty(num_open, self.empty_cells):
-            board = self._create_board_simple(meta, open_indices, empty_dist)
-            if board is not None:
-                yield board
+        # For each valid diff in range, calculate X and O counts
+        for diff in range(min_diff, max_diff + 1):
+            # X - O = diff, X + O = total_filled
+            # X = (total_filled + diff) / 2
+            if (total_filled + diff) % 2 != 0:
+                continue  # Must be integer
+            
+            x_total = (total_filled + diff) // 2
+            o_total = (total_filled - diff) // 2
+            
+            if x_total < 0 or o_total < 0:
+                continue
+            
+            # Distribute empty cells and pieces
+            for empty_dist in self._distribute_empty(num_open, self.empty_cells):
+                board = self._create_board_with_counts(meta, open_indices, empty_dist, x_total, o_total)
+                if board is not None:
+                    yield board
     
     def _distribute_empty(self, num_open: int, total_empty: int) -> Generator[Tuple[int, ...], None, None]:
         """
@@ -203,66 +209,59 @@ class PositionEnumerator:
             for rest in self._distribute_empty(num_open - 1, total_empty - first):
                 yield (first,) + rest
     
-    def _create_board_simple(self, meta: Tuple[int, ...], open_indices: List[int], 
-                              empty_dist: Tuple[int, ...]) -> Board:
-        """Create a board - only OPEN boards have pieces, O(1) validation for completed boards."""
+    def _create_board_with_counts(self, meta: Tuple[int, ...], open_indices: List[int], 
+                                   empty_dist: Tuple[int, ...], x_total: int, o_total: int) -> Board:
+        """Create a board with exact X and O counts in OPEN boards."""
         board = Board()
         
-        open_diff = 0  # X - O for OPEN boards
-        min_completed = 0
-        max_completed = 0
+        # Distribute X and O across OPEN boards proportionally
+        x_remaining = x_total
+        o_remaining = o_total
         
+        for i, sub_idx in enumerate(open_indices):
+            sub_r, sub_c = sub_idx // 3, sub_idx % 3
+            empty_count = empty_dist[i]
+            filled = 9 - empty_count
+            
+            # Calculate pieces for this sub-board
+            if i == len(open_indices) - 1:
+                # Last board gets remaining
+                x_here = x_remaining
+                o_here = o_remaining
+            else:
+                # Proportional distribution
+                x_here = min(x_remaining, (filled + 1) // 2)
+                o_here = filled - x_here
+                if o_here > o_remaining:
+                    o_here = o_remaining
+                    x_here = filled - o_here
+            
+            if x_here < 0 or o_here < 0 or x_here + o_here != filled:
+                return None
+            
+            x_remaining -= x_here
+            o_remaining -= o_here
+            
+            cells = [1] * x_here + [2] * o_here + [0] * empty_count
+            import random
+            random.seed(sub_idx * 1000 + empty_count + x_here)
+            random.shuffle(cells)
+            
+            if self._check_cells_winner(cells) != 0:
+                return None
+            
+            for j, val in enumerate(cells):
+                r = sub_r * 3 + j // 3
+                c = sub_c * 3 + j % 3
+                board.boards[r][c] = val
+        
+        # Set completed boards state
         for sub_idx in range(9):
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
-            state = meta[sub_idx]
-            board.completed_boards[sub_r][sub_c] = state
-            
-            if state == self.OPEN:
-                open_pos = open_indices.index(sub_idx)
-                empty_count = empty_dist[open_pos]
-                filled = 9 - empty_count
-                
-                x_here = (filled + 1) // 2
-                o_here = filled // 2
-                open_diff += x_here - o_here
-                
-                cells = [1] * x_here + [2] * o_here + [0] * empty_count
-                import random
-                random.seed(sub_idx * 1000 + empty_count)
-                random.shuffle(cells)
-                
-                if self._check_cells_winner(cells) != 0:
-                    return None
-                
-                for i, val in enumerate(cells):
-                    r = sub_r * 3 + i // 3
-                    c = sub_c * 3 + i % 3
-                    board.boards[r][c] = val
-            else:
-                # Completed board: accumulate diff range (hardcoded)
-                # X_WIN: [-3, 7], O_WIN: [-7, 3], DRAW: [-1, 1]
-                if state == self.X_WIN:
-                    min_completed += -3
-                    max_completed += 7
-                elif state == self.O_WIN:
-                    min_completed += -7
-                    max_completed += 3
-                else:  # DRAW
-                    min_completed += -1
-                    max_completed += 1
+            board.completed_boards[sub_r][sub_c] = meta[sub_idx]
         
-        # O(1) validation: check if [open_diff + min, open_diff + max] overlaps [0, 1]
-        total_min = open_diff + min_completed
-        total_max = open_diff + max_completed
-        if total_max < 0 or total_min > 1:
-            return None
-        
-        # Set current player (use any valid diff, prefer 0 or 1)
-        if total_min <= 0 <= total_max:
-            board.current_player = 1  # X's turn (diff = 0)
-        else:
-            board.current_player = 2  # O's turn (diff = 1)
-        
+        # diff = x_total - o_total, already validated
+        board.current_player = 1 if x_total == o_total else 2
         board.last_move = None
         board.winner = None
         
