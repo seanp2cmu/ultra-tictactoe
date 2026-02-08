@@ -29,23 +29,24 @@ class TablebaseBuilder:
     2. D4 symmetry reduction (8x storage savings)
     3. 4-move backward DFS reachability filter
     4. BFS + memoization solver
+    5. Build from 1 empty to max_empty (retrograde analysis)
     """
     
     def __init__(
         self,
-        empty_cells: int = 15,
+        max_empty: int = 15,
         save_interval: int = 10000,
         save_path: str = 'tablebase/endgame.pkl',
         base_tablebase_path: Optional[str] = None
     ):
         """
         Args:
-            empty_cells: Target number of empty playable cells
+            max_empty: Maximum number of empty playable cells (builds 1 to max_empty)
             save_interval: Save progress every N positions
             save_path: Path to save tablebase
-            base_tablebase_path: Path to smaller tablebase for incremental building
+            base_tablebase_path: Path to existing tablebase to continue from
         """
-        self.empty_cells = empty_cells
+        self.max_empty = max_empty
         self.save_interval = save_interval
         self.save_path = save_path
         
@@ -57,6 +58,9 @@ class TablebaseBuilder:
         # Storage - hash -> (result, dtw, best_move)
         self.positions: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
         self.seen_hashes: Set[int] = set()
+        
+        # Track which empty counts are complete
+        self.completed_empty: Set[int] = set()
         
         # Stats
         self.stats = defaultdict(int)
@@ -88,47 +92,74 @@ class TablebaseBuilder:
                 self.positions = data.get('positions', {})
                 self.seen_hashes = set(self.positions.keys())
                 self.stats = defaultdict(int, data.get('stats', {}))
+                self.completed_empty = set(data.get('completed_empty', []))
                 print(f"✓ Loaded existing tablebase: {len(self.positions)} positions")
+                if self.completed_empty:
+                    print(f"  Completed empty counts: {sorted(self.completed_empty)}")
             except Exception as e:
                 print(f"⚠ Failed to load existing: {e}")
     
-    def build(self, max_positions: Optional[int] = None, verbose: bool = True):
+    def build(self, max_positions_per_level: Optional[int] = None, verbose: bool = True):
         """
-        Build tablebase using systematic enumeration.
+        Build tablebase using retrograde analysis (1 to max_empty).
         
         Args:
-            max_positions: Stop after this many positions (None = all)
+            max_positions_per_level: Stop after this many positions per empty count (None = all)
             verbose: Show progress
         """
         start_time = time.time()
         start_count = len(self.positions)
         
         print("=" * 60)
-        print(f"Building Tablebase: {self.empty_cells} empty cells")
+        print(f"Building Tablebase: 1 to {self.max_empty} empty cells")
         print("=" * 60)
         print(f"Starting with {start_count} existing positions")
+        if self.completed_empty:
+            print(f"Already completed: {sorted(self.completed_empty)}")
         
-        # Create enumerator
-        enumerator = PositionEnumerator(
-            empty_cells=self.empty_cells,
-            backward_depth=4
-        )
-        
-        positions_processed = 0
+        total_processed = 0
         
         try:
-            for board in enumerator.enumerate(max_positions=max_positions, show_progress=verbose):
-                self._solve_and_store(board)
-                positions_processed += 1
+            # Build from 1 empty to max_empty (retrograde order)
+            for empty_count in range(1, self.max_empty + 1):
+                # Skip if already completed
+                if empty_count in self.completed_empty:
+                    print(f"\n[{empty_count}/{self.max_empty}] Already complete, skipping...")
+                    continue
                 
-                # Periodic save
-                if positions_processed % self.save_interval == 0:
-                    self._save()
-                    if verbose:
-                        print(f"  Saved: {len(self.positions)} positions")
+                print(f"\n{'─' * 60}")
+                print(f"[{empty_count}/{self.max_empty}] Building positions with {empty_count} empty cells")
+                print(f"{'─' * 60}")
+                
+                level_start = len(self.positions)
+                level_processed = 0
+                
+                # Create enumerator for this empty count
+                enumerator = PositionEnumerator(
+                    empty_cells=empty_count,
+                    backward_depth=4
+                )
+                
+                for board in enumerator.enumerate(max_positions=max_positions_per_level, show_progress=verbose):
+                    self._solve_and_store(board)
+                    level_processed += 1
+                    total_processed += 1
+                    
+                    # Periodic save
+                    if total_processed % self.save_interval == 0:
+                        self._save()
+                        if verbose:
+                            print(f"  Saved: {len(self.positions)} positions")
+                
+                # Mark this level as complete
+                self.completed_empty.add(empty_count)
+                self._save()
+                
+                level_new = len(self.positions) - level_start
+                print(f"  Level {empty_count}: +{level_new} positions (total: {len(self.positions)})")
         
         except KeyboardInterrupt:
-            print("\n⚠ Interrupted by user")
+            print("\n⚠ Interrupted by user - progress saved")
         
         finally:
             self._save()
@@ -138,12 +169,14 @@ class TablebaseBuilder:
         
         print(f"\n{'=' * 60}")
         print(f"Build Complete!")
-        print(f"  Positions processed: {positions_processed}")
+        print(f"  Empty range: 1 to {self.max_empty}")
+        print(f"  Completed levels: {sorted(self.completed_empty)}")
+        print(f"  Positions processed: {total_processed}")
         print(f"  New positions: {new_count}")
         print(f"  Total positions: {len(self.positions)}")
         print(f"  Time: {elapsed:.1f}s")
         if elapsed > 0:
-            print(f"  Rate: {positions_processed/elapsed:.1f} pos/s")
+            print(f"  Rate: {total_processed/elapsed:.1f} pos/s")
         print(f"  Solver stats: {dict(self.solver.stats)}")
         print(f"{'=' * 60}")
         
@@ -190,14 +223,16 @@ class TablebaseBuilder:
             pickle.dump({
                 'positions': self.positions,
                 'stats': dict(self.stats),
-                'empty_cells': self.empty_cells
+                'max_empty': self.max_empty,
+                'completed_empty': list(self.completed_empty)
             }, f)
     
     def get_stats(self) -> dict:
         """Get builder statistics."""
         return {
             'total_positions': len(self.positions),
-            'empty_cells': self.empty_cells,
+            'max_empty': self.max_empty,
+            'completed_levels': sorted(self.completed_empty),
             **dict(self.stats)
         }
     
@@ -213,29 +248,29 @@ def main():
     """Build tablebase from command line."""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Build endgame tablebase (systematic enumeration)')
-    parser.add_argument('--empty', type=int, default=10, help='Number of empty cells')
+    parser = argparse.ArgumentParser(description='Build endgame tablebase (retrograde analysis)')
+    parser.add_argument('--max-empty', type=int, default=15, help='Maximum empty cells (builds 1 to max)')
     parser.add_argument('--output', type=str, default='tablebase/endgame.pkl', help='Output path')
-    parser.add_argument('--max', type=int, default=None, help='Max positions to generate')
-    parser.add_argument('--base', type=str, default=None, help='Base tablebase for incremental build')
+    parser.add_argument('--max-per-level', type=int, default=None, help='Max positions per level (for testing)')
+    parser.add_argument('--base', type=str, default=None, help='Continue from existing tablebase')
     
     args = parser.parse_args()
     
     print(f"\n{'=' * 60}")
-    print(f"Systematic Tablebase Builder")
-    print(f"  Empty cells: {args.empty}")
+    print(f"Retrograde Tablebase Builder")
+    print(f"  Empty range: 1 to {args.max_empty}")
     print(f"  Output: {args.output}")
     if args.base:
-        print(f"  Base tablebase: {args.base}")
+        print(f"  Continue from: {args.base}")
     print(f"{'=' * 60}\n")
     
     builder = TablebaseBuilder(
-        empty_cells=args.empty,
+        max_empty=args.max_empty,
         save_path=args.output,
         base_tablebase_path=args.base
     )
     
-    builder.build(max_positions=args.max)
+    builder.build(max_positions_per_level=args.max_per_level)
     
     # Export compact version
     compact_path = args.output.replace('.pkl', '.npz')
