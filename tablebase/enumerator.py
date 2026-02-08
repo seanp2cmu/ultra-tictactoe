@@ -248,10 +248,17 @@ class PositionEnumerator:
             
             cells = [1] * x_here + [2] * o_here + [0] * empty_count
             import random
-            random.seed(sub_idx * 1000 + empty_count + x_here)
-            random.shuffle(cells)
             
-            if self._check_cells_winner(cells) != 0:
+            # Try multiple shuffles to find a valid configuration
+            found_valid = False
+            for attempt in range(100):
+                random.seed(sub_idx * 1000 + empty_count + x_here + attempt * 7)
+                random.shuffle(cells)
+                if self._check_cells_winner(cells) == 0:
+                    found_valid = True
+                    break
+            
+            if not found_valid:
                 return None
             
             for j, val in enumerate(cells):
