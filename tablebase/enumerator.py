@@ -42,15 +42,6 @@ class PositionEnumerator:
     O_WIN = 2   # O won sub-board
     DRAW = 3    # Sub-board is draw (full, no winner)
     
-    # Diff ranges (X - O) for each completed board type
-    # X_WIN: min diff = 3-6 = -3, max diff = 7-0 = +7
-    # O_WIN: min diff = 0-7 = -7, max diff = 6-3 = +3
-    # DRAW: min diff = 4-5 = -1, max diff = 5-4 = +1
-    DIFF_RANGE = {
-        1: (-3, 7),   # X_WIN
-        2: (-7, 3),   # O_WIN
-        3: (-1, 1),   # DRAW
-    }
     
     def __init__(self, empty_cells: int = 15):
         self.empty_cells = empty_cells
@@ -248,10 +239,17 @@ class PositionEnumerator:
                     c = sub_c * 3 + i % 3
                     board.boards[r][c] = val
             else:
-                # Completed board: accumulate diff range
-                diff_min, diff_max = self.DIFF_RANGE[state]
-                min_completed += diff_min
-                max_completed += diff_max
+                # Completed board: accumulate diff range (hardcoded)
+                # X_WIN: [-3, 7], O_WIN: [-7, 3], DRAW: [-1, 1]
+                if state == self.X_WIN:
+                    min_completed += -3
+                    max_completed += 7
+                elif state == self.O_WIN:
+                    min_completed += -7
+                    max_completed += 3
+                else:  # DRAW
+                    min_completed += -1
+                    max_completed += 1
         
         # O(1) validation: check if [open_diff + min, open_diff + max] overlaps [0, 1]
         total_min = open_diff + min_completed
