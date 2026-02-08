@@ -62,6 +62,10 @@ class TablebaseBuilder:
         # Track which empty counts are complete
         self.completed_empty: Set[int] = set()
         
+        # Forward reachability tracking
+        self.position_levels: Dict[int, int] = {}  # hash -> empty_count
+        self.reached_hashes: Set[int] = set()  # hashes reached from higher levels
+        
         # Stats
         self.stats = defaultdict(int)
         
@@ -138,7 +142,7 @@ class TablebaseBuilder:
                 enumerator = PositionEnumerator(empty_cells=empty_count)
                 
                 for board in enumerator.enumerate(max_positions=max_positions_per_level, show_progress=verbose):
-                    self._solve_and_store(board)
+                    self._solve_and_store(board, empty_count)
                     level_processed += 1
                     total_processed += 1
                     
@@ -154,6 +158,11 @@ class TablebaseBuilder:
                 
                 level_new = len(self.positions) - level_start
                 print(f"  Level {empty_count}: +{level_new} positions (total: {len(self.positions)})")
+                
+                # Prune unreachable positions from level (empty_count - 6)
+                prune_level = empty_count - 6
+                if prune_level >= 1:
+                    self._prune_unreachable(prune_level, verbose)
         
         except KeyboardInterrupt:
             print("\n⚠ Interrupted by user - progress saved")
@@ -179,7 +188,7 @@ class TablebaseBuilder:
         
         return self.positions
     
-    def _solve_and_store(self, board: Board) -> bool:
+    def _solve_and_store(self, board: Board, empty_count: int) -> bool:
         """
         Solve position and store in tablebase.
         
@@ -198,14 +207,17 @@ class TablebaseBuilder:
         # Solve position
         result, dtw, best_move = self.solver.solve(board)
         
-        # Validate DTW: should be <= empty_cells
-        empty_count = sum(1 for r in range(9) for c in range(9) 
-                         if board.boards[r][c] == 0 and board.completed_boards[r//3][c//3] == 0)
+        # Validate DTW
         if dtw > empty_count:
             print(f"⚠ DTW validation error: dtw={dtw} > empty={empty_count}")
         
-        # Store result
+        # Store result and track level
         self.positions[board_hash] = (result, dtw, best_move)
+        self.position_levels[board_hash] = empty_count
+        
+        # Mark child positions as reached (for forward reachability)
+        if empty_count >= 2:
+            self._mark_children_reached(board)
         
         # Update stats
         self.stats['positions_solved'] += 1
@@ -217,6 +229,30 @@ class TablebaseBuilder:
             self.stats['draws'] += 1
         
         return True
+    
+    def _mark_children_reached(self, board: Board):
+        """Mark all child positions as reached."""
+        moves = board.get_valid_moves()
+        for move in moves:
+            child = board.clone()
+            child.make_move(move[0], move[1])
+            child_hash = self.solver._hash_board(child)
+            self.reached_hashes.add(child_hash)
+    
+    def _prune_unreachable(self, level: int, verbose: bool = True):
+        """Remove unreachable positions from a level."""
+        to_delete = []
+        for h, lvl in self.position_levels.items():
+            if lvl == level and h not in self.reached_hashes:
+                to_delete.append(h)
+        
+        for h in to_delete:
+            del self.positions[h]
+            del self.position_levels[h]
+            self.seen_hashes.discard(h)
+        
+        if verbose and to_delete:
+            print(f"  🗑 Pruned {len(to_delete)} unreachable positions from level {level}")
     
     def _save(self):
         """Save current tablebase."""
