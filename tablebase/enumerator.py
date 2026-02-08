@@ -275,21 +275,35 @@ class PositionEnumerator:
                 return cells[a]
         return 0
     
+    # Cache for valid cell configurations: (x, o, empty) -> first valid config
+    _cell_config_cache = {}
+    
     def _find_valid_cell_config(self, x_count: int, o_count: int, empty_count: int) -> List[int]:
-        """Find first valid 9-cell configuration with no winner."""
-        from itertools import permutations
+        """Find first valid 9-cell configuration with no winner (cached)."""
+        key = (x_count, o_count, empty_count)
+        if key in self._cell_config_cache:
+            return self._cell_config_cache[key]
         
-        cells = [1] * x_count + [2] * o_count + [0] * empty_count
+        from itertools import combinations
         
-        # Try all unique permutations (use set to avoid duplicates)
-        seen = set()
-        for perm in permutations(cells):
-            if perm in seen:
-                continue
-            seen.add(perm)
-            if self._check_cells_winner(list(perm)) == 0:
-                return list(perm)
+        # Use combinations instead of permutations
+        # Choose positions for X, then O, rest are empty
+        cells = [0] * 9
         
+        for x_positions in combinations(range(9), x_count):
+            remaining = [i for i in range(9) if i not in x_positions]
+            for o_positions in combinations(remaining, o_count):
+                test = [0] * 9
+                for i in x_positions:
+                    test[i] = 1
+                for i in o_positions:
+                    test[i] = 2
+                
+                if self._check_cells_winner(test) == 0:
+                    self._cell_config_cache[key] = test
+                    return test
+        
+        self._cell_config_cache[key] = None
         return None
     
     def _check_subboard_winner(self, board: Board, sub_r: int, sub_c: int) -> int:
