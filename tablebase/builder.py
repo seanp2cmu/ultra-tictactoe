@@ -198,6 +198,12 @@ class TablebaseBuilder:
         # Solve position
         result, dtw, best_move = self.solver.solve(board)
         
+        # Validate DTW: should be <= empty_cells
+        empty_count = sum(1 for r in range(9) for c in range(9) 
+                         if board.boards[r][c] == 0 and board.completed_boards[r//3][c//3] == 0)
+        if dtw > empty_count:
+            print(f"⚠ DTW validation error: dtw={dtw} > empty={empty_count}")
+        
         # Store result
         self.positions[board_hash] = (result, dtw, best_move)
         
