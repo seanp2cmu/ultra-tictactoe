@@ -50,12 +50,11 @@ class PositionEnumerator:
         for meta, min_diff, max_diff in self._meta_boards:
             self.stats['meta_boards'] += 1
             
-            # Fill sub-boards
-            for board in self._fill_subboards(meta, min_diff, max_diff):
+            # Fill sub-boards (yields board + canonical key)
+            for board, key in self._fill_subboards(meta, min_diff, max_diff):
                 self.stats['generated'] += 1
                 
-                # Dedup with D4 + X/O flip
-                key = self._compute_key(board)
+                # Dedup using pre-computed canonical key
                 if key in self.seen_hashes:
                     self.stats['duplicate'] += 1
                     continue
@@ -77,41 +76,8 @@ class PositionEnumerator:
         if show_progress:
             pbar.close()
     
-    def _compute_key(self, board: Board) -> Tuple:
-        """Compute normalized dedup key with D4 + X/O flip."""
-        constraint = getattr(board, 'constraint', -1)
-        
-        raw_data = []
-        for sub_idx in range(9):
-            sub_r, sub_c = sub_idx // 3, sub_idx % 3
-            state = board.completed_boards[sub_r][sub_c]
-            
-            if state != 0:
-                raw_data.append((state, 0, 0))
-            else:
-                x_count = sum(1 for dr in range(3) for dc in range(3) 
-                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
-                o_count = sum(1 for dr in range(3) for dc in range(3) 
-                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
-                raw_data.append((0, x_count, o_count))
-        
-        candidates = []
-        for perm in D4_TRANSFORMS:
-            sym_data = tuple(raw_data[perm[i]] for i in range(9))
-            sym_constraint = perm.index(constraint) if constraint >= 0 else -1
-            candidates.append((sym_data, sym_constraint))
-            
-            # X/O flip
-            flipped = tuple(
-                (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
-                for s, x, o in sym_data
-            )
-            candidates.append((flipped, sym_constraint))
-        
-        return min(candidates)
-    
-    def _canonical_constraints(self, board: Board, open_indices: List[int]) -> List[int]:
-        """Return only canonical constraints to avoid D4 duplicates."""
+    def _canonical_constraints(self, board: Board, open_indices: List[int]) -> List[Tuple[int, Tuple]]:
+        """Return (constraint, canonical_key) pairs for dedup."""
         raw_data = []
         for sub_idx in range(9):
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
@@ -125,12 +91,10 @@ class PositionEnumerator:
                              if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
                 raw_data.append((0, x_count, o_count))
         
-        # For each open constraint, compute its canonical form
         seen_canonical = set()
         result = []
         
         for constraint in open_indices:
-            # Find canonical (data, constraint) for this constraint
             candidates = []
             for perm in D4_TRANSFORMS:
                 sym_data = tuple(raw_data[perm[i]] for i in range(9))
@@ -146,7 +110,7 @@ class PositionEnumerator:
             canonical = min(candidates)
             if canonical not in seen_canonical:
                 seen_canonical.add(canonical)
-                result.append(constraint)
+                result.append((constraint, canonical))  # Return both
         
         return result
     
@@ -178,13 +142,13 @@ class PositionEnumerator:
                     # Get boards from precomputed buckets
                     board = self._create_board(meta, open_indices, empty_dist, diff_dist)
                     if board:
-                        # Only yield canonical constraints (avoid duplicates under D4)
-                        for constraint in self._canonical_constraints(board, open_indices):
+                        # Yield (board, canonical_key) pairs
+                        for constraint, canonical_key in self._canonical_constraints(board, open_indices):
                             b = board.clone()
                             b.constraint = constraint
                             sub_r, sub_c = constraint // 3, constraint % 3
                             b.last_move = (sub_r, sub_c)
-                            yield b
+                            yield (b, canonical_key)
     
     def _distribute_empty(self, num_open: int, total_empty: int) -> Generator[Tuple[int, ...], None, None]:
         """Distribute empty cells across sub-boards (1-8 each)."""
