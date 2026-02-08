@@ -249,6 +249,10 @@ class PositionEnumerator:
                 for constraint in open_indices:
                     board = base_board.clone()
                     board.constraint = constraint
+                    # Set last_move so get_legal_moves() returns moves for this constraint
+                    # last_move = (r, c) where (r % 3, c % 3) = (constraint // 3, constraint % 3)
+                    sub_r, sub_c = constraint // 3, constraint % 3
+                    board.last_move = (sub_r, sub_c)  # Any move that sends to this sub-board
                     yield board
     
     def _distribute_empty(self, num_open: int, total_empty: int) -> Generator[Tuple[int, ...], None, None]:
