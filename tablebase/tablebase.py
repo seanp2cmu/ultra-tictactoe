@@ -18,7 +18,7 @@ class Tablebase:
     Endgame tablebase for Ultimate Tic-Tac-Toe.
     
     Provides O(1) lookup for precomputed positions.
-    Stores (result, dtw) for each position.
+    Stores (result, dtw, best_move) for each position.
     """
     
     def __init__(self, path: Optional[str] = None):
@@ -26,7 +26,8 @@ class Tablebase:
         Args:
             path: Path to tablebase file (optional, can load later)
         """
-        self.positions: Dict[int, Tuple[int, int]] = {}
+        # positions: hash -> (result, dtw, best_move)
+        self.positions: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
         self.max_empty = 15
         self.stats = {}
         
@@ -57,7 +58,7 @@ class Tablebase:
         
         print(f"✓ Saved tablebase: {len(self.positions)} positions")
     
-    def lookup(self, board: Board) -> Optional[Tuple[int, int]]:
+    def lookup(self, board: Board) -> Optional[Tuple[int, int, Optional[Tuple[int, int]]]]:
         """
         Look up position in tablebase.
         
@@ -65,9 +66,10 @@ class Tablebase:
             board: Board position to look up
             
         Returns:
-            (result, dtw) if found, None otherwise
+            (result, dtw, best_move) if found, None otherwise
             - result: 1 (current player wins), -1 (loses), 0 (draw)
             - dtw: distance to win (moves until game ends)
+            - best_move: (row, col) tuple or None
         """
         # Check if position qualifies for tablebase
         empty_count = self._count_empty(board)
@@ -99,10 +101,7 @@ class Tablebase:
         if result is None:
             return None
         
-        game_result, dtw = result
-        
-        # Find best move (one that maintains the result)
-        best_move = self._find_best_move(board, game_result, dtw)
+        game_result, dtw, best_move = result
         
         return {
             'result': game_result,
@@ -148,25 +147,6 @@ class Tablebase:
         # For now, return empty list
         return []
     
-    def _find_best_move(self, board: Board, target_result: int, target_dtw: int) -> Optional[Tuple[int, int]]:
-        """Find a move that achieves the target result."""
-        legal_moves = board.get_legal_moves()
-        
-        for move in legal_moves:
-            # Make move and check tablebase
-            board.make_move(move[0], move[1])
-            
-            result = self.lookup(board)
-            if result:
-                child_result, child_dtw = result
-                # Result is from opponent's perspective after our move
-                if -child_result == target_result:
-                    board.undo_move()
-                    return move
-            
-            board.undo_move()
-        
-        return None
     
     def _result_to_str(self, result: int) -> str:
         """Convert result code to string."""

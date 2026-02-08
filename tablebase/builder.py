@@ -205,10 +205,10 @@ class EndgameTablebaseBuilder:
         self.seen_hashes.add(board_hash)
         
         # Solve position with BFS + memoization
-        result, dtw = self.solver.solve(board)
+        result, dtw, best_move = self.solver.solve(board)
         
-        # Store result
-        self.positions[board_hash] = (result, dtw)
+        # Store result (result, dtw, best_move)
+        self.positions[board_hash] = (result, dtw, best_move)
         
         # Update stats
         self.stats['positions_solved'] += 1

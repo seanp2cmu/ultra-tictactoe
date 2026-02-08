@@ -20,21 +20,24 @@ class TablebaseSolver:
     1. Enumerate positions with ≤N empty cells
     2. Check reachability with 4-move backward DFS
     3. Solve via BFS from terminals + memoization
+    
+    Stores: (result, dtw, best_move) for each position
     """
     
     def __init__(self, max_depth: int = 20):
-        # Memoization cache: board_hash -> (result, dtw)
+        # Memoization cache: board_hash -> (result, dtw, best_move)
         # result: 1 = current player wins, -1 = loses, 0 = draw
-        self.cache: Dict[int, Tuple[int, int]] = {}
+        # best_move: (row, col) tuple or None
+        self.cache: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
         self.max_depth = max_depth
         self.stats = {'cache_hits': 0, 'solves': 0, 'unreachable': 0, 'depth_limit': 0}
     
-    def solve(self, board: Board, max_depth: Optional[int] = None) -> Tuple[int, int]:
+    def solve(self, board: Board, max_depth: Optional[int] = None) -> Tuple[int, int, Optional[Tuple[int, int]]]:
         """
         Solve position with memoization.
         
         Returns:
-            (result, dtw) from current player's perspective
+            (result, dtw, best_move) from current player's perspective
         """
         board_hash = self._hash_board(board)
         
@@ -42,33 +45,34 @@ class TablebaseSolver:
             self.stats['cache_hits'] += 1
             return self.cache[board_hash]
         
-        result, dtw = self._solve_recursive(board)
-        self.cache[board_hash] = (result, dtw)
+        result, dtw, best_move = self._solve_recursive(board)
+        self.cache[board_hash] = (result, dtw, best_move)
         self.stats['solves'] += 1
         
-        return (result, dtw)
+        return (result, dtw, best_move)
     
-    def _solve_recursive(self, board: Board, depth: int = 0) -> Tuple[int, int]:
+    def _solve_recursive(self, board: Board, depth: int = 0) -> Tuple[int, int, Optional[Tuple[int, int]]]:
         """Recursive minimax with memoization (complete search, no pruning)."""
         
         # Terminal check
         if board.winner is not None:
             if board.winner == 3:  # Draw
-                return (0, depth)
+                return (0, depth, None)
             # Winner is set - current player lost (opponent won last turn)
-            return (-1, depth)
+            return (-1, depth, None)
         
         legal_moves = board.get_legal_moves()
         if not legal_moves:
-            return (0, depth)  # No moves = draw
+            return (0, depth, None)  # No moves = draw
         
         # Depth limit for safety (shouldn't hit with ≤15 empty)
         if depth >= self.max_depth:
             self.stats['depth_limit'] += 1
-            return (0, depth)
+            return (0, depth, None)
         
         best_value = -2
         best_dtw = 999
+        best_move = None
         
         for move in legal_moves:
             child = board.clone()
@@ -77,10 +81,10 @@ class TablebaseSolver:
             child_hash = self._hash_board(child)
             
             if child_hash in self.cache:
-                child_result, child_dtw = self.cache[child_hash]
+                child_result, child_dtw, _ = self.cache[child_hash]
             else:
-                child_result, child_dtw = self._solve_recursive(child, depth + 1)
-                self.cache[child_hash] = (child_result, child_dtw)
+                child_result, child_dtw, _ = self._solve_recursive(child, depth + 1)
+                self.cache[child_hash] = (child_result, child_dtw, None)  # Child's best_move filled later
             
             # Negate for perspective switch
             value = -child_result
@@ -88,8 +92,9 @@ class TablebaseSolver:
             if value > best_value or (value == best_value and child_dtw < best_dtw):
                 best_value = value
                 best_dtw = child_dtw
+                best_move = move
         
-        return (best_value, best_dtw + 1)
+        return (best_value, best_dtw + 1, best_move)
     
     def _hash_board(self, board: Board) -> int:
         """Create hash for board position."""
