@@ -22,15 +22,25 @@ class TablebaseSolver:
     3. Solve via BFS from terminals + memoization
     
     Stores: (result, dtw, best_move) for each position
+    
+    Supports incremental building: load smaller tablebase to speed up larger ones.
     """
     
-    def __init__(self, max_depth: int = 20):
+    def __init__(self, max_depth: int = 20, base_tablebase: Optional[Dict] = None):
+        """
+        Args:
+            max_depth: Maximum search depth
+            base_tablebase: Pre-computed positions dict to use as lookup (e.g., from smaller tablebase)
+        """
         # Memoization cache: board_hash -> (result, dtw, best_move)
         # result: 1 = current player wins, -1 = loses, 0 = draw
         # best_move: (row, col) tuple or None
         self.cache: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
         self.max_depth = max_depth
-        self.stats = {'cache_hits': 0, 'solves': 0, 'unreachable': 0, 'depth_limit': 0}
+        self.stats = {'cache_hits': 0, 'solves': 0, 'unreachable': 0, 'depth_limit': 0, 'base_hits': 0}
+        
+        # Load base tablebase for faster lookups
+        self.base_tablebase = base_tablebase or {}
     
     def solve(self, board: Board, max_depth: Optional[int] = None) -> Tuple[int, int, Optional[Tuple[int, int]]]:
         """
@@ -44,6 +54,13 @@ class TablebaseSolver:
         if board_hash in self.cache:
             self.stats['cache_hits'] += 1
             return self.cache[board_hash]
+        
+        # Check base tablebase (from smaller threshold)
+        if board_hash in self.base_tablebase:
+            self.stats['base_hits'] += 1
+            result = self.base_tablebase[board_hash]
+            self.cache[board_hash] = result
+            return result
         
         result, dtw, best_move = self._solve_recursive(board)
         self.cache[board_hash] = (result, dtw, best_move)
@@ -82,9 +99,14 @@ class TablebaseSolver:
             
             if child_hash in self.cache:
                 child_result, child_dtw, _ = self.cache[child_hash]
+            elif child_hash in self.base_tablebase:
+                # Use base tablebase result
+                child_result, child_dtw, _ = self.base_tablebase[child_hash]
+                self.cache[child_hash] = self.base_tablebase[child_hash]
+                self.stats['base_hits'] += 1
             else:
                 child_result, child_dtw, _ = self._solve_recursive(child, depth + 1)
-                self.cache[child_hash] = (child_result, child_dtw, None)  # Child's best_move filled later
+                self.cache[child_hash] = (child_result, child_dtw, None)
             
             # Negate for perspective switch
             value = -child_result

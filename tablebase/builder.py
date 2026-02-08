@@ -39,23 +39,28 @@ class EndgameTablebaseBuilder:
         self,
         endgame_threshold: int = 15,
         save_interval: int = 10000,
-        save_path: str = 'tablebase/endgame.pkl'
+        save_path: str = 'tablebase/endgame.pkl',
+        base_tablebase_path: Optional[str] = None
     ):
         """
         Args:
             endgame_threshold: Max empty playable cells for tablebase
             save_interval: Save progress every N positions
             save_path: Path to save tablebase
+            base_tablebase_path: Path to smaller tablebase for incremental building
         """
         self.endgame_threshold = endgame_threshold
         self.save_interval = save_interval
         self.save_path = save_path
         
-        self.solver = TablebaseSolver(max_depth=25)
+        # Load base tablebase for incremental building
+        base_positions = self._load_base_tablebase(base_tablebase_path)
+        
+        self.solver = TablebaseSolver(max_depth=25, base_tablebase=base_positions)
         self.reachability_checker = ReachabilityChecker(max_depth=4)
         
-        # Storage
-        self.positions: Dict[int, Tuple[int, int]] = {}  # hash -> (result, dtw)
+        # Storage - hash -> (result, dtw, best_move)
+        self.positions: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
         self.seen_hashes: Set[int] = set()
         
         # Stats
@@ -63,6 +68,21 @@ class EndgameTablebaseBuilder:
         
         # Load existing if available
         self._load_existing()
+    
+    def _load_base_tablebase(self, path: Optional[str]) -> Dict:
+        """Load base tablebase for incremental building."""
+        if path is None or not os.path.exists(path):
+            return {}
+        
+        try:
+            with open(path, 'rb') as f:
+                data = pickle.load(f)
+            positions = data.get('positions', {})
+            print(f"✓ Loaded base tablebase: {len(positions)} positions")
+            return positions
+        except Exception as e:
+            print(f"⚠ Failed to load base tablebase: {e}")
+            return {}
     
     def _load_existing(self):
         """Load existing tablebase if available."""
@@ -315,15 +335,23 @@ def main():
     
     parser = argparse.ArgumentParser(description='Build endgame tablebase')
     parser.add_argument('--games', type=int, default=10000, help='Number of games')
-    parser.add_argument('--threshold', type=int, default=15, help='Endgame threshold')
+    parser.add_argument('--threshold', type=int, default=15, help='Endgame threshold (empty cells)')
     parser.add_argument('--output', type=str, default='tablebase/endgame.pkl', help='Output path')
     parser.add_argument('--target', type=int, default=None, help='Target number of positions')
+    parser.add_argument('--base', type=str, default=None, help='Base tablebase for incremental build')
     
     args = parser.parse_args()
     
+    print(f"\n{'=' * 60}")
+    print(f"Building tablebase: threshold={args.threshold}, games={args.games}")
+    if args.base:
+        print(f"Using base tablebase: {args.base}")
+    print(f"{'=' * 60}\n")
+    
     builder = TargetedTablebaseBuilder(
         endgame_threshold=args.threshold,
-        save_path=args.output
+        save_path=args.output,
+        base_tablebase_path=args.base
     )
     
     builder.build(
