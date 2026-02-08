@@ -75,7 +75,7 @@ class TablebaseSolver:
     
     def _solve_recursive(self, board: Board, depth: int = 0) -> Tuple[int, int, Optional[Tuple[int, int]]]:
         """
-        Retrograde solver - just lookup children (no deep search).
+        Progressive solver - lookup children from previous levels.
         All children should be in cache from previous levels.
         """
         # Terminal check

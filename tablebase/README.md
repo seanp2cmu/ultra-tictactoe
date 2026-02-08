@@ -20,10 +20,6 @@ Level 1 (1 empty) → Level 2 (2 empty) → ... → Level N
 - 이미 계산된 하위 레벨(N-1) 결과를 참조하여 현재 레벨(N) 해결
 - Minimax 원리: 상대방도 최선을 둔다고 가정
 
-**참고**: Retrograde analysis(역행 분석)와 다름
-- Retrograde: Terminal 상태에서 역으로 추적
-- 우리 방식: 간단한 endgame부터 순차적으로 해결
-
 ### 2. Canonical Hashing (정규화 해싱)
 
 동일한 게임 상태를 하나의 해시로 표현하여 저장 공간 절약:
@@ -38,10 +34,6 @@ Original  Rot90   Rot180  Rot270  FlipH   FlipV   Diag    AntiDiag
 
 #### X/O Flip (2가지)
 - X와 O를 서로 바꿈
-- X_WIN ↔ O_WIN, 1 ↔ 2
-
-#### 총 감소율
-- 8 (D4) × 2 (X/O flip) = **최대 16배 감소**
 
 ### 3. Board State Representation
 

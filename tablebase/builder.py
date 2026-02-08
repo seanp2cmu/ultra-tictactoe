@@ -29,7 +29,7 @@ class TablebaseBuilder:
     2. D4 symmetry reduction (8x storage savings)
     3. 4-move backward DFS reachability filter
     4. BFS + memoization solver
-    5. Build from 1 empty to max_empty (retrograde analysis)
+    5. Build from 1 empty to max_empty (progressive construction)
     """
     
     def __init__(
@@ -115,7 +115,7 @@ class TablebaseBuilder:
     
     def build(self, max_positions_per_level: Optional[int] = None, verbose: bool = True):
         """
-        Build tablebase using retrograde analysis (1 to max_empty).
+        Build tablebase using progressive construction (1 to max_empty).
         
         Args:
             max_positions_per_level: Stop after this many positions per empty count (None = all)
@@ -134,7 +134,7 @@ class TablebaseBuilder:
         total_processed = 0
         
         try:
-            # Build from 1 empty to max_empty (retrograde order)
+            # Build from 1 empty to max_empty (progressive order)
             for empty_count in range(1, self.max_empty + 1):
                 # Skip if already completed
                 if empty_count in self.completed_empty:
@@ -320,7 +320,7 @@ def main():
     """Build tablebase from command line."""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Build endgame tablebase (retrograde analysis)')
+    parser = argparse.ArgumentParser(description='Build endgame tablebase')
     parser.add_argument('--max-empty', type=int, default=15, help='Maximum empty cells (builds 1 to max)')
     parser.add_argument('--output', type=str, default='tablebase/endgame.pkl', help='Output path')
     parser.add_argument('--max-per-level', type=int, default=None, help='Max positions per level (for testing)')
@@ -330,7 +330,7 @@ def main():
     args = parser.parse_args()
     
     print(f"\n{'=' * 60}")
-    print(f"Retrograde Tablebase Builder")
+    print(f"Endgame Tablebase Builder")
     print(f"  Empty range: 1 to {args.max_empty}")
     print(f"  Output: {args.output}")
     if args.base:

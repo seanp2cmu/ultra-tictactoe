@@ -2,7 +2,7 @@
 Endgame Tablebase for Ultimate Tic-Tac-Toe
 
 Precomputed perfect play database for positions with ≤15 empty cells.
-Uses retrograde analysis to compute exact game-theoretic values.
+Uses progressive endgame construction to compute exact game-theoretic values.
 """
 
 from .tablebase import Tablebase, CompactTablebase
