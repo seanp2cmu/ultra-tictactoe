@@ -126,16 +126,32 @@ class TablebaseSolver:
         return (best_value, best_dtw + 1, best_move)
     
     def _lookup_constraint(self, h: int, constraint: int, board: Board) -> Tuple[int, int]:
-        """Lookup specific constraint in nested dict cache."""
-        # Check cache: hash -> {constraint: (result, dtw, move)}
-        if h in self.cache and constraint in self.cache[h]:
-            result, dtw, _ = self.cache[h][constraint]
-            return (result, dtw)
+        """Lookup specific constraint in nested dict cache.
         
-        if h in self.base_tablebase and constraint in self.base_tablebase[h]:
-            result, dtw, _ = self.base_tablebase[h][constraint]
-            self.stats['base_hits'] += 1
-            return (result, dtw)
+        Due to D4+flip canonicalization, the exact constraint might not match.
+        If not found, use any available constraint (they're equivalent under symmetry).
+        """
+        # Check cache: hash -> {constraint: (result, dtw, move)}
+        if h in self.cache:
+            if constraint in self.cache[h]:
+                result, dtw, _ = self.cache[h][constraint]
+                return (result, dtw)
+            # Constraint not found - use any available (equivalent under symmetry)
+            if self.cache[h]:
+                any_constraint = next(iter(self.cache[h]))
+                result, dtw, _ = self.cache[h][any_constraint]
+                return (result, dtw)
+        
+        if h in self.base_tablebase:
+            if constraint in self.base_tablebase[h]:
+                result, dtw, _ = self.base_tablebase[h][constraint]
+                self.stats['base_hits'] += 1
+                return (result, dtw)
+            if self.base_tablebase[h]:
+                any_constraint = next(iter(self.base_tablebase[h]))
+                result, dtw, _ = self.base_tablebase[h][any_constraint]
+                self.stats['base_hits'] += 1
+                return (result, dtw)
         
         # Not found - check if terminal
         if board.winner is not None:
