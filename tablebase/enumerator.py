@@ -30,9 +30,10 @@ class PositionEnumerator:
     
     Strategy:
     1. Enumerate meta-board (big board) configurations
-    2. For each meta-board, fill sub-boards systematically
-    3. Apply D4 + X-O swap symmetry to avoid duplicates
-    4. Filter: valid sub-board winners, valid X-O counts
+    2. For each meta-board, enumerate valid (X,O) count combinations
+    3. For OPEN boards only: place actual pieces
+    4. Apply D4 symmetry to avoid duplicates
+    5. Filter: valid total X-O counts
     """
     
     # Meta-board states
@@ -40,6 +41,16 @@ class PositionEnumerator:
     X_WIN = 1   # X won sub-board
     O_WIN = 2   # O won sub-board
     DRAW = 3    # Sub-board is draw (full, no winner)
+    
+    # Diff ranges (X - O) for each completed board type
+    # X_WIN: min diff = 3-6 = -3, max diff = 7-0 = +7
+    # O_WIN: min diff = 0-7 = -7, max diff = 6-3 = +3
+    # DRAW: min diff = 4-5 = -1, max diff = 5-4 = +1
+    DIFF_RANGE = {
+        1: (-3, 7),   # X_WIN
+        2: (-7, 3),   # O_WIN
+        3: (-1, 1),   # DRAW
+    }
     
     def __init__(self, empty_cells: int = 15):
         self.empty_cells = empty_cells
@@ -134,13 +145,10 @@ class PositionEnumerator:
         """
         Fill sub-boards for a given meta-board configuration.
         
-        For each sub-board:
-        - OPEN: has empty cells, no winner
-        - X_WIN/O_WIN: winner has 3-in-a-row, may have some empty cells too
-        - DRAW: full (9 cells), no winner
+        For OPEN boards: place actual pieces
+        For completed boards: just set state, no pieces (hash ignores them)
         
         Target: exactly self.empty_cells PLAYABLE empty cells
-        (only in OPEN sub-boards)
         """
         open_indices = [i for i, s in enumerate(meta) if s == 0]
         num_open = len(open_indices)
@@ -148,16 +156,14 @@ class PositionEnumerator:
         if num_open == 0:
             return
         
-        # All empty cells must be in OPEN sub-boards
-        # Each OPEN sub-board has 1-8 empty cells
         if self.empty_cells > num_open * 8:
-            return  # Can't fit that many empty cells
+            return
         if self.empty_cells < num_open:
-            return  # Each open board needs at least 1 empty
+            return
         
-        # Distribute empty cells across open sub-boards
+        # Just distribute empty cells - completed boards are ignored
         for empty_dist in self._distribute_empty(num_open, self.empty_cells):
-            board = self._create_board(meta, open_indices, empty_dist)
+            board = self._create_board_simple(meta, open_indices, empty_dist)
             if board is not None:
                 yield board
     
@@ -184,78 +190,59 @@ class PositionEnumerator:
             for rest in self._distribute_empty(num_open - 1, total_empty - first):
                 yield (first,) + rest
     
-    def _create_board(self, meta: Tuple[int, ...], open_indices: List[int], 
-                      empty_dist: Tuple[int, ...]) -> Board:
-        """Create a board from meta-board and empty distribution."""
+    def _create_board_simple(self, meta: Tuple[int, ...], open_indices: List[int], 
+                              empty_dist: Tuple[int, ...]) -> Board:
+        """Create a board - only OPEN boards have pieces, O(1) validation for completed boards."""
         board = Board()
         
-        total_x = 0
-        total_o = 0
+        open_diff = 0  # X - O for OPEN boards
+        min_completed = 0
+        max_completed = 0
         
-        # Fill each sub-board
         for sub_idx in range(9):
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
             state = meta[sub_idx]
+            board.completed_boards[sub_r][sub_c] = state
             
             if state == self.OPEN:
-                # Find this sub-board's empty count
                 open_pos = open_indices.index(sub_idx)
                 empty_count = empty_dist[open_pos]
                 filled = 9 - empty_count
                 
-                # Distribute X and O in this sub-board
-                # For now, roughly equal
                 x_here = (filled + 1) // 2
                 o_here = filled // 2
+                open_diff += x_here - o_here
                 
                 cells = [1] * x_here + [2] * o_here + [0] * empty_count
-                # Shuffle to randomize position (but deterministic)
                 import random
                 random.seed(sub_idx * 1000 + empty_count)
                 random.shuffle(cells)
                 
-                # Check no accidental winner
                 if self._check_cells_winner(cells) != 0:
                     return None
                 
-                total_x += x_here
-                total_o += o_here
-                
-            elif state == self.X_WIN:
-                # X has a winning line, fill rest reasonably
-                cells = self._create_won_subboard(1)
-                if cells is None:
-                    return None
-                total_x += cells.count(1)
-                total_o += cells.count(2)
-                
-            elif state == self.O_WIN:
-                cells = self._create_won_subboard(2)
-                if cells is None:
-                    return None
-                total_x += cells.count(1)
-                total_o += cells.count(2)
-                
-            else:  # DRAW
-                cells = self._create_draw_subboard()
-                if cells is None:
-                    return None
-                total_x += cells.count(1)
-                total_o += cells.count(2)
-            
-            # Place cells on board
-            for i, val in enumerate(cells):
-                r = sub_r * 3 + i // 3
-                c = sub_c * 3 + i % 3
-                board.boards[r][c] = val
-            
-            board.completed_boards[sub_r][sub_c] = state
+                for i, val in enumerate(cells):
+                    r = sub_r * 3 + i // 3
+                    c = sub_c * 3 + i % 3
+                    board.boards[r][c] = val
+            else:
+                # Completed board: accumulate diff range
+                diff_min, diff_max = self.DIFF_RANGE[state]
+                min_completed += diff_min
+                max_completed += diff_max
         
-        # Validate X-O counts
-        if not (total_x == total_o or total_x == total_o + 1):
+        # O(1) validation: check if [open_diff + min, open_diff + max] overlaps [0, 1]
+        total_min = open_diff + min_completed
+        total_max = open_diff + max_completed
+        if total_max < 0 or total_min > 1:
             return None
         
-        board.current_player = 1 if total_x == total_o else 2
+        # Set current player (use any valid diff, prefer 0 or 1)
+        if total_min <= 0 <= total_max:
+            board.current_player = 1  # X's turn (diff = 0)
+        else:
+            board.current_player = 2  # O's turn (diff = 1)
+        
         board.last_move = None
         board.winner = None
         
@@ -267,82 +254,6 @@ class PositionEnumerator:
             if cells[a] == cells[b] == cells[c] != 0:
                 return cells[a]
         return 0
-    
-    def _create_won_subboard(self, winner: int) -> List[int]:
-        """
-        Create a sub-board where winner has won.
-        
-        Note: Winner can have multiple winning lines (e.g., row + diagonal).
-        Loser cannot have any winning line.
-        """
-        import random
-        
-        loser = 3 - winner
-        
-        # Try to create valid won board
-        for _ in range(100):
-            # Start with a winning pattern
-            pattern = random.choice(WIN_PATTERNS)
-            cells = [0] * 9
-            
-            for i in pattern:
-                cells[i] = winner
-            
-            # Optionally add more winner pieces (may create multiple win lines)
-            other_cells = [i for i in range(9) if i not in pattern]
-            random.shuffle(other_cells)
-            
-            # Add 0-2 more winner pieces
-            extra_winner = random.randint(0, min(2, len(other_cells)))
-            for i in range(extra_winner):
-                cells[other_cells[i]] = winner
-            
-            # Add some loser pieces (but check no winning line)
-            remaining = [i for i in range(9) if cells[i] == 0]
-            random.shuffle(remaining)
-            
-            loser_count = random.randint(2, min(4, len(remaining)))
-            temp_cells = cells.copy()
-            
-            for i in range(loser_count):
-                temp_cells[remaining[i]] = loser
-            
-            # Check loser has no winning line
-            loser_wins = False
-            for a, b, c in WIN_PATTERNS:
-                if temp_cells[a] == temp_cells[b] == temp_cells[c] == loser:
-                    loser_wins = True
-                    break
-            
-            if not loser_wins:
-                return temp_cells
-        
-        # Fallback: simple pattern
-        cells = [0] * 9
-        pattern = WIN_PATTERNS[0]
-        for i in pattern:
-            cells[i] = winner
-        cells[3] = loser
-        cells[6] = loser
-        return cells
-    
-    def _create_draw_subboard(self) -> List[int]:
-        """Create a full sub-board with no winner (draw)."""
-        # 5 X and 4 O, or 4 X and 5 O, arranged with no winner
-        import random
-        
-        # Try random arrangements until we get a draw
-        for _ in range(100):
-            x_count = random.choice([4, 5])
-            o_count = 9 - x_count
-            
-            cells = [1] * x_count + [2] * o_count
-            random.shuffle(cells)
-            
-            if self._check_cells_winner(cells) == 0:
-                return cells
-        
-        return None
     
     def _check_subboard_winner(self, board: Board, sub_r: int, sub_c: int) -> int:
         """Check winner of a sub-board. Returns 0/1/2/3."""

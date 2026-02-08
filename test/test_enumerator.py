@@ -86,44 +86,6 @@ class TestSubboardCreation:
         cells = [1, 2, 1, 2, 1, 2, 2, 1, 0]
         assert enumerator._check_cells_winner(cells) == 0
     
-    def test_create_won_subboard_x(self):
-        """Test creating X-won sub-board."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        for _ in range(10):
-            cells = enumerator._create_won_subboard(1)
-            assert cells is not None
-            # X should have won
-            assert enumerator._check_cells_winner(cells) == 1
-            # O should not have won
-            for pattern in WIN_PATTERNS:
-                o_line = all(cells[i] == 2 for i in pattern)
-                assert not o_line
-    
-    def test_create_won_subboard_o(self):
-        """Test creating O-won sub-board."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        for _ in range(10):
-            cells = enumerator._create_won_subboard(2)
-            assert cells is not None
-            # O should have won
-            assert enumerator._check_cells_winner(cells) == 2
-    
-    def test_create_draw_subboard(self):
-        """Test creating draw sub-board."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        for _ in range(10):
-            cells = enumerator._create_draw_subboard()
-            assert cells is not None
-            # No winner
-            assert enumerator._check_cells_winner(cells) == 0
-            # Should be full
-            assert cells.count(0) == 0
-            # 9 cells total
-            assert len(cells) == 9
-    
     def test_distribute_empty(self):
         """Test empty cell distribution."""
         enumerator = PositionEnumerator(empty_cells=10)
