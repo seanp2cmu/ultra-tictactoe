@@ -35,19 +35,16 @@ class TablebaseBuilder:
     def __init__(
         self,
         max_empty: int = 15,
-        save_interval: int = 100000,
         save_path: str = 'tablebase/endgame.pkl',
         base_tablebase_path: Optional[str] = None
     ):
         """
         Args:
             max_empty: Maximum number of empty playable cells (builds 1 to max_empty)
-            save_interval: Save progress every N positions
             save_path: Path to save tablebase
             base_tablebase_path: Path to existing tablebase to continue from
         """
         self.max_empty = max_empty
-        self.save_interval = save_interval
         self.save_path = save_path
         
         # Load base tablebase for incremental building
@@ -155,12 +152,8 @@ class TablebaseBuilder:
                     self._solve_and_store(board, empty_count)
                     level_processed += 1
                     total_processed += 1
-                    
-                    # Periodic save (silent)
-                    if total_processed % self.save_interval == 0:
-                        self._save()
                 
-                # Mark this level as complete
+                # Mark this level as complete (save only at level end)
                 self.completed_empty.add(empty_count)
                 self._save()
                 

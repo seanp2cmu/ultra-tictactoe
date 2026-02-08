@@ -248,7 +248,7 @@ class TablebaseSolver:
         
         Returns: (hash, canonical_constraint)
         """
-        # Build raw sub_data
+        # Build raw sub_data using cached sub_counts (O(9) instead of O(81))
         raw_sub_data = []
         for sub_idx in range(9):
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
@@ -257,10 +257,7 @@ class TablebaseSolver:
             if state != 0:
                 raw_sub_data.append((state, 0, 0))
             else:
-                x_count = sum(1 for dr in range(3) for dc in range(3) 
-                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
-                o_count = sum(1 for dr in range(3) for dc in range(3) 
-                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
+                x_count, o_count = board.sub_counts[sub_idx]
                 raw_sub_data.append((0, x_count, o_count))
         
         # Try all 8 D4 symmetries × 2 X/O flips = 16 combinations

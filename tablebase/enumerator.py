@@ -228,6 +228,7 @@ class PositionEnumerator:
         """Create board using precomputed local boards."""
         board = Board()
         
+        total_x, total_o = 0, 0
         for i, sub_idx in enumerate(open_indices):
             boards = self._get_local(empty_dist[i], diff_dist[i])
             if not boards:
@@ -235,6 +236,14 @@ class PositionEnumerator:
             
             cells = boards[0]  # Take first valid board
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
+            
+            # Set sub_counts from diff_dist (no need to count)
+            filled = 9 - empty_dist[i]
+            x_count = (filled + diff_dist[i]) // 2
+            o_count = (filled - diff_dist[i]) // 2
+            board.sub_counts[sub_idx] = [x_count, o_count]
+            total_x += x_count
+            total_o += o_count
             
             for j, val in enumerate(cells):
                 r = sub_r * 3 + j // 3
@@ -246,9 +255,7 @@ class PositionEnumerator:
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
             board.completed_boards[sub_r][sub_c] = meta[sub_idx]
         
-        # Set current player
-        total_x = sum(1 for r in range(9) for c in range(9) if board.boards[r][c] == 1)
-        total_o = sum(1 for r in range(9) for c in range(9) if board.boards[r][c] == 2)
+        # Set current player (use cached totals)
         board.current_player = 1 if total_x == total_o else 2
         board.winner = None
         

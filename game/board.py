@@ -18,6 +18,7 @@ class Board:
         self.current_player = 1
         self.winner = None
         self.last_move = None
+        self.sub_counts = [[0, 0] for _ in range(9)]  # [x_count, o_count] per sub-board
     
     def clone(self):
         """
@@ -30,6 +31,7 @@ class Board:
         new_board.current_player = self.current_player
         new_board.winner = self.winner
         new_board.last_move = self.last_move
+        new_board.sub_counts = [c[:] for c in self.sub_counts]
         return new_board
 
     def get_legal_moves(self):
@@ -91,6 +93,10 @@ class Board:
         self.boards[r][c] = self.current_player
         self.last_move = (r, c)
         
+        # Update sub_counts
+        sub_idx = (r // 3) * 3 + (c // 3)
+        self.sub_counts[sub_idx][self.current_player - 1] += 1
+        
         self.update_completed_boards(r, c)
         self.check_winner()
         
@@ -98,6 +104,11 @@ class Board:
     
     def undo_move(self, r, c, prev_completed, prev_winner, prev_last_move):
         """Undo a move (for solver optimization). Caller must save state before make_move."""
+        # Decrement sub_counts (current_player is already switched, so use opposite)
+        sub_idx = (r // 3) * 3 + (c // 3)
+        player = self.current_player % 2 + 1  # The player who made the move
+        self.sub_counts[sub_idx][player - 1] -= 1
+        
         self.boards[r][c] = 0
         board_r, board_c = r // 3, c // 3
         self.completed_boards[board_r][board_c] = prev_completed
