@@ -123,8 +123,6 @@ class PositionEnumerator:
             o_wins = meta.count(2)
             draws = meta.count(3)
             
-            # Note: x_wins - o_wins balance is checked by diff formula below
-            
             total_filled = 9 * num_open - self.empty_cells
             
             # Completed boards diff ranges
@@ -181,8 +179,15 @@ class PositionEnumerator:
             
             # Distribute empty cells and pieces
             for empty_dist in self._distribute_empty(num_open, self.empty_cells):
-                board = self._create_board_with_counts(meta, open_indices, empty_dist, x_total, o_total)
-                if board is not None:
+                base_board = self._create_board_with_counts(meta, open_indices, empty_dist, x_total, o_total)
+                if base_board is None:
+                    continue
+                
+                # Enumerate only specific constraints (OPEN boards)
+                # "any" (-1) is handled at lookup time by taking best of all OPEN constraints
+                for constraint in open_indices:
+                    board = base_board.clone()
+                    board.constraint = constraint
                     yield board
     
     def _distribute_empty(self, num_open: int, total_empty: int) -> Generator[Tuple[int, ...], None, None]:
@@ -261,9 +266,9 @@ class PositionEnumerator:
         
         # diff = x_total - o_total, already validated
         board.current_player = 1 if x_total == o_total else 2
-        board.last_move = None
         board.winner = None
         
+        # Return base board - caller will set last_move for each constraint
         return board
     
     def _check_cells_winner(self, cells: List[int]) -> int:

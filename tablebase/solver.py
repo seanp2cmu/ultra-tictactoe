@@ -120,13 +120,14 @@ class TablebaseSolver:
         cells = tuple(board.boards[r][c] for r in range(9) for c in range(9))
         completed = tuple(board.completed_boards[r][c] for r in range(3) for c in range(3))
         
-        # Include constraint (which sub-board must play in)
-        constraint = -1
-        if board.last_move:
-            sub_r, sub_c = board.last_move[0] % 3, board.last_move[1] % 3
-            # Check if that sub-board is still open
-            if board.completed_boards[sub_r][sub_c] == 0:
-                constraint = sub_r * 3 + sub_c
+        # Use constraint attribute if available, otherwise derive from last_move
+        constraint = getattr(board, 'constraint', None)
+        if constraint is None:
+            constraint = -1
+            if board.last_move:
+                sub_r, sub_c = board.last_move[0] % 3, board.last_move[1] % 3
+                if board.completed_boards[sub_r][sub_c] == 0:
+                    constraint = sub_r * 3 + sub_c
         
         return hash((cells, completed, board.current_player, constraint))
 

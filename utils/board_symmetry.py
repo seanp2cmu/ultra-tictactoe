@@ -71,8 +71,10 @@ class BoardSymmetry:
         boards_arr = np.array(board.boards, dtype=np.int8)
         completed_arr = np.array(board.completed_boards, dtype=np.int8)
         player = board.current_player
+        constraint = getattr(board, 'constraint', -1)
         
-        min_bytes = boards_arr.tobytes() + completed_arr.tobytes() + bytes([player])
+        # Include constraint in hash (add 1 to make it 0-9 range for bytes)
+        min_bytes = boards_arr.tobytes() + completed_arr.tobytes() + bytes([player, constraint + 1])
         
         for transform in [
             lambda b, c: (np.fliplr(b), np.fliplr(c)),
@@ -84,7 +86,7 @@ class BoardSymmetry:
             lambda b, c: (np.rot90(b.T, 2), np.rot90(c.T, 2)),
         ]:
             tb, tc = transform(boards_arr, completed_arr)
-            b = np.ascontiguousarray(tb).tobytes() + np.ascontiguousarray(tc).tobytes() + bytes([player])
+            b = np.ascontiguousarray(tb).tobytes() + np.ascontiguousarray(tc).tobytes() + bytes([player, constraint + 1])
             if b < min_bytes:
                 min_bytes = b
         
