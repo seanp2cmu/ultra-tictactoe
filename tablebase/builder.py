@@ -146,11 +146,9 @@ class TablebaseBuilder:
                     level_processed += 1
                     total_processed += 1
                     
-                    # Periodic save
+                    # Periodic save (silent)
                     if total_processed % self.save_interval == 0:
                         self._save()
-                        if verbose:
-                            print(f"  Saved: {len(self.positions)} positions")
                 
                 # Mark this level as complete
                 self.completed_empty.add(empty_count)
