@@ -219,6 +219,12 @@ class PositionEnumerator:
             min_valid_diff = max(-max_completed, -total_filled)
             max_valid_diff = min(1 - min_completed, total_filled)
             
+            # Clamp to possible diff range for open sub-boards
+            # Each open sub-board can have diff in [-6, +6] (e.g., 7X 1O or 1X 7O)
+            max_possible_diff = num_open * 6
+            min_valid_diff = max(min_valid_diff, -max_possible_diff)
+            max_valid_diff = min(max_valid_diff, max_possible_diff)
+            
             if min_valid_diff > max_valid_diff:
                 continue
             
