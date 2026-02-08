@@ -28,6 +28,10 @@ class PositionEnumerator:
         # Load precomputed data once
         self._local_boards = OPEN_BOARDS
         self._meta_boards = self._load_meta_boards()
+        
+        # Memoization caches
+        self._empty_dist_cache = {}  # (num_open, total_empty) -> list of distributions
+        self._diff_dist_cache = {}   # (num_open, total_diff, empty_dist) -> list of distributions
     
     def _load_meta_boards(self) -> List[Tuple[Tuple[int, ...], int, int]]:
         """Load all meta-boards for this empty_cells count."""
@@ -89,22 +93,24 @@ class PositionEnumerator:
     
     def _get_canonical_keys(self, raw_data: Tuple, open_indices: List[int]) -> List[Tuple[int, Tuple]]:
         """Return (constraint, canonical_key) pairs for dedup."""
+        # Step 3: Precompute all 16 transformed data ONCE (not per constraint)
+        transformed = []
+        for perm in D4_TRANSFORMS:
+            sym_data = tuple(raw_data[perm[i]] for i in range(9))
+            transformed.append((sym_data, perm))
+            
+            flipped = tuple(
+                (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
+                for s, x, o in sym_data
+            )
+            transformed.append((flipped, perm))
+        
         seen_canonical = set()
         result = []
         
         for constraint in open_indices:
-            candidates = []
-            for perm in D4_TRANSFORMS:
-                sym_data = tuple(raw_data[perm[i]] for i in range(9))
-                sym_constraint = perm.index(constraint)
-                candidates.append((sym_data, sym_constraint))
-                
-                flipped = tuple(
-                    (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
-                    for s, x, o in sym_data
-                )
-                candidates.append((flipped, sym_constraint))
-            
+            # Just lookup constraint mapping for each precomputed transform
+            candidates = [(data, perm.index(constraint)) for data, perm in transformed]
             canonical = min(candidates)
             if canonical not in seen_canonical:
                 seen_canonical.add(canonical)
@@ -172,42 +178,50 @@ class PositionEnumerator:
                             b.last_move = (sub_r, sub_c)
                             yield b
     
-    def _distribute_empty(self, num_open: int, total_empty: int) -> Generator[Tuple[int, ...], None, None]:
-        """Distribute empty cells across sub-boards (1-8 each)."""
+    def _distribute_empty(self, num_open: int, total_empty: int) -> List[Tuple[int, ...]]:
+        """Distribute empty cells across sub-boards (1-8 each). Memoized."""
+        key = (num_open, total_empty)
+        if key in self._empty_dist_cache:
+            return self._empty_dist_cache[key]
+        
+        result = []
         if num_open == 1:
             if 1 <= total_empty <= 8:
-                yield (total_empty,)
-            return
+                result = [(total_empty,)]
+        else:
+            min_first = max(1, total_empty - 8 * (num_open - 1))
+            max_first = min(8, total_empty - (num_open - 1))
+            for first in range(min_first, max_first + 1):
+                for rest in self._distribute_empty(num_open - 1, total_empty - first):
+                    result.append((first,) + rest)
         
-        min_first = max(1, total_empty - 8 * (num_open - 1))
-        max_first = min(8, total_empty - (num_open - 1))
-        
-        for first in range(min_first, max_first + 1):
-            for rest in self._distribute_empty(num_open - 1, total_empty - first):
-                yield (first,) + rest
+        self._empty_dist_cache[key] = result
+        return result
     
-    def _distribute_diff(self, num_open: int, total_diff: int, empty_dist: Tuple[int, ...]) -> Generator[Tuple[int, ...], None, None]:
-        """Distribute diff across sub-boards within valid ranges."""
+    def _distribute_diff(self, num_open: int, total_diff: int, empty_dist: Tuple[int, ...]) -> List[Tuple[int, ...]]:
+        """Distribute diff across sub-boards within valid ranges. Memoized."""
+        key = (num_open, total_diff, empty_dist)
+        if key in self._diff_dist_cache:
+            return self._diff_dist_cache[key]
+        
+        result = []
         if num_open == 1:
-            # Check if this diff is achievable with given empty
             filled = 9 - empty_dist[0]
             if -filled <= total_diff <= filled and abs(total_diff) <= 6:
-                # Check if board exists
                 if self._get_local(empty_dist[0], total_diff):
-                    yield (total_diff,)
-            return
+                    result = [(total_diff,)]
+        else:
+            filled = 9 - empty_dist[0]
+            min_diff = max(-filled, -6)
+            max_diff = min(filled, 6)
+            for d in range(min_diff, max_diff + 1):
+                if not self._get_local(empty_dist[0], d):
+                    continue
+                for rest in self._distribute_diff(num_open - 1, total_diff - d, empty_dist[1:]):
+                    result.append((d,) + rest)
         
-        filled = 9 - empty_dist[0]
-        min_diff = max(-filled, -6)
-        max_diff = min(filled, 6)
-        
-        for d in range(min_diff, max_diff + 1):
-            # Check if board exists for this (empty, diff)
-            if not self._get_local(empty_dist[0], d):
-                continue
-            
-            for rest in self._distribute_diff(num_open - 1, total_diff - d, empty_dist[1:]):
-                yield (d,) + rest
+        self._diff_dist_cache[key] = result
+        return result
     
     def _create_board(self, meta: Tuple[int, ...], open_indices: List[int], 
                       empty_dist: Tuple[int, ...], diff_dist: Tuple[int, ...]) -> Board:

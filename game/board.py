@@ -95,6 +95,15 @@ class Board:
         self.check_winner()
         
         self.current_player = self.current_player % 2 + 1
+    
+    def undo_move(self, r, c, prev_completed, prev_winner, prev_last_move):
+        """Undo a move (for solver optimization). Caller must save state before make_move."""
+        self.boards[r][c] = 0
+        board_r, board_c = r // 3, c // 3
+        self.completed_boards[board_r][board_c] = prev_completed
+        self.winner = prev_winner
+        self.last_move = prev_last_move
+        self.current_player = self.current_player % 2 + 1
 
     def update_completed_boards(self, r, c):
         board_r, board_c = r // 3, c // 3

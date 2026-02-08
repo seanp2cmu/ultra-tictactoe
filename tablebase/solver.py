@@ -76,7 +76,7 @@ class TablebaseSolver:
     def _solve_recursive(self, board: Board, depth: int = 0) -> Tuple[int, int, Optional[Tuple[int, int]]]:
         """
         Progressive solver - lookup children from previous levels.
-        All children should be in cache from previous levels.
+        Optimized: constraint-based moves + undo pattern (no clone).
         """
         # Terminal check
         if board.winner is not None:
@@ -84,36 +84,48 @@ class TablebaseSolver:
                 return (0, 0, None)
             return (-1, 0, None)
         
-        legal_moves = board.get_legal_moves()
-        if not legal_moves:
+        # Get moves based on constraint (avoid full get_legal_moves)
+        constraint = getattr(board, 'constraint', -1)
+        moves = self._get_moves_for_constraint(board, constraint)
+        
+        if not moves:
             return (0, 0, None)
         
         best_value = -2
         best_dtw = 999
         best_move = None
         
-        for move in legal_moves:
-            child = board.clone()
-            child.make_move(move[0], move[1])
+        # Save state for undo
+        prev_last_move = board.last_move
+        prev_winner = board.winner
+        
+        for r, c in moves:
+            # Save sub-board state
+            sub_r, sub_c = r // 3, c // 3
+            prev_completed = board.completed_boards[sub_r][sub_c]
             
-            # Set child's constraint based on move destination
-            target_sub = (move[0] % 3) * 3 + (move[1] % 3)
-            target_sub_r, target_sub_c = move[0] % 3, move[1] % 3
+            # Make move (no clone)
+            board.make_move(r, c, validate=False)
             
-            # Check if child is terminal first
-            if child.winner is not None:
-                child_result = -1 if child.winner != 3 else 0
+            # Child's constraint
+            target_sub_r, target_sub_c = r % 3, c % 3
+            target_sub = target_sub_r * 3 + target_sub_c
+            
+            # Evaluate child
+            if board.winner is not None:
+                child_result = -1 if board.winner != 3 else 0
                 child_dtw = 0
-            elif not child.get_legal_moves():
-                child_result, child_dtw = 0, 0
-            elif child.completed_boards[target_sub_r][target_sub_c] != 0:
-                # Target sub-board is completed - "any" constraint
-                child_hash = self._hash_board(child)
-                child_result, child_dtw = self._lookup_best_constraint(child_hash, child)
+            elif board.completed_boards[target_sub_r][target_sub_c] != 0:
+                # "any" constraint
+                child_hash = self._hash_board(board)
+                child_result, child_dtw = self._lookup_best_constraint(child_hash, board)
             else:
-                # Specific constraint - use canonical hash + transformed constraint
-                child_hash, canonical_constraint = self._hash_board_with_constraint(child, target_sub)
-                child_result, child_dtw = self._lookup_constraint(child_hash, canonical_constraint, child)
+                # Specific constraint
+                child_hash, canonical_constraint = self._hash_board_with_constraint(board, target_sub)
+                child_result, child_dtw = self._lookup_constraint(child_hash, canonical_constraint, board)
+            
+            # Undo move
+            board.undo_move(r, c, prev_completed, prev_winner, prev_last_move)
             
             # Negate for perspective switch
             value = -child_result
@@ -121,9 +133,38 @@ class TablebaseSolver:
             if value > best_value or (value == best_value and child_dtw < best_dtw):
                 best_value = value
                 best_dtw = child_dtw
-                best_move = move
+                best_move = (r, c)
         
         return (best_value, best_dtw + 1, best_move)
+    
+    def _get_moves_for_constraint(self, board: Board, constraint: int) -> List[Tuple[int, int]]:
+        """Get legal moves based on constraint (faster than get_legal_moves)."""
+        moves = []
+        
+        if constraint == -1:
+            # No constraint or "any" - check all open sub-boards
+            for sub_idx in range(9):
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                if board.completed_boards[sub_r][sub_c] == 0:
+                    start_r, start_c = sub_r * 3, sub_c * 3
+                    for dr in range(3):
+                        for dc in range(3):
+                            if board.boards[start_r + dr][start_c + dc] == 0:
+                                moves.append((start_r + dr, start_c + dc))
+        else:
+            # Specific constraint - only check that sub-board
+            sub_r, sub_c = constraint // 3, constraint % 3
+            if board.completed_boards[sub_r][sub_c] == 0:
+                start_r, start_c = sub_r * 3, sub_c * 3
+                for dr in range(3):
+                    for dc in range(3):
+                        if board.boards[start_r + dr][start_c + dc] == 0:
+                            moves.append((start_r + dr, start_c + dc))
+            else:
+                # Constraint sub-board is completed - fall back to "any"
+                return self._get_moves_for_constraint(board, -1)
+        
+        return moves
     
     def _lookup_constraint(self, h: int, constraint: int, board: Board) -> Tuple[int, int]:
         """Lookup specific constraint in nested dict cache.
