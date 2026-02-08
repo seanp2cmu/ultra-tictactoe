@@ -73,13 +73,27 @@ class PositionEnumerator:
                 if board is None:
                     continue
                 
-                # Step 3: Symmetry dedup (D4 only, no X-O swap)
-                canonical = BoardSymmetry.get_canonical_hash(board)
-                if canonical in self.seen_hashes:
+                # Step 3: Dedup using (meta, x_counts, o_counts) per sub-board
+                # This captures the essential position without symmetry issues
+                sub_data = []
+                for sub_idx in range(9):
+                    sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                    state = board.completed_boards[sub_r][sub_c]
+                    if state != 0:
+                        sub_data.append((state, 0, 0))
+                    else:
+                        x_count = sum(1 for dr in range(3) for dc in range(3) 
+                                     if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
+                        o_count = sum(1 for dr in range(3) for dc in range(3) 
+                                     if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
+                        sub_data.append((0, x_count, o_count))
+                
+                dedup_key = (tuple(sub_data), getattr(board, 'constraint', -1))
+                if dedup_key in self.seen_hashes:
                     self.stats['duplicate'] += 1
                     continue
                 
-                self.seen_hashes.add(canonical)
+                self.seen_hashes.add(dedup_key)
                 self.stats['valid_structure'] += 1
                 self.stats['yielded'] += 1
                 count += 1

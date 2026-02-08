@@ -102,7 +102,13 @@ class TablebaseSolver:
             
             child_hash = self._hash_board(child)
             
-            if child.completed_boards[target_sub_r][target_sub_c] != 0:
+            # Check if child is terminal first
+            if child.winner is not None:
+                child_result = -1 if child.winner != 3 else 0
+                child_dtw = 0
+            elif not child.get_legal_moves():
+                child_result, child_dtw = 0, 0
+            elif child.completed_boards[target_sub_r][target_sub_c] != 0:
                 # Target sub-board is completed - "any" constraint
                 child_result, child_dtw = self._lookup_best_constraint(child_hash, child)
             else:
@@ -171,21 +177,33 @@ class TablebaseSolver:
     def _hash_board(self, board: Board) -> int:
         """Create hash for board position (without constraint).
         
-        Note: Completed board cells are treated as 0 for consistency
-        with enumeration (which doesn't store actual pieces in completed boards).
+        For OPEN sub-boards: hash (x_count, o_count) instead of actual cell positions
+        For COMPLETED sub-boards: hash state only (cells ignored)
         """
-        # For each cell, use 0 if sub-board is completed, otherwise use actual value
-        cells = []
-        for r in range(9):
-            for c in range(9):
-                sub_r, sub_c = r // 3, c // 3
-                if board.completed_boards[sub_r][sub_c] != 0:
-                    cells.append(0)  # Completed board - ignore cell value
-                else:
-                    cells.append(board.boards[r][c])
+        # For each sub-board, store (x_count, o_count) if OPEN, or state if completed
+        sub_data = []
+        for sub_idx in range(9):
+            sub_r, sub_c = sub_idx // 3, sub_idx % 3
+            state = board.completed_boards[sub_r][sub_c]
+            
+            if state != 0:
+                # Completed - just store state
+                sub_data.append((state, 0, 0))
+            else:
+                # OPEN - count X and O
+                x_count = 0
+                o_count = 0
+                for dr in range(3):
+                    for dc in range(3):
+                        cell = board.boards[sub_r*3 + dr][sub_c*3 + dc]
+                        if cell == 1:
+                            x_count += 1
+                        elif cell == 2:
+                            o_count += 1
+                sub_data.append((0, x_count, o_count))
         
-        completed = tuple(board.completed_boards[r][c] for r in range(3) for c in range(3))
-        return hash((tuple(cells), completed, board.current_player))
+        # Don't include current_player - it's implied by constraint and game flow
+        return hash(tuple(sub_data))
 
 
 class ReachabilityChecker:
