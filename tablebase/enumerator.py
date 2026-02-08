@@ -112,24 +112,46 @@ class PositionEnumerator:
     
     def _enumerate_meta_boards(self) -> Generator[Tuple[int, ...], None, None]:
         """
-        Enumerate valid meta-board configurations.
+        Enumerate valid meta-board configurations with O(1) pre-filtering.
         
         Each sub-board can be: OPEN(0), X_WIN(1), O_WIN(2), DRAW(3)
-        Filter out configurations where game is already over.
+        Filter out configurations where game is already over or impossible.
         """
         for meta in product([0, 1, 2, 3], repeat=9):
             # Check big board winner
             if self._check_meta_winner(meta) != 0:
                 continue  # Game already over
             
-            # Must have at least one open sub-board
-            if meta.count(0) == 0:
+            num_open = meta.count(0)
+            if num_open == 0:
                 continue
             
-            # X wins - O wins should be reasonable
+            # Check if empty_cells can fit in OPEN boards
+            if self.empty_cells > num_open * 8 or self.empty_cells < num_open:
+                continue
+            
             x_wins = meta.count(1)
             o_wins = meta.count(2)
+            draws = meta.count(3)
+            
+            # X wins - O wins should be reasonable
             if abs(x_wins - o_wins) > 2:
+                continue
+            
+            # O(1) pre-filter: check if ANY valid piece distribution exists
+            # OPEN boards: total filled = 9 * num_open - empty_cells
+            total_filled = 9 * num_open - self.empty_cells
+            max_open_diff = total_filled   # All X
+            min_open_diff = -total_filled  # All O
+            
+            # Completed boards diff ranges
+            min_completed = x_wins * (-3) + o_wins * (-7) + draws * (-1)
+            max_completed = x_wins * 7 + o_wins * 3 + draws * 1
+            
+            # Check overlap with [0, 1]
+            total_max = max_open_diff + max_completed
+            total_min = min_open_diff + min_completed
+            if total_max < 0 or total_min > 1:
                 continue
             
             yield meta
