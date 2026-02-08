@@ -241,6 +241,29 @@ class TablebaseBuilder:
         print(f"✓ Exported compact tablebase: {compact.get_size_mb():.2f} MB")
 
 
+def upload_to_hf(file_paths: list, repo_id: str = "sean2474/ultra-tictactoe-models"):
+    """Upload tablebase files to HuggingFace."""
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        
+        for file_path in file_paths:
+            if os.path.exists(file_path):
+                filename = os.path.basename(file_path)
+                print(f"Uploading {filename} to HuggingFace...")
+                api.upload_file(
+                    path_or_fileobj=file_path,
+                    path_in_repo=f"tablebase/{filename}",
+                    repo_id=repo_id,
+                    repo_type="model"
+                )
+                print(f"✓ Uploaded: {filename}")
+        
+        print(f"✓ All files uploaded to {repo_id}")
+    except Exception as e:
+        print(f"⚠ HuggingFace upload failed: {e}")
+
+
 def main():
     """Build tablebase from command line."""
     import argparse
@@ -250,6 +273,7 @@ def main():
     parser.add_argument('--output', type=str, default='tablebase/endgame.pkl', help='Output path')
     parser.add_argument('--max-per-level', type=int, default=None, help='Max positions per level (for testing)')
     parser.add_argument('--base', type=str, default=None, help='Continue from existing tablebase')
+    parser.add_argument('--upload-hf', action='store_true', help='Upload to HuggingFace after build')
     
     args = parser.parse_args()
     
@@ -259,6 +283,8 @@ def main():
     print(f"  Output: {args.output}")
     if args.base:
         print(f"  Continue from: {args.base}")
+    if args.upload_hf:
+        print(f"  Upload to HF: enabled")
     print(f"{'=' * 60}\n")
     
     builder = TablebaseBuilder(
@@ -272,6 +298,10 @@ def main():
     # Export compact version
     compact_path = args.output.replace('.pkl', '.npz')
     builder.export_compact(compact_path)
+    
+    # Upload to HuggingFace if requested
+    if args.upload_hf:
+        upload_to_hf([args.output, compact_path])
 
 
 if __name__ == '__main__':
