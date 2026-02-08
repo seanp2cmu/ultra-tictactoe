@@ -68,13 +68,12 @@ class BoardSymmetry:
     
     @staticmethod
     def get_canonical_bytes(board: Board) -> bytes:
+        """Get canonical bytes for board (without constraint - stored separately)."""
         boards_arr = np.array(board.boards, dtype=np.int8)
         completed_arr = np.array(board.completed_boards, dtype=np.int8)
         player = board.current_player
-        constraint = getattr(board, 'constraint', -1)
         
-        # Include constraint in hash (add 1 to make it 0-9 range for bytes)
-        min_bytes = boards_arr.tobytes() + completed_arr.tobytes() + bytes([player, constraint + 1])
+        min_bytes = boards_arr.tobytes() + completed_arr.tobytes() + bytes([player])
         
         for transform in [
             lambda b, c: (np.fliplr(b), np.fliplr(c)),
@@ -86,7 +85,7 @@ class BoardSymmetry:
             lambda b, c: (np.rot90(b.T, 2), np.rot90(c.T, 2)),
         ]:
             tb, tc = transform(boards_arr, completed_arr)
-            b = np.ascontiguousarray(tb).tobytes() + np.ascontiguousarray(tc).tobytes() + bytes([player, constraint + 1])
+            b = np.ascontiguousarray(tb).tobytes() + np.ascontiguousarray(tc).tobytes() + bytes([player])
             if b < min_bytes:
                 min_bytes = b
         
