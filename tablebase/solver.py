@@ -121,6 +121,7 @@ class TablebaseSolver:
     def _hash_board(self, board: Board) -> int:
         """Create hash for board position."""
         cells = tuple(board.boards[r][c] for r in range(9) for c in range(9))
+        completed = tuple(board.completed_boards[r][c] for r in range(3) for c in range(3))
         
         # Include constraint (which sub-board must play in)
         constraint = -1
@@ -130,7 +131,7 @@ class TablebaseSolver:
             if board.completed_boards[sub_r][sub_c] == 0:
                 constraint = sub_r * 3 + sub_c
         
-        return hash((cells, board.current_player, constraint))
+        return hash((cells, completed, board.current_player, constraint))
 
 
 class ReachabilityChecker:
