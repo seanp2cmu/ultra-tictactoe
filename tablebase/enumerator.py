@@ -64,17 +64,17 @@ class PositionEnumerator:
                 self.stats['yielded'] += 1
                 count += 1
                 
-                if pbar:
+                if show_progress:
                     pbar.update(1)
                 
                 yield board
                 
                 if max_positions and count >= max_positions:
-                    if pbar:
+                    if show_progress:
                         pbar.close()
                     return
         
-        if pbar:
+        if show_progress:
             pbar.close()
     
     def _compute_key(self, board: Board) -> Tuple:
