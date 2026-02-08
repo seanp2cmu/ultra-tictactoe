@@ -98,7 +98,7 @@ class TestBoardSymmetryOptimization:
     
     def test_get_all_symmetries_no_unnecessary_copy(self):
         """get_all_symmetries가 불필요한 copy를 하지 않는지 확인"""
-        from ai.utils import BoardSymmetry
+        from utils import BoardSymmetry
         
         b = Board()
         b.make_move(0, 0)
@@ -113,7 +113,7 @@ class TestBoardSymmetryOptimization:
     
     def test_canonical_hash_consistency(self):
         """canonical hash가 일관성있게 동작하는지 확인"""
-        from ai.utils import BoardSymmetry
+        from utils import BoardSymmetry
         
         b = Board()
         b.make_move(4, 4)  # 중앙

@@ -8,6 +8,7 @@ import threading
 from torch.amp import autocast, GradScaler
 
 from .network import Model
+from utils import BoardSymmetry
 
 
 class AlphaZeroNet:
@@ -55,25 +56,83 @@ class AlphaZeroNet:
         self.predict_lock = threading.Lock()
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
-        """Thread-safe single board prediction."""
+        """Thread-safe single board prediction with canonical form."""
         with self.predict_lock:
-            return self.model.predict(board_state)
+            from game import Board
+            
+            # Get canonical transform
+            boards_arr, completed_arr, transform_idx = BoardSymmetry.get_canonical_with_transform(board_state)
+            
+            # Create canonical board
+            canonical_board = Board()
+            canonical_board.boards = boards_arr.tolist()
+            canonical_board.completed_boards = completed_arr.tolist()
+            canonical_board.current_player = board_state.current_player
+            
+            # Transform last_move
+            if board_state.last_move is not None and transform_idx != 0:
+                transforms = BoardSymmetry._build_transforms()
+                old_idx = board_state.last_move[0] * 9 + board_state.last_move[1]
+                new_idx = np.where(transforms[transform_idx] == old_idx)[0]
+                if len(new_idx) > 0:
+                    canonical_board.last_move = (new_idx[0] // 9, new_idx[0] % 9)
+            else:
+                canonical_board.last_move = board_state.last_move
+            
+            # Predict on canonical board
+            policy, value = self.model.predict(canonical_board)
+            
+            # Transform policy back to original orientation
+            original_policy = BoardSymmetry.inverse_transform_policy(policy, transform_idx)
+            return original_policy, value
     
     def predict_batch(self, board_states) -> Tuple[np.ndarray, np.ndarray]:
-        """Thread-safe batch prediction."""
+        """Thread-safe batch prediction with canonical form."""
         with self.predict_lock:
+            from game import Board
             self.model.eval()
+            
+            # Process each board to canonical form
+            canonical_boards = []
+            transform_indices = []
+            
+            for board_state in board_states:
+                boards_arr, completed_arr, transform_idx = BoardSymmetry.get_canonical_with_transform(board_state)
+                transform_indices.append(transform_idx)
+                
+                canonical_board = Board()
+                canonical_board.boards = boards_arr.tolist()
+                canonical_board.completed_boards = completed_arr.tolist()
+                canonical_board.current_player = board_state.current_player
+                
+                if board_state.last_move is not None and transform_idx != 0:
+                    transforms = BoardSymmetry._build_transforms()
+                    old_idx = board_state.last_move[0] * 9 + board_state.last_move[1]
+                    new_idx = np.where(transforms[transform_idx] == old_idx)[0]
+                    if len(new_idx) > 0:
+                        canonical_board.last_move = (new_idx[0] // 9, new_idx[0] % 9)
+                else:
+                    canonical_board.last_move = board_state.last_move
+                
+                canonical_boards.append(canonical_board)
+            
             with torch.no_grad():
                 board_tensors = [
                     self.model._board_to_tensor(board).squeeze(0)
-                    for board in board_states
+                    for board in canonical_boards
                 ]
                 batch_tensor = torch.stack(board_tensors).to(self.device)
                 
                 policy_logits, values = self.model(batch_tensor)
-                policy_probs = F.softmax(policy_logits, dim=1)
+                policy_probs = F.softmax(policy_logits, dim=1).cpu().numpy()
                 
-                return policy_probs.cpu().numpy(), values.cpu().numpy()
+                # Transform each policy back to original orientation
+                original_policies = []
+                for i, policy in enumerate(policy_probs):
+                    original_policy = BoardSymmetry.inverse_transform_policy(policy, transform_indices[i])
+                    original_policies.append(original_policy)
+                
+                return np.array(original_policies), values.cpu().numpy()
     
     def train_step(
         self,

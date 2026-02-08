@@ -4,7 +4,7 @@ Compressed Transposition Table for DTW caching
 from collections import OrderedDict
 from game import Board
 
-from ai.utils import BoardSymmetry
+from utils import BoardSymmetry
 
 class CompressedTranspositionTable:
     def __init__(self, hot_size=50000, cold_size=500000):

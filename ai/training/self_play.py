@@ -7,6 +7,7 @@ from game import Board
 from ai.core import AlphaZeroNet
 from ai.endgame import DTWCalculator
 from ai.mcts import AlphaZeroAgent
+from utils import BoardSymmetry
 
 # 디버깅용 타이밍 변수
 DEBUG_TIMING = True
@@ -120,7 +121,8 @@ class SelfPlayWorker:
                             action = best_move[0] * 9 + best_move[1]
                             action_probs[action] = 1.0
                             
-                            state = self._board_to_input(board)
+                            # Use canonical form for training
+                            state, action_probs = self._board_to_canonical_input(board, action_probs)
                             game_data.append((state, action_probs, current_player, dtw))
                             
                             board.make_move(best_move[0], best_move[1])
@@ -147,10 +149,11 @@ class SelfPlayWorker:
             action_probs = action_probs / np.sum(action_probs)
             
             t0 = time.time()
-            state = self._board_to_input(board)
+            # Use canonical form for training (8x data efficiency)
+            state, canonical_probs = self._board_to_canonical_input(board, action_probs)
             _timing_stats['board_to_input'] += time.time() - t0
             
-            game_data.append((state, action_probs, current_player, dtw))
+            game_data.append((state, canonical_probs, current_player, dtw))
             _timing_stats['total_steps'] += 1
             
             # Temperature only for first 8 moves (AlphaZero style)
@@ -193,3 +196,39 @@ class SelfPlayWorker:
         tensor = self.network.model._board_to_tensor(board)
         state = tensor.squeeze(0).cpu().numpy()
         return state
+    
+    def _board_to_canonical_input(self, board: Board, policy: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Convert board and policy to canonical form for training.
+        
+        This normalizes symmetric positions to the same representation,
+        effectively increasing training data efficiency by 8x.
+        
+        Args:
+            board: Board object
+            policy: Policy probabilities (81,)
+            
+        Returns:
+            (canonical_state, canonical_policy)
+        """
+        boards_arr, completed_arr, trans_policy, player = BoardSymmetry.canonicalize_training_sample(board, policy)
+        
+        # Build canonical board object for tensor conversion
+        canonical_board = Board()
+        canonical_board.boards = boards_arr.tolist()
+        canonical_board.completed_boards = completed_arr.tolist()
+        canonical_board.current_player = player
+        canonical_board.last_move = board.last_move  # Keep last_move for valid moves channel
+        
+        # Apply same transform to last_move if present
+        if board.last_move is not None:
+            _, _, transform_idx = BoardSymmetry.get_canonical_with_transform(board)
+            if transform_idx != 0:
+                transforms = BoardSymmetry._build_transforms()
+                old_idx = board.last_move[0] * 9 + board.last_move[1]
+                new_idx = np.where(transforms[transform_idx] == old_idx)[0]
+                if len(new_idx) > 0:
+                    canonical_board.last_move = (new_idx[0] // 9, new_idx[0] % 9)
+        
+        state = self._board_to_input(canonical_board)
+        return state, trans_policy

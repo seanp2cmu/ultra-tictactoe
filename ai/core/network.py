@@ -96,7 +96,7 @@ class Model(nn.Module):
         value = F.relu(self.value_bn(self.value_conv(x)))
         value = value.view(-1, 9 * 9)
         value = F.relu(self.value_fc1(value))
-        value = torch.sigmoid(self.value_fc2(value))  # 0~1 range (loss=0, draw=0.5, win=1)
+        value = torch.sigmoid(self.value_fc2(value)) 
         
         return policy, value
     

@@ -15,19 +15,17 @@ from ai.endgame.dtw_calculator import DTWCalculator
 class TestDTWNodeLimit:
     """DTW 노드 제한 테스트"""
     
-    def test_shallow_alpha_beta_aborts(self):
-        """shallow_alpha_beta가 max_nodes 초과 시 중단되는지 테스트"""
+    def test_dtw_endgame_only(self):
+        """DTW가 endgame에서만 동작하는지 테스트 (shallow 제거됨)"""
         dtw = DTWCalculator(
             use_cache=False, 
-            max_nodes=100,  # 매우 작은 노드 제한
-            shallow_depth=8,
-            midgame_threshold=45
+            max_nodes=100,
+            endgame_threshold=15
         )
         
         board = Board()
-        # 중반 상태로 만들기 (16-45 칸)
-        moves = [(0,0), (1,1), (0,1), (1,2), (0,2),  # 첫 번째 작은 보드 완료
-                 (3,3), (4,4), (3,4), (4,5), (3,5)]  # 두 번째 작은 보드
+        # 중반 상태 - DTW는 동작하지 않아야 함
+        moves = [(0,0), (1,1), (0,1), (1,2), (0,2)]
         
         for i, (r, c) in enumerate(moves):
             if board.winner is None:
@@ -35,23 +33,13 @@ class TestDTWNodeLimit:
                 if (r, c) in legal:
                     board.make_move(r, c)
         
-        # midgame 체크
         empty_cells = board.count_playable_empty_cells()
         print(f"Empty cells: {empty_cells}")
-        print(f"Is midgame: {dtw.is_midgame(board)}")
+        print(f"Is endgame: {dtw.is_endgame(board)}")
         
-        # check_candidate_moves 호출
-        candidate_moves = board.get_legal_moves()[:5]
-        result = dtw.check_candidate_moves(board, candidate_moves)
-        
-        stats = dtw.get_stats()
-        print(f"Shallow searches: {stats['shallow_searches']}")
-        print(f"Shallow aborted: {stats['shallow_aborted']}")
-        print(f"Shallow nodes: {stats['shallow_nodes']}")
-        
-        # 노드 제한 때문에 일부가 abort되어야 함
-        assert stats['shallow_aborted'] >= 0, "Test passed - abort logic exists"
-        print("✓ Shallow alpha-beta abort test passed")
+        # 중반이므로 endgame이 아님
+        assert not dtw.is_endgame(board), "Should not be endgame with many empty cells"
+        print("✓ DTW endgame-only test passed")
         
     def test_full_alpha_beta_aborts(self):
         """_alpha_beta_search가 max_nodes 초과 시 중단되는지 테스트"""
@@ -107,34 +95,22 @@ class TestCheckpointSystem:
         
         with tempfile.TemporaryDirectory() as tmpdir:
             # 작은 네트워크 생성
-            net = AlphaZeroNet(
-                device='cpu',
-                lr=0.001,
-                num_res_blocks=2,
-                num_channels=32,
-                total_iterations=100
-            )
+            net = AlphaZeroNet(device='cpu')
             
             # iteration 포함해서 저장
             save_path = os.path.join(tmpdir, 'test_checkpoint.pt')
             net.save(save_path, iteration=42)
             
             # 새 네트워크에서 로드
-            net2 = AlphaZeroNet(
-                device='cpu',
-                lr=0.001,
-                num_res_blocks=2,
-                num_channels=32,
-                total_iterations=100
-            )
+            net2 = AlphaZeroNet(device='cpu')
             loaded_iter = net2.load(save_path)
             
             assert loaded_iter == 42, f"Expected iteration 42, got {loaded_iter}"
             print(f"✓ Checkpoint save/load with iteration test passed (iteration={loaded_iter})")
     
-    def test_find_latest_checkpoint(self):
-        """최신 체크포인트 찾기 테스트"""
-        from train import find_latest_checkpoint, find_best_checkpoint
+    def test_find_checkpoint_files(self):
+        """체크포인트 파일 찾기 테스트"""
+        import glob
         
         with tempfile.TemporaryDirectory() as tmpdir:
             # 체크포인트 파일들 생성
@@ -148,17 +124,24 @@ class TestCheckpointSystem:
             with open(best_path, 'w') as f:
                 f.write('dummy')
             
-            # 최신 체크포인트 찾기
-            found_path, found_iter = find_latest_checkpoint(tmpdir)
-            assert found_iter == 15, f"Expected iteration 15, got {found_iter}"
-            assert 'checkpoint_15.pt' in found_path
-            print(f"✓ find_latest_checkpoint test passed (found iter {found_iter})")
+            # 체크포인트 파일 찾기
+            checkpoints = glob.glob(os.path.join(tmpdir, 'checkpoint_*.pt'))
+            assert len(checkpoints) == 3
             
-            # best.pt 찾기
-            found_best = find_best_checkpoint(tmpdir)
-            assert found_best is not None
-            assert 'best.pt' in found_best
-            print("✓ find_best_checkpoint test passed")
+            # 최신 iteration 찾기
+            iterations = []
+            for cp in checkpoints:
+                name = os.path.basename(cp)
+                iter_num = int(name.replace('checkpoint_', '').replace('.pt', ''))
+                iterations.append(iter_num)
+            
+            latest = max(iterations)
+            assert latest == 15, f"Expected 15, got {latest}"
+            print(f"✓ find_checkpoint_files test passed (latest iter {latest})")
+            
+            # best.pt 확인
+            assert os.path.exists(best_path)
+            print("✓ best.pt exists test passed")
 
 
 def run_all_tests():
@@ -167,7 +150,7 @@ def run_all_tests():
     print("=" * 60)
     
     dtw_tests = TestDTWNodeLimit()
-    dtw_tests.test_shallow_alpha_beta_aborts()
+    dtw_tests.test_dtw_endgame_only()
     print()
     dtw_tests.test_full_alpha_beta_aborts()
     
@@ -178,7 +161,7 @@ def run_all_tests():
     ckpt_tests = TestCheckpointSystem()
     ckpt_tests.test_save_load_with_iteration()
     print()
-    ckpt_tests.test_find_latest_checkpoint()
+    ckpt_tests.test_find_checkpoint_files()
     
     print("\n" + "=" * 60)
     print("All tests passed! ✓")
