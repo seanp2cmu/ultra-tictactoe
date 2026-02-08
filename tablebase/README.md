@@ -151,16 +151,28 @@ for a, b, c in WIN_PATTERNS:
 #### 2.2 X-O 개수 제약 (Count Constraint)
 유효한 게임 상태에서 X와 O의 개수 차이는 0 또는 1:
 
+메타 보드 안의 x_count, o_count를 직접 확인 불가능하므로 수식으로 계산
+
 ```
 |X_count - O_count| ∈ {0, 1}
 
 완료된 서브보드별 X-O 차이 범위:
-- X_WIN: [-3, +7] (X가 3개로 승리 ~ X가 9개, O가 2개)
-- O_WIN: [-7, +3]
-- DRAW:  [-1, +1] (9칸 모두 채워짐, 차이 1 이하)
+- X_WIN: [-3, +7] (X가 3개, O가 6개 ~ X가 7개, O가 0개)
+- O_WIN: [-7, +3] (O가 3개, X가 6개 ~ X가 0개, O가 7개)
+- DRAW:  [-1, +1] (9칸 모두 채워짐, X가 4개, O가 5개 ~ X가 5개, O가 4개)
 
-전체 diff = Σ(서브보드별 diff) 
-유효 조건: diff ∈ {0, 1}
+따라서 diff를 playable board들의 X_COUNT - O_COUNT로 정의하면
+
+X_WIN * 7 + O_WIN * 3 + DRAW >= diff >= X_WIN * -3 + O_WIN * -7 - DRAW
+를 만족해야함.
+
+남은 playable 칸에서 둘의 최대 diff는 PLAYABLE_BOARD * 9 - EMPTY_COUNT 이므로 
+만족하지 않는 경우 필터링.
+
+만족하는 경우:
+  MAX_DIFF = X_WIN * 7 + O_WIN * 3 + DRAW 
+  MIN_DIFF = X_WIN * -3 + O_WIN * -7 - DRAW
+와 함께 메타보드 리턴.
 ```
 
 #### 2.3 서브보드 승자 없음 필터
