@@ -50,29 +50,6 @@ class TestMetaBoardEnumeration:
         meta = (1, 2, 1, 2, 1, 2, 2, 1, 0)
         assert enumerator._check_meta_winner(meta) == 0
     
-    def test_is_meta_reachable_valid(self):
-        """Test valid meta-board configurations."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        # Equal wins
-        assert enumerator._is_meta_reachable((1, 2, 0, 0, 0, 0, 0, 0, 0)) == True
-        
-        # X one more win
-        assert enumerator._is_meta_reachable((1, 1, 2, 0, 0, 0, 0, 0, 0)) == True
-        
-        # O one more win (X played but O won more boards)
-        assert enumerator._is_meta_reachable((1, 2, 2, 0, 0, 0, 0, 0, 0)) == True
-    
-    def test_is_meta_reachable_invalid(self):
-        """Test invalid meta-board configurations."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        # Too many X wins
-        assert enumerator._is_meta_reachable((1, 1, 1, 2, 0, 0, 0, 0, 0)) == False
-        
-        # Too many O wins
-        assert enumerator._is_meta_reachable((2, 2, 2, 1, 0, 0, 0, 0, 0)) == False
-    
     def test_enumerate_meta_boards_filters_winners(self):
         """Test that meta-board enumeration filters out winning positions."""
         enumerator = PositionEnumerator(empty_cells=10)
@@ -431,86 +408,6 @@ class TestCanonicalHashEdgeCases:
         assert hash1 != hash2
 
 
-class TestActiveBoard:
-    """Tests for active board constraint in undo."""
-    
-    def test_try_undo_valid_path(self):
-        """Test undo with valid active board path."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        # Create a board where:
-        # - X played at (0,0) sending O to board (0,0)
-        # - O played at (0,4) in board (0,0) sending X to board (0,1)
-        # - X played at (3,0) in board (1,0) sending O to board (0,0)
-        board = Board()
-        board.boards[0][0] = 1  # X at sub(0,0) cell 0
-        board.boards[0][4] = 2  # O at sub(0,0) cell 4, sends to (0,1)
-        board.boards[0][3] = 1  # X at sub(0,1) cell 0
-        board.current_player = 2  # O's turn
-        
-        # Try undoing X's last move at (0,3)
-        result = enumerator._try_undo(board, 0, 3)
-        # Should work because O has piece at cell that could send to sub(0,1)
-        # O at (0,4) is in sub(0,0), cell 4 -> sends to sub(0,1)? No, cell 4 sends to sub(1,1)
-        # Actually let me recalculate...
-        # This test might be complex, let me simplify
-    
-    def test_try_undo_removes_piece(self):
-        """Test that undo removes the piece."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        board = Board()
-        board.boards[4][4] = 1  # X in center
-        board.current_player = 2
-        
-        result = enumerator._try_undo(board, 4, 4)
-        if result is not None:
-            assert result.boards[4][4] == 0
-            assert result.current_player == 1
-    
-    def test_try_undo_empty_cell_fails(self):
-        """Test that undo on empty cell returns None."""
-        enumerator = PositionEnumerator(empty_cells=10)
-        
-        board = Board()
-        result = enumerator._try_undo(board, 0, 0)
-        assert result is None
-
-
-class TestReachability:
-    """Tests for reachability checking."""
-    
-    def test_is_reachable_empty_board(self):
-        """Empty board is always reachable."""
-        enumerator = PositionEnumerator(empty_cells=10, backward_depth=4)
-        
-        board = Board()
-        assert enumerator._is_reachable(board) == True
-    
-    def test_is_reachable_single_piece(self):
-        """Single piece is always reachable."""
-        enumerator = PositionEnumerator(empty_cells=10, backward_depth=4)
-        
-        board = Board()
-        board.boards[4][4] = 1
-        board.current_player = 2
-        
-        assert enumerator._is_reachable(board) == True
-    
-    def test_backward_dfs_depth_limit(self):
-        """Test that backward DFS respects depth limit."""
-        enumerator = PositionEnumerator(empty_cells=10, backward_depth=4)
-        
-        # Create a simple board with just 2 pieces
-        board = Board()
-        board.boards[0][0] = 1  # X
-        board.boards[0][1] = 2  # O  
-        board.current_player = 1
-        
-        # Few pieces = definitely reachable
-        assert enumerator._backward_dfs(board, 0) == True
-
-
 class TestBoardWinnerChecks:
     """Tests for sub-board and big board winner checks."""
     
@@ -571,7 +468,7 @@ class TestEnumeration:
     
     def test_enumerate_produces_valid_boards(self):
         """Test that enumerated boards are valid."""
-        enumerator = PositionEnumerator(empty_cells=10, backward_depth=4)
+        enumerator = PositionEnumerator(empty_cells=10)
         
         count = 0
         for board in enumerator.enumerate(max_positions=20, show_progress=False):
@@ -603,7 +500,7 @@ class TestEnumeration:
         """Test that enumeration doesn't produce duplicates."""
         from utils import BoardSymmetry
         
-        enumerator = PositionEnumerator(empty_cells=12, backward_depth=4)
+        enumerator = PositionEnumerator(empty_cells=12)
         
         seen_hashes = set()
         for board in enumerator.enumerate(max_positions=50, show_progress=False):
@@ -613,14 +510,14 @@ class TestEnumeration:
     
     def test_enumerate_stats(self):
         """Test that stats are tracked correctly."""
-        enumerator = PositionEnumerator(empty_cells=10, backward_depth=4)
+        enumerator = PositionEnumerator(empty_cells=10)
         
         list(enumerator.enumerate(max_positions=30, show_progress=False))
         
         stats = enumerator.stats
         assert stats['meta_boards'] > 0
-        assert stats['reachable'] == 30
-        assert stats['generated'] >= stats['reachable']
+        assert stats['yielded'] == 30
+        assert stats['generated'] >= stats['yielded']
 
 
 if __name__ == '__main__':

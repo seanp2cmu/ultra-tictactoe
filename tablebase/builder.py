@@ -135,10 +135,7 @@ class TablebaseBuilder:
                 level_processed = 0
                 
                 # Create enumerator for this empty count
-                enumerator = PositionEnumerator(
-                    empty_cells=empty_count,
-                    backward_depth=4
-                )
+                enumerator = PositionEnumerator(empty_cells=empty_count)
                 
                 for board in enumerator.enumerate(max_positions=max_positions_per_level, show_progress=verbose):
                     self._solve_and_store(board)
