@@ -28,10 +28,10 @@ env/
 Thumbs.db
 
 # Model files (too large for GitHub)
-model/*.pth
-model/*.pkl
-model/*.pt
-model/*.ckpt
+*.pth
+*.pkl
+*.pt
+*.ckpt
 
 # Training outputs
 logs/
