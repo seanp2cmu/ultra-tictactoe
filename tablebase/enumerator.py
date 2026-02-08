@@ -52,9 +52,11 @@ class PositionEnumerator:
         self.seen_hashes: Set[int] = set()  # For symmetry dedup
         self.stats = {
             'meta_boards': 0,
+            'meta_unreachable': 0,
             'generated': 0,
             'valid_structure': 0,
             'duplicate': 0,
+            'swap_duplicate': 0,
             'reachable': 0,
             'unreachable': 0
         }
@@ -70,6 +72,11 @@ class PositionEnumerator:
         for meta in self._enumerate_meta_boards():
             self.stats['meta_boards'] += 1
             
+            # Early pruning: check if meta-board is reachable
+            if not self._is_meta_reachable(meta):
+                self.stats['meta_unreachable'] += 1
+                continue
+            
             # Step 2: For each meta-board, fill sub-boards
             for board in self._fill_subboards(meta):
                 self.stats['generated'] += 1
@@ -77,10 +84,17 @@ class PositionEnumerator:
                 if board is None:
                     continue
                 
-                # Step 3: Symmetry dedup
+                # Step 3: Symmetry dedup (D4 + X-O swap)
                 canonical = BoardSymmetry.get_canonical_hash(board)
                 if canonical in self.seen_hashes:
                     self.stats['duplicate'] += 1
+                    continue
+                
+                # X-O swap dedup: check if swapped version exists
+                swapped = self._swap_xo(board)
+                swap_canonical = BoardSymmetry.get_canonical_hash(swapped)
+                if swap_canonical in self.seen_hashes:
+                    self.stats['swap_duplicate'] += 1
                     continue
                 
                 self.stats['valid_structure'] += 1
@@ -141,6 +155,51 @@ class PositionEnumerator:
             if meta[a] == meta[b] == meta[c] and meta[a] in (1, 2):
                 return meta[a]
         return 0
+    
+    def _is_meta_reachable(self, meta: Tuple[int, ...]) -> bool:
+        """
+        Quick check if meta-board configuration is reachable.
+        
+        Rules:
+        - X plays first, so X_WIN >= O_WIN or X_WIN = O_WIN - 1
+        - |X_WIN - O_WIN| <= 1 (since turns alternate)
+        """
+        x_wins = meta.count(1)  # X_WIN
+        o_wins = meta.count(2)  # O_WIN
+        
+        # Turns alternate, so difference can be at most 1
+        if abs(x_wins - o_wins) > 1:
+            return False
+        
+        return True
+    
+    def _swap_xo(self, board: Board) -> Board:
+        """
+        Create a new board with X and O swapped.
+        Used for deduplication (X-O symmetric positions).
+        """
+        swapped = board.clone()
+        
+        # Swap pieces on board
+        for r in range(9):
+            for c in range(9):
+                if swapped.boards[r][c] == 1:
+                    swapped.boards[r][c] = 2
+                elif swapped.boards[r][c] == 2:
+                    swapped.boards[r][c] = 1
+        
+        # Swap completed_boards
+        for r in range(3):
+            for c in range(3):
+                if swapped.completed_boards[r][c] == 1:
+                    swapped.completed_boards[r][c] = 2
+                elif swapped.completed_boards[r][c] == 2:
+                    swapped.completed_boards[r][c] = 1
+        
+        # Swap current player
+        swapped.current_player = 3 - swapped.current_player
+        
+        return swapped
     
     def _fill_subboards(self, meta: Tuple[int, ...]) -> Generator[Board, None, None]:
         """
@@ -445,10 +504,74 @@ class PositionEnumerator:
         """
         Try to undo a move at (r, c).
         
+        Active board constraint:
+        - If undoing move at sub-board (sub_r, sub_c), the previous move must have:
+          1. Been at cell position (sub_r, sub_c) in some other sub-board, OR
+          2. Sent player to a completed sub-board (so any board was valid)
+        
         Returns new board if valid undo, None otherwise.
         """
         piece = board.boards[r][c]
         if piece == 0:
+            return None
+        
+        sub_r, sub_c = r // 3, c // 3
+        cell_in_sub = (r % 3) * 3 + (c % 3)  # 0-8 position within sub-board
+        
+        # Check active board constraint:
+        # For this move to be valid, previous move must have sent player here
+        # Previous move was at cell position (sub_r, sub_c) in some sub-board
+        # OR the target sub-board (sub_r, sub_c) was already completed
+        
+        target_sub_idx = sub_r * 3 + sub_c  # Which sub-board was this move in
+        
+        # Check if there's a valid previous move that could send us here
+        can_reach = False
+        
+        # Option 1: Previous move was at cell (sub_r, sub_c) in any sub-board
+        # That cell index within a sub-board = sub_r * 3 + sub_c
+        cell_idx_needed = sub_r * 3 + sub_c
+        
+        opponent = 3 - piece
+        for prev_sub_r in range(3):
+            for prev_sub_c in range(3):
+                prev_sub_idx = prev_sub_r * 3 + prev_sub_c
+                if prev_sub_idx == target_sub_idx:
+                    continue  # Can't be from same sub-board
+                
+                # Check if opponent has a piece at cell_idx_needed in this sub-board
+                pr = prev_sub_r * 3 + cell_idx_needed // 3
+                pc = prev_sub_c * 3 + cell_idx_needed % 3
+                if board.boards[pr][pc] == opponent:
+                    can_reach = True
+                    break
+            if can_reach:
+                break
+        
+        # Option 2: The sub-board (sub_r, sub_c) was already completed before
+        # (meaning player could play anywhere)
+        # This is tricky to verify without history, so we check if any completed
+        # sub-board has opponent piece at cell that would send here
+        if not can_reach:
+            # Check if target was sendable from a completed board
+            for prev_sub_r in range(3):
+                for prev_sub_c in range(3):
+                    if board.completed_boards[prev_sub_r][prev_sub_c] != 0:
+                        # This sub-board is completed, check if it has opponent piece
+                        # at position that would send to target_sub
+                        pr = prev_sub_r * 3 + cell_idx_needed // 3
+                        pc = prev_sub_c * 3 + cell_idx_needed % 3
+                        if board.boards[pr][pc] == opponent:
+                            can_reach = True
+                            break
+                if can_reach:
+                    break
+        
+        # If still can't reach and this is early game (few pieces), allow it
+        x_count = sum(1 for row in range(9) for col in range(9) if board.boards[row][col] == 1)
+        o_count = sum(1 for row in range(9) for col in range(9) if board.boards[row][col] == 2)
+        if not can_reach and x_count + o_count > 2:
+            # Not early game, need valid path
             return None
         
         # Create new board with piece removed
@@ -459,7 +582,6 @@ class PositionEnumerator:
         new_board.current_player = piece  # The one who placed this piece
         
         # Recalculate sub-board state
-        sub_r, sub_c = r // 3, c // 3
         new_winner = self._check_subboard_winner(new_board, sub_r, sub_c)
         new_board.completed_boards[sub_r][sub_c] = new_winner
         
