@@ -165,8 +165,15 @@ class PositionEnumerator:
         return min(candidates)
     
     def _canonical_meta(self, meta: Tuple[int, ...]) -> Tuple[int, ...]:
-        """Return canonical form of meta-board under D4 symmetry."""
-        candidates = [tuple(meta[p[i]] for i in range(9)) for p in self.D4_TRANSFORMS]
+        """Return canonical form of meta-board under D4 symmetry + X/O flip."""
+        candidates = []
+        for p in self.D4_TRANSFORMS:
+            # D4 symmetry only
+            sym = tuple(meta[p[i]] for i in range(9))
+            candidates.append(sym)
+            # D4 + X/O flip (swap 1↔2, keep 0 and 3)
+            flipped = tuple(3 - v if v in (1, 2) else v for v in sym)
+            candidates.append(flipped)
         return min(candidates)
     
     def _enumerate_meta_boards(self) -> Generator[Tuple[Tuple[int, ...], int, int], None, None]:
