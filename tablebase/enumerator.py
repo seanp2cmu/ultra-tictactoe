@@ -50,16 +50,8 @@ class PositionEnumerator:
         for meta, min_diff, max_diff in self._meta_boards:
             self.stats['meta_boards'] += 1
             
-            # Fill sub-boards (yields board + canonical key)
-            for board, key in self._fill_subboards(meta, min_diff, max_diff):
-                self.stats['generated'] += 1
-                
-                # Dedup using pre-computed canonical key
-                if key in self.seen_hashes:
-                    self.stats['duplicate'] += 1
-                    continue
-                
-                self.seen_hashes.add(key)
+            # Fill sub-boards (pass seen_hashes for early dedup)
+            for board in self._fill_subboards(meta, min_diff, max_diff):
                 self.stats['yielded'] += 1
                 count += 1
                 
@@ -76,21 +68,27 @@ class PositionEnumerator:
         if show_progress:
             pbar.close()
     
-    def _canonical_constraints(self, board: Board, open_indices: List[int]) -> List[Tuple[int, Tuple]]:
-        """Return (constraint, canonical_key) pairs for dedup."""
+    def _build_raw_data(self, meta: Tuple[int, ...], open_indices: List[int],
+                        empty_dist: Tuple[int, ...], diff_dist: Tuple[int, ...]) -> Tuple:
+        """Build raw_data directly from meta+distributions (no Board needed)."""
         raw_data = []
+        open_idx = 0
         for sub_idx in range(9):
-            sub_r, sub_c = sub_idx // 3, sub_idx % 3
-            state = board.completed_boards[sub_r][sub_c]
+            state = meta[sub_idx]
             if state != 0:
                 raw_data.append((state, 0, 0))
             else:
-                x_count = sum(1 for dr in range(3) for dc in range(3) 
-                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
-                o_count = sum(1 for dr in range(3) for dc in range(3) 
-                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
+                empty = empty_dist[open_idx]
+                diff = diff_dist[open_idx]
+                filled = 9 - empty
+                x_count = (filled + diff) // 2
+                o_count = (filled - diff) // 2
                 raw_data.append((0, x_count, o_count))
-        
+                open_idx += 1
+        return tuple(raw_data)
+    
+    def _get_canonical_keys(self, raw_data: Tuple, open_indices: List[int]) -> List[Tuple[int, Tuple]]:
+        """Return (constraint, canonical_key) pairs for dedup."""
         seen_canonical = set()
         result = []
         
@@ -110,7 +108,7 @@ class PositionEnumerator:
             canonical = min(candidates)
             if canonical not in seen_canonical:
                 seen_canonical.add(canonical)
-                result.append((constraint, canonical))  # Return both
+                result.append((constraint, canonical))
         
         return result
     
@@ -139,16 +137,40 @@ class PositionEnumerator:
             for empty_dist in self._distribute_empty(num_open, self.empty_cells):
                 # Distribute diff across sub-boards
                 for diff_dist in self._distribute_diff(num_open, diff, empty_dist):
-                    # Get boards from precomputed buckets
+                    # Step 1: Build raw_data WITHOUT creating Board
+                    raw_data = self._build_raw_data(meta, open_indices, empty_dist, diff_dist)
+                    
+                    # Step 2: Get canonical keys, filter already-seen BEFORE Board creation
+                    canonical_pairs = []
+                    for constraint, key in self._get_canonical_keys(raw_data, open_indices):
+                        if key not in self.seen_hashes:
+                            self.seen_hashes.add(key)
+                            canonical_pairs.append((constraint, key))
+                        else:
+                            self.stats['duplicate'] += 1
+                    
+                    if not canonical_pairs:
+                        continue
+                    
+                    # Only create Board if we have non-duplicate keys
+                    self.stats['generated'] += 1
                     board = self._create_board(meta, open_indices, empty_dist, diff_dist)
-                    if board:
-                        # Yield (board, canonical_key) pairs
-                        for constraint, canonical_key in self._canonical_constraints(board, open_indices):
+                    if not board:
+                        continue
+                    
+                    # Step 3: Yield boards - reuse first, clone rest
+                    for i, (constraint, _) in enumerate(canonical_pairs):
+                        if i == 0:
+                            board.constraint = constraint
+                            sub_r, sub_c = constraint // 3, constraint % 3
+                            board.last_move = (sub_r, sub_c)
+                            yield board
+                        else:
                             b = board.clone()
                             b.constraint = constraint
                             sub_r, sub_c = constraint // 3, constraint % 3
                             b.last_move = (sub_r, sub_c)
-                            yield (b, canonical_key)
+                            yield b
     
     def _distribute_empty(self, num_open: int, total_empty: int) -> Generator[Tuple[int, ...], None, None]:
         """Distribute empty cells across sub-boards (1-8 each)."""
