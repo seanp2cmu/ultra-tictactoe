@@ -47,20 +47,28 @@ class TablebaseSolver:
             (result, dtw, best_move) from current player's perspective
         """
         board_hash = self._hash_board(board)
+        constraint = getattr(board, 'constraint', -1)
         
-        if board_hash in self.cache:
+        # Check cache: hash -> {constraint: (result, dtw, move)}
+        if board_hash in self.cache and constraint in self.cache[board_hash]:
             self.stats['cache_hits'] += 1
-            return self.cache[board_hash]
+            return self.cache[board_hash][constraint]
         
-        # Check base tablebase (from smaller threshold)
-        if board_hash in self.base_tablebase:
+        # Check base tablebase
+        if board_hash in self.base_tablebase and constraint in self.base_tablebase[board_hash]:
             self.stats['base_hits'] += 1
-            result = self.base_tablebase[board_hash]
-            self.cache[board_hash] = result
+            result = self.base_tablebase[board_hash][constraint]
+            if board_hash not in self.cache:
+                self.cache[board_hash] = {}
+            self.cache[board_hash][constraint] = result
             return result
         
         result, dtw, best_move = self._solve_recursive(board)
-        self.cache[board_hash] = (result, dtw, best_move)
+        
+        # Store in nested dict
+        if board_hash not in self.cache:
+            self.cache[board_hash] = {}
+        self.cache[board_hash][constraint] = (result, dtw, best_move)
         self.stats['solves'] += 1
         
         return (result, dtw, best_move)
@@ -88,24 +96,18 @@ class TablebaseSolver:
             child = board.clone()
             child.make_move(move[0], move[1])
             
+            # Set child's constraint based on move destination
+            target_sub = (move[0] % 3) * 3 + (move[1] % 3)
+            target_sub_r, target_sub_c = move[0] % 3, move[1] % 3
+            
             child_hash = self._hash_board(child)
             
-            # Lookup child in cache (should exist from previous level)
-            if child_hash in self.cache:
-                child_result, child_dtw, _ = self.cache[child_hash]
-            elif child_hash in self.base_tablebase:
-                child_result, child_dtw, _ = self.base_tablebase[child_hash]
-                self.stats['base_hits'] += 1
+            if child.completed_boards[target_sub_r][target_sub_c] != 0:
+                # Target sub-board is completed - "any" constraint
+                child_result, child_dtw = self._lookup_best_constraint(child_hash, child)
             else:
-                # Child not found - check if terminal
-                if child.winner is not None:
-                    child_result = -1 if child.winner != 3 else 0
-                    child_dtw = 0
-                elif not child.get_legal_moves():
-                    child_result, child_dtw = 0, 0
-                else:
-                    # Missing non-terminal child - this is an error
-                    raise RuntimeError(f"Missing child in tablebase! hash={child_hash}")
+                # Specific constraint
+                child_result, child_dtw = self._lookup_constraint(child_hash, target_sub, child)
             
             # Negate for perspective switch
             value = -child_result
@@ -117,21 +119,60 @@ class TablebaseSolver:
         
         return (best_value, best_dtw + 1, best_move)
     
+    def _lookup_constraint(self, h: int, constraint: int, board: Board) -> Tuple[int, int]:
+        """Lookup specific constraint in nested dict cache."""
+        # Check cache: hash -> {constraint: (result, dtw, move)}
+        if h in self.cache and constraint in self.cache[h]:
+            result, dtw, _ = self.cache[h][constraint]
+            return (result, dtw)
+        
+        if h in self.base_tablebase and constraint in self.base_tablebase[h]:
+            result, dtw, _ = self.base_tablebase[h][constraint]
+            self.stats['base_hits'] += 1
+            return (result, dtw)
+        
+        # Not found - check if terminal
+        if board.winner is not None:
+            return (-1 if board.winner != 3 else 0, 0)
+        elif not board.get_legal_moves():
+            return (0, 0)
+        else:
+            raise RuntimeError(f"Missing child! hash={h}, constraint={constraint}")
+    
+    def _lookup_best_constraint(self, h: int, board: Board) -> Tuple[int, int]:
+        """For 'any' constraint, find best result among all OPEN boards."""
+        best_result = -2
+        best_dtw = 999
+        
+        # Check cache
+        if h in self.cache:
+            for constraint, (result, dtw, _) in self.cache[h].items():
+                if result > best_result or (result == best_result and dtw < best_dtw):
+                    best_result = result
+                    best_dtw = dtw
+        
+        # Check base tablebase
+        if h in self.base_tablebase:
+            for constraint, (result, dtw, _) in self.base_tablebase[h].items():
+                if result > best_result or (result == best_result and dtw < best_dtw):
+                    best_result = result
+                    best_dtw = dtw
+        
+        if best_result == -2:
+            if board.winner is not None:
+                return (-1 if board.winner != 3 else 0, 0)
+            elif not board.get_legal_moves():
+                return (0, 0)
+            else:
+                raise RuntimeError(f"No constraint found for 'any'! hash={h}")
+        
+        return (best_result, best_dtw)
+    
     def _hash_board(self, board: Board) -> int:
-        """Create hash for board position."""
+        """Create hash for board position (without constraint)."""
         cells = tuple(board.boards[r][c] for r in range(9) for c in range(9))
         completed = tuple(board.completed_boards[r][c] for r in range(3) for c in range(3))
-        
-        # Use constraint attribute if available, otherwise derive from last_move
-        constraint = getattr(board, 'constraint', None)
-        if constraint is None:
-            constraint = -1
-            if board.last_move:
-                sub_r, sub_c = board.last_move[0] % 3, board.last_move[1] % 3
-                if board.completed_boards[sub_r][sub_c] == 0:
-                    constraint = sub_r * 3 + sub_c
-        
-        return hash((cells, completed, board.current_player, constraint))
+        return hash((cells, completed, board.current_player))
 
 
 class ReachabilityChecker:

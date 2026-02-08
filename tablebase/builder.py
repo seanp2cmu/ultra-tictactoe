@@ -194,24 +194,25 @@ class TablebaseBuilder:
             True if new position was added
         """
         board_hash = self.solver._hash_board(board)
+        constraint = getattr(board, 'constraint', -1)
         
-        # Skip if already seen
-        if board_hash in self.seen_hashes:
+        # Skip if already seen (check hash + constraint pair)
+        key = (board_hash, constraint)
+        if key in self.seen_hashes:
             self.stats['duplicates'] += 1
             return False
         
-        self.seen_hashes.add(board_hash)
-        
-        # Solve position
+        self.seen_hashes.add(key)
         result, dtw, best_move = self.solver.solve(board)
         
-        # DTW can be > empty_count in some cases (draw detection, etc.)
-        # Just track stats instead of warning
+        # DTW can be > empty_count in some cases
         if dtw > empty_count:
             self.stats['dtw_exceeded'] += 1
         
-        # Store result and track level
-        self.positions[board_hash] = (result, dtw, best_move)
+        # Store result in nested dict: hash -> {constraint: (result, dtw, move)}
+        if board_hash not in self.positions:
+            self.positions[board_hash] = {}
+        self.positions[board_hash][constraint] = (result, dtw, best_move)
         self.position_levels[board_hash] = empty_count
         
         # Mark child positions as reached (for forward reachability)
