@@ -79,38 +79,215 @@ board_data = (
 - **dtw**: Depth To Win (승리까지 남은 수)
 - **best_move**: 최적 착수 좌표
 
+## 수학적 최적화 기법
+
+### 1. 상태 공간 축소 (State Space Reduction)
+
+#### 1.1 D4 Symmetry Group (정사각형 대칭군)
+정사각형의 대칭 변환 8가지를 활용하여 동치인 상태를 하나로 통합:
+
+```
+|G| = 8 (D4 group order)
+- 항등원 (e)
+- 회전: r₉₀, r₁₈₀, r₂₇₀
+- 반사: σₕ (수평), σᵥ (수직), σ_d (대각), σ_d' (반대각)
+
+이론적 감소율: 최대 8배
+실제 감소율: ~7-8배 (일부 상태는 자기 자신과 대칭)
+```
+
+인덱스 변환 테이블:
+```python
+D4_TRANSFORMS = [
+    [0,1,2,3,4,5,6,7,8],  # e (항등)
+    [6,3,0,7,4,1,8,5,2],  # r₉₀
+    [8,7,6,5,4,3,2,1,0],  # r₁₈₀
+    [2,5,8,1,4,7,0,3,6],  # r₂₇₀
+    [2,1,0,5,4,3,8,7,6],  # σₕ
+    [6,7,8,3,4,5,0,1,2],  # σᵥ
+    [0,3,6,1,4,7,2,5,8],  # σ_d
+    [8,5,2,7,4,1,6,3,0],  # σ_d'
+]
+```
+
+#### 1.2 X/O Flip Symmetry (색상 교환 대칭)
+X와 O는 게임 규칙상 동등하므로 교환해도 동치:
+
+```
+변환: X ↔ O, X_WIN ↔ O_WIN
+이론적 감소율: 2배
+결합 감소율: D4 × Flip = 최대 16배
+```
+
+#### 1.3 Canonical Form (정규형)
+모든 대칭 변환 중 사전순 최소값 선택:
+
+```python
+def canonical(board):
+    candidates = []
+    for transform in D4_TRANSFORMS:
+        sym = apply_transform(board, transform)
+        candidates.append(sym)
+        candidates.append(flip_xo(sym))  # X/O 교환
+    return min(candidates)  # 사전순 최소
+```
+
+### 2. 유효성 필터링 (Validity Filtering)
+
+#### 2.1 Meta-Board 승자 필터
+이미 승부가 결정된 메타보드 제외:
+
+```python
+# 3x3 승리 패턴 (8가지)
+WIN_PATTERNS = [(0,1,2), (3,4,5), (6,7,8),  # 가로
+                (0,3,6), (1,4,7), (2,5,8),  # 세로
+                (0,4,8), (2,4,6)]           # 대각
+
+for a, b, c in WIN_PATTERNS:
+    if meta[a] == meta[b] == meta[c] in (1, 2):
+        skip()  # 이미 승자 있음
+```
+
+#### 2.2 X-O 개수 제약 (Count Constraint)
+유효한 게임 상태에서 X와 O의 개수 차이는 0 또는 1:
+
+```
+|X_count - O_count| ∈ {0, 1}
+
+완료된 서브보드별 X-O 차이 범위:
+- X_WIN: [-3, +7] (X가 3개로 승리 ~ X가 9개, O가 2개)
+- O_WIN: [-7, +3]
+- DRAW:  [-1, +1] (9칸 모두 채워짐, 차이 1 이하)
+
+전체 diff = Σ(서브보드별 diff) 
+유효 조건: diff ∈ {0, 1}
+```
+
+#### 2.3 서브보드 승자 없음 필터
+OPEN 서브보드에서 이미 3줄이 완성되면 무효:
+
+```python
+def has_winner(cells):
+    for a, b, c in WIN_PATTERNS:
+        if cells[a] == cells[b] == cells[c] != 0:
+            return True
+    return False
+```
+
+### 3. 열거 최적화 (Enumeration Optimization)
+
+#### 3.1 빈칸 분배 (Empty Cell Distribution)
+N개 빈칸을 k개 OPEN 서브보드에 분배:
+
+```
+각 서브보드: 1 ≤ empty ≤ 8 (0이면 완료, 9면 빈 보드)
+제약: Σ(empty_i) = N
+
+분배 수: 조합 문제 (정수 분할)
+예: N=5, k=2 → (1,4), (2,3), (3,2), (4,1)
+```
+
+#### 3.2 X/O 분배 (Piece Distribution)
+총 X, O 개수를 OPEN 서브보드들에 분배:
+
+```
+filled_i = 9 - empty_i
+x_i + o_i = filled_i
+
+모든 유효한 (x₀, x₁, ..., x_{k-1}) 열거
+where Σ(x_i) = x_total and 0 ≤ x_i ≤ filled_i
+```
+
+#### 3.3 셀 구성 캐싱 (Cell Configuration Caching)
+동일한 (x_count, o_count, empty_count)에 대해 결과 재사용:
+
+```python
+_cell_config_cache = {}
+
+def find_valid_config(x, o, empty):
+    key = (x, o, empty)
+    if key in cache:
+        return cache[key]
+    
+    # 조합으로 탐색 (순열보다 효율적)
+    # C(9, x) × C(9-x, o) vs 9!
+    for x_positions in combinations(range(9), x):
+        for o_positions in combinations(remaining, o):
+            if not has_winner(config):
+                cache[key] = config
+                return config
+```
+
+### 4. 해시 충돌 처리
+
+#### 4.1 Constraint 변환
+D4 변환 시 constraint도 함께 변환:
+
+```python
+# 원본 constraint가 위치 c에 있을 때
+# 변환 T 적용 후 새 위치: T.index(c)
+
+def hash_with_constraint(board, constraint):
+    for perm in D4_TRANSFORMS:
+        sym_data = transform(board, perm)
+        sym_constraint = perm.index(constraint)
+        candidates.append((sym_data, sym_constraint))
+    return min(candidates)
+```
+
+#### 4.2 동치 Constraint 처리
+같은 hash의 다른 constraint는 대칭으로 동치:
+
+```python
+def lookup(hash, constraint):
+    if constraint in cache[hash]:
+        return cache[hash][constraint]
+    # 동치인 아무 constraint 사용
+    return cache[hash][any_available]
+```
+
 ## 빌드 과정
 
 ### 1. Meta-Board 열거
 
 ```python
-# 가능한 메타보드 조합 (4^9 = 262,144개)
-# D4 + X/O flip으로 ~2,600개로 축소
+# 가능한 메타보드 조합: 4^9 = 262,144개
+# D4 symmetry 적용: ~33,000개
+# D4 + X/O flip 적용: ~2,600개 (canonical만)
+
 for meta in product([0, 1, 2, 3], repeat=9):
-    canonical = _canonical_meta(meta)  # D4 + flip 적용
+    canonical = _canonical_meta(meta)
+    if canonical != meta:
+        continue  # 이미 처리됨
 ```
 
 ### 2. X/O 분배 열거
 
 ```python
-# 각 OPEN 서브보드에 X/O 개수 분배
-# 예: x_total=7, o_total=5, 2개 OPEN
-# → (4,3), (3,4), (5,2), (2,5), ...
+# diff 범위 계산 후 유효한 (x_total, o_total) 생성
+for diff in range(min_valid_diff, max_valid_diff + 1):
+    x_total = (total_filled + diff) // 2
+    o_total = (total_filled - diff) // 2
+    
+    # 각 서브보드에 분배
+    for x_dist in gen_x_distributions(x_total, open_boards):
+        yield (x_dist, o_dist)
 ```
 
 ### 3. 셀 구성 생성
 
 ```python
-# 각 분배에 대해 승자 없는 셀 배치 찾기
+# 캐시된 조합 탐색
 cells = _find_valid_cell_config(x_count, o_count, empty_count)
-# [1, 2, 0, 1, 0, 2, 1, 2, 0] → X, O, empty, X, empty, ...
+# 승자 없는 첫 번째 유효 구성 반환
 ```
 
 ### 4. 해결 및 저장
 
 ```python
 result, dtw, best_move = solver.solve(board)
-# Child lookup: 이미 계산된 하위 레벨 결과 참조
+# Child lookup: O(1) 해시 테이블 조회
+# Minimax: max(child) for current player
 ```
 
 ## 사용 방법
@@ -162,8 +339,6 @@ tablebase/
 ```
 
 ## 주의사항
-
-1. **HuggingFace Spaces**: 재시작 시 파일 삭제됨 → 로컬에서 빌드 후 업로드
-2. **메모리**: Level 10+ 시 수 GB 필요
-3. **시간**: Level 10까지 수 시간 소요
-4. **Resume**: 중단 후 재시작 시 `completed_empty` 레벨 스킵
+1. **메모리**: Level 10+ 시 수 GB 필요
+2. **시간**: Level 10까지 수 시간 소요
+3. **Resume**: 중단 후 재시작 시 `completed_empty` 레벨 스킵
