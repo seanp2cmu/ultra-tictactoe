@@ -3,21 +3,26 @@
 ## 개요
 
 Endgame tablebase는 게임 종료 직전 상태들의 최적해를 미리 계산해 저장합니다.
-Retrograde analysis를 사용하여 1개 빈칸부터 N개 빈칸까지 역순으로 구축합니다.
+**Progressive Endgame Construction** 방식으로 1개 빈칸부터 N개 빈칸까지 순차적으로 구축합니다.
 
 ## 핵심 개념
 
-### 1. Retrograde Analysis (역행 분석)
+### 1. Progressive Endgame Construction (점진적 엔드게임 구축)
 
 ```
 Level 1 (1 empty) → Level 2 (2 empty) → ... → Level N
-     ↑                    ↑
-  Terminal            Child lookup
+     ↓                    ↓
+  Solve directly      Lookup children (Level N-1)
 ```
 
-- **Level 1**: 1개 빈칸 = 바로 결정됨 (승/패/무)
-- **Level N**: N개 빈칸 상태에서 최선의 수를 두면 N-1개 빈칸 상태가 됨
-- 이미 계산된 하위 레벨 결과를 참조하여 상위 레벨 해결
+- **Level 1**: 1개 빈칸 = 한 수만 가능하므로 직접 해결 (승/패/무)
+- **Level N**: N개 빈칸 상태에서 가능한 모든 수를 두면 N-1개 빈칸 상태가 됨
+- 이미 계산된 하위 레벨(N-1) 결과를 참조하여 현재 레벨(N) 해결
+- Minimax 원리: 상대방도 최선을 둔다고 가정
+
+**참고**: Retrograde analysis(역행 분석)와 다름
+- Retrograde: Terminal 상태에서 역으로 추적
+- 우리 방식: 간단한 endgame부터 순차적으로 해결
 
 ### 2. Canonical Hashing (정규화 해싱)
 
