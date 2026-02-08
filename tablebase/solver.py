@@ -97,17 +97,15 @@ class TablebaseSolver:
                 child_result, child_dtw, _ = self.base_tablebase[child_hash]
                 self.stats['base_hits'] += 1
             else:
-                # Child not found - must be terminal or unreachable
-                # Solve directly (should be immediate terminal)
+                # Child not found - check if terminal
                 if child.winner is not None:
                     child_result = -1 if child.winner != 3 else 0
                     child_dtw = 0
                 elif not child.get_legal_moves():
                     child_result, child_dtw = 0, 0
                 else:
-                    # This shouldn't happen in proper retrograde build
-                    self.stats['missing_child'] += 1
-                    child_result, child_dtw = 0, 0
+                    # Missing non-terminal child - this is an error
+                    raise RuntimeError(f"Missing child in tablebase! hash={child_hash}")
             
             # Negate for perspective switch
             value = -child_result
