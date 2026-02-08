@@ -34,7 +34,7 @@ class TablebaseSolver:
         # best_move: (row, col) tuple or None
         self.cache: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
         self.max_depth = max_depth
-        self.stats = {'cache_hits': 0, 'solves': 0, 'unreachable': 0, 'depth_limit': 0, 'base_hits': 0}
+        self.stats = {'cache_hits': 0, 'solves': 0, 'base_hits': 0, 'missing_child': 0}
         
         # Load base tablebase for faster lookups
         self.base_tablebase = base_tablebase or {}
@@ -66,23 +66,19 @@ class TablebaseSolver:
         return (result, dtw, best_move)
     
     def _solve_recursive(self, board: Board, depth: int = 0) -> Tuple[int, int, Optional[Tuple[int, int]]]:
-        """Recursive minimax with memoization (complete search, no pruning)."""
-        
+        """
+        Retrograde solver - just lookup children (no deep search).
+        All children should be in cache from previous levels.
+        """
         # Terminal check
         if board.winner is not None:
             if board.winner == 3:  # Draw
-                return (0, depth, None)
-            # Winner is set - current player lost (opponent won last turn)
-            return (-1, depth, None)
+                return (0, 0, None)
+            return (-1, 0, None)
         
         legal_moves = board.get_legal_moves()
         if not legal_moves:
-            return (0, depth, None)  # No moves = draw
-        
-        # Depth limit for safety (shouldn't hit with ≤15 empty)
-        if depth >= self.max_depth:
-            self.stats['depth_limit'] += 1
-            return (0, depth, None)
+            return (0, 0, None)
         
         best_value = -2
         best_dtw = 999
@@ -94,16 +90,24 @@ class TablebaseSolver:
             
             child_hash = self._hash_board(child)
             
+            # Lookup child in cache (should exist from previous level)
             if child_hash in self.cache:
                 child_result, child_dtw, _ = self.cache[child_hash]
             elif child_hash in self.base_tablebase:
-                # Use base tablebase result
                 child_result, child_dtw, _ = self.base_tablebase[child_hash]
-                self.cache[child_hash] = self.base_tablebase[child_hash]
                 self.stats['base_hits'] += 1
             else:
-                child_result, child_dtw, _ = self._solve_recursive(child, depth + 1)
-                self.cache[child_hash] = (child_result, child_dtw, None)
+                # Child not found - must be terminal or unreachable
+                # Solve directly (should be immediate terminal)
+                if child.winner is not None:
+                    child_result = -1 if child.winner != 3 else 0
+                    child_dtw = 0
+                elif not child.get_legal_moves():
+                    child_result, child_dtw = 0, 0
+                else:
+                    # This shouldn't happen in proper retrograde build
+                    self.stats['missing_child'] += 1
+                    child_result, child_dtw = 0, 0
             
             # Negate for perspective switch
             value = -child_result
