@@ -92,9 +92,7 @@ def load_models_from_local():
     # DTW Calculator 생성 (공유)
     dtw_calculator = DTWCalculator(
         use_cache=True,
-        endgame_threshold=15,
-        midgame_threshold=45,
-        shallow_depth=8
+        endgame_threshold=15
     )
     
     # DTW 캐시 로드
@@ -351,8 +349,9 @@ def predict(model_name, board_json, num_simulations=200):
         
         pv = get_principal_variation(root, depth=10)
         
+        # Value is now 0~1 (loss=0, draw=0.5, win=1)
         evaluation = float(value)
-        eval_percentage = (evaluation + 1) / 2 * 100
+        eval_percentage = evaluation * 100  # Already 0~1
         
         result = {
             'model': model_name,
@@ -553,9 +552,7 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
 # DTW Calculator 초기화 (HF 로딩 전에)
 dtw_calculator = DTWCalculator(
     use_cache=True,
-    endgame_threshold=15,
-    midgame_threshold=45,
-    shallow_depth=8
+    endgame_threshold=15
 )
 
 print("Loading models...")
@@ -571,7 +568,7 @@ print(f"Loaded {len(models)} models: {available_models}")
 
 with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
     gr.Markdown("# 🎮 Ultra Tic-Tac-Toe AI Analysis")
-    gr.Markdown("AlphaZero-style engine analysis for Ultimate Tic-Tac-Toe with DTW endgame solver")
+    gr.Markdown("Pure AlphaZero (Lc0-style) for Ultimate Tic-Tac-Toe with DTW endgame solver")
     
     with gr.Tab("Predict"):
         gr.Markdown("### Model Prediction & Analysis")
@@ -623,7 +620,7 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
         ```
         
         ### 📊 Output Includes
-        - **Evaluation**: Position evaluation (-1 to 1)
+        - **Evaluation**: Position evaluation (0 to 1, where 0=loss, 0.5=draw, 1=win)
         - **Best Moves**: Top 5 moves with visit counts and probabilities
         - **Principal Variation**: Best move sequence (like chess engine analysis)
         - **DTW**: Endgame positions (≤15 cells) use exact alpha-beta search
