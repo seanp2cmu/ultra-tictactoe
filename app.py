@@ -167,133 +167,166 @@ def get_models_list():
         'count': len(models)
     }
 
-@spaces.GPU(duration=600)
-def compare_models(model1_name, model2_name, num_games, num_simulations, temperature):
+def create_agent(agent_type: str, model_name: str, num_sims: int, temperature: float):
+    """Create agent based on type. Returns (agent, display_name)."""
+    if agent_type == "Random":
+        return RandomAgent(), "Random"
+    elif agent_type == "Heuristic":
+        return HeuristicAgent(), "Heuristic"
+    elif agent_type == "Minimax-2":
+        return MinimaxAgent(depth=2), "Minimax-2"
+    elif agent_type == "Minimax-3":
+        return MinimaxAgent(depth=3), "Minimax-3"
+    elif agent_type == "Model":
+        if model_name not in models:
+            return None, f"Model '{model_name}' not found"
+        network = ensure_model_on_gpu(model_name)
+        agent = AlphaZeroAgent(
+            network=network,
+            num_simulations=num_sims,
+            c_puct=1.0,
+            temperature=temperature,
+            batch_size=8,
+            dtw_calculator=dtw_calculator
+        )
+        return agent, f"{model_name}({num_sims}sims)"
+    return None, "Unknown agent type"
+
+@spaces.GPU(duration=1800)
+def arena_match(p1_type, p1_model, p1_sims, p2_type, p2_model, p2_sims, num_games, temperature, alternate_colors, seed):
     """
-    Compare two models by playing multiple self-play games
+    Flexible arena: any agent vs any agent with configurable settings.
     """
-    # Ensure integer types from sliders
+    import random as rand_module
+    
     num_games = int(num_games)
-    num_simulations = int(num_simulations)
+    p1_sims = int(p1_sims)
+    p2_sims = int(p2_sims)
+    seed = int(seed) if seed else None
+    
+    if seed is not None:
+        rand_module.seed(seed)
     
     try:
-        if model1_name not in models or model2_name not in models:
-            yield json.dumps({
-                'error': 'One or both models not found',
-                'available_models': list(models.keys())
-            }, indent=2)
+        # Create agents
+        agent1, name1 = create_agent(p1_type, p1_model, p1_sims, temperature)
+        if agent1 is None:
+            yield f"Error: {name1}"
             return
         
-        # Move models to GPU inside @spaces.GPU context
-        network1 = ensure_model_on_gpu(model1_name)
-        network2 = ensure_model_on_gpu(model2_name)
-        
-        agent1 = AlphaZeroAgent(
-            network=network1,
-            num_simulations=num_simulations,
-            c_puct=1.0,
-            temperature=temperature,
-            batch_size=8,
-            dtw_calculator=dtw_calculator
-        )
-        
-        agent2 = AlphaZeroAgent(
-            network=network2,
-            num_simulations=num_simulations,
-            c_puct=1.0,
-            temperature=temperature,
-            batch_size=8,
-            dtw_calculator=dtw_calculator
-        )
+        agent2, name2 = create_agent(p2_type, p2_model, p2_sims, temperature)
+        if agent2 is None:
+            yield f"Error: {name2}"
+            return
         
         results = {
-            'model1': model1_name,
-            'model2': model2_name,
-            'num_simulations': num_simulations,
-            'temperature': temperature,
-            'games': [],
-            'summary': {
-                'model1_wins': 0,
-                'model2_wins': 0,
-                'draws': 0,
-                'total_time': 0
-            }
+            'p1': name1, 'p2': name2,
+            'p1_wins': 0, 'p2_wins': 0, 'draws': 0,
+            'p1_as_X_wins': 0, 'p1_as_O_wins': 0,
+            'total_time': 0
         }
         
         for game_num in range(1, num_games + 1):
-            game_start_time = time.time()
+            game_start = time.time()
+            
+            # Alternate colors if enabled
+            if alternate_colors:
+                p1_is_X = (game_num % 2 == 1)
+            else:
+                p1_is_X = True
             
             board = Board()
-            game_record = {
-                'game_number': game_num,
-                'moves': [],
-                'winner': None,
-                'elapsed_time': 0
-            }
-            
             move_count = 0
+            
             while board.winner is None and move_count < 81:
-                current_agent = agent1 if board.current_player == 1 else agent2
+                is_p1_turn = (board.current_player == 1) == p1_is_X
+                current_agent = agent1 if is_p1_turn else agent2
                 
-                action = current_agent.select_action(board, temperature=temperature)
-                move_r = action // 9
-                move_c = action % 9
+                # Handle different agent types
+                if hasattr(current_agent, 'select_action'):
+                    if isinstance(current_agent, AlphaZeroAgent):
+                        action = current_agent.select_action(board, temperature=temperature)
+                    else:
+                        action = current_agent.select_action(board)
+                else:
+                    action = current_agent.select_action(board)
                 
-                game_record['moves'].append({
-                    'move_number': move_count + 1,
-                    'player': board.current_player,
-                    'action': int(action),
-                    'position': [int(move_r), int(move_c)]
-                })
-                
+                move_r, move_c = action // 9, action % 9
                 board.make_move(move_r, move_c)
                 move_count += 1
-                
-                if board.winner is not None:
-                    break
             
-            game_elapsed = time.time() - game_start_time
-            game_record['winner'] = int(board.winner) if board.winner is not None else None
-            game_record['elapsed_time'] = round(game_elapsed, 2)
-            game_record['total_moves'] = move_count
+            game_time = time.time() - game_start
+            results['total_time'] += game_time
             
-            if board.winner == 1:
-                results['summary']['model1_wins'] += 1
-            elif board.winner == 2:
-                results['summary']['model2_wins'] += 1
+            # Determine winner
+            if board.winner == 3 or board.winner is None:
+                results['draws'] += 1
+                result_str = "Draw"
+            elif (board.winner == 1 and p1_is_X) or (board.winner == 2 and not p1_is_X):
+                results['p1_wins'] += 1
+                if p1_is_X:
+                    results['p1_as_X_wins'] += 1
+                else:
+                    results['p1_as_O_wins'] += 1
+                result_str = f"{name1} wins"
             else:
-                results['summary']['draws'] += 1
+                results['p2_wins'] += 1
+                result_str = f"{name2} wins"
             
-            results['summary']['total_time'] = round(
-                results['summary']['total_time'] + game_elapsed, 2
-            )
-            results['games'].append(game_record)
+            # Calculate win rates
+            total = game_num
+            p1_rate = results['p1_wins'] / total
+            p2_rate = results['p2_wins'] / total
+            draw_rate = results['draws'] / total
             
-            progress = {
-                'status': 'in_progress',
-                'completed_games': game_num,
-                'total_games': num_games,
-                'latest_game': game_record,
-                'current_summary': results['summary'].copy()
-            }
+            # Score: win=1, draw=0.5, loss=0
+            p1_score = (results['p1_wins'] + results['draws'] * 0.5) / total
             
-            yield json.dumps(progress, indent=2)
+            progress = f"""
+╔══════════════════════════════════════════════════════════════╗
+║  🎮 ARENA: {name1} vs {name2}
+╠══════════════════════════════════════════════════════════════╣
+║  Game {game_num}/{num_games}: {result_str} ({move_count} moves, {game_time:.1f}s)
+║  P1 played as: {'X (first)' if p1_is_X else 'O (second)'}
+╠══════════════════════════════════════════════════════════════╣
+║  {name1}: {results['p1_wins']} wins ({p1_rate*100:.1f}%)
+║    - As X: {results['p1_as_X_wins']}  As O: {results['p1_as_O_wins']}
+║  {name2}: {results['p2_wins']} wins ({p2_rate*100:.1f}%)
+║  Draws: {results['draws']} ({draw_rate*100:.1f}%)
+╠══════════════════════════════════════════════════════════════╣
+║  📊 P1 Score: {p1_score:.3f}  (1.0=all wins, 0.5=even, 0.0=all losses)
+╚══════════════════════════════════════════════════════════════╝
+"""
+            yield progress
         
-        results['status'] = 'completed'
-        results['summary']['avg_time_per_game'] = round(
-            results['summary']['total_time'] / num_games, 2
-        )
+        # Final summary
+        total = num_games
+        p1_score = (results['p1_wins'] + results['draws'] * 0.5) / total
+        avg_time = results['total_time'] / total
         
-        yield json.dumps(results, indent=2)
+        final = f"""
+╔══════════════════════════════════════════════════════════════╗
+║                    🏆 FINAL RESULTS                          ║
+╠══════════════════════════════════════════════════════════════╣
+║  {name1} vs {name2}
+║  Games: {num_games}  |  Seed: {seed if seed else 'None'}
+╠══════════════════════════════════════════════════════════════╣
+║  {name1}: {results['p1_wins']} wins ({results['p1_wins']/total*100:.1f}%)
+║    - As X (first): {results['p1_as_X_wins']}
+║    - As O (second): {results['p1_as_O_wins']}
+║  {name2}: {results['p2_wins']} wins ({results['p2_wins']/total*100:.1f}%)
+║  Draws: {results['draws']} ({results['draws']/total*100:.1f}%)
+╠══════════════════════════════════════════════════════════════╣
+║  📊 P1 Score: {p1_score:.3f}
+║  ⏱️  Avg time/game: {avg_time:.2f}s
+╚══════════════════════════════════════════════════════════════╝
+"""
+        yield final
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        yield json.dumps({
-            'error': str(e),
-            'type': type(e).__name__,
-            'traceback': traceback.format_exc()
-        }, indent=2)
+        yield f"Error: {e}\n{traceback.format_exc()}"
 
 @spaces.GPU
 def predict(model_name, board_json, num_simulations=200):
@@ -393,7 +426,7 @@ baseline_agents = {
     'Minimax-4': MinimaxAgent(depth=4),
 }
 
-@spaces.GPU(duration=300)
+@spaces.GPU(duration=1800)
 def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
     """Test AlphaZero model against baseline opponent."""
     num_games = int(num_games)
@@ -637,72 +670,56 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
         - **DTW**: Endgame positions (≤15 cells) use exact alpha-beta search
         """)
     
-    with gr.Tab("Compare Models"):
-        gr.Markdown("### 🤖 Model Comparison - Self-Play Arena")
-        gr.Markdown("Compare two AI models by having them play against each other. Results stream in real-time!")
+    with gr.Tab("Arena"):
+        gr.Markdown("### 🎮 Flexible Arena - Any Agent vs Any Agent")
+        gr.Markdown("Test any combination: Random vs Random, Model vs Heuristic, Model(200) vs Model(0), etc.")
+        
+        agent_types = ["Random", "Heuristic", "Minimax-2", "Minimax-3", "Model"]
+        
+        gr.Markdown("#### Player 1 (P1)")
+        with gr.Row():
+            p1_type = gr.Dropdown(choices=agent_types, label="P1 Type", value="Model")
+            p1_model = gr.Dropdown(choices=available_models, label="P1 Model (if Model type)", 
+                                   value=available_models[0] if available_models else None)
+            p1_sims = gr.Slider(minimum=0, maximum=800, value=200, step=50, label="P1 Simulations")
+        
+        gr.Markdown("#### Player 2 (P2)")
+        with gr.Row():
+            p2_type = gr.Dropdown(choices=agent_types, label="P2 Type", value="Random")
+            p2_model = gr.Dropdown(choices=available_models, label="P2 Model (if Model type)",
+                                   value=available_models[0] if available_models else None)
+            p2_sims = gr.Slider(minimum=0, maximum=800, value=200, step=50, label="P2 Simulations")
+        
+        gr.Markdown("#### Match Settings")
+        with gr.Row():
+            arena_games = gr.Slider(minimum=2, maximum=200, value=20, step=2, label="Number of Games")
+            arena_temp = gr.Slider(minimum=0.0, maximum=1.0, value=0.0, step=0.1, label="Temperature")
         
         with gr.Row():
-            model1_dropdown = gr.Dropdown(
-                choices=available_models,
-                label="Model 1 (Player 1 - X)",
-                value=available_models[0] if available_models else None
-            )
-            model2_dropdown = gr.Dropdown(
-                choices=available_models,
-                label="Model 2 (Player 2 - O)",
-                value=available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None)
-            )
+            alternate_checkbox = gr.Checkbox(label="Alternate Colors (recommended)", value=True)
+            seed_input = gr.Number(label="Seed (optional, for reproducibility)", value=None, precision=0)
         
-        with gr.Row():
-            num_games_slider = gr.Slider(
-                minimum=1,
-                maximum=50,
-                value=10,
-                step=1,
-                label="Number of Games"
-            )
-            compare_sims_slider = gr.Slider(
-                minimum=50,
-                maximum=1000,
-                value=200,
-                step=50,
-                label="MCTS Simulations per Move"
-            )
+        arena_btn = gr.Button("⚔️ Start Arena Match", variant="primary", size="lg")
         
-        temperature_slider = gr.Slider(
-            minimum=0.0,
-            maximum=2.0,
-            value=0.0,
-            step=0.1,
-            label="Temperature (0 = deterministic, higher = more random)"
-        )
+        arena_output = gr.Textbox(label="Results", lines=20, interactive=False)
         
-        compare_btn = gr.Button("🎮 Start Comparison", variant="primary", size="lg")
-        
-        compare_output = gr.Textbox(
-            label="Results (Updates in Real-Time)",
-            lines=25,
-            interactive=False
-        )
-        
-        compare_btn.click(
-            fn=compare_models,
-            inputs=[model1_dropdown, model2_dropdown, num_games_slider, compare_sims_slider, temperature_slider],
-            outputs=compare_output,
-            api_name="compare"
+        arena_btn.click(
+            fn=arena_match,
+            inputs=[p1_type, p1_model, p1_sims, p2_type, p2_model, p2_sims, 
+                    arena_games, arena_temp, alternate_checkbox, seed_input],
+            outputs=arena_output,
+            api_name="arena"
         )
         
         gr.Markdown("""
-        ### 📊 Output Format
-        
-        **During Games (Real-time updates)**:
-        - Current progress (completed games / total)
-        - Latest game result with full move history
-        - Running summary (wins/draws/time)
-        
-        **Final Result**:
-        - Complete game records for all matches
-        - Summary statistics (wins, draws, avg time)
+        ### � Test Cases
+        | Test | P1 | P2 | Expected Score |
+        |------|----|----|----------------|
+        | Random vs Random | Random | Random | ~0.5 |
+        | Heuristic vs Random | Heuristic | Random | >0.5 |
+        | Model vs Model | Model(200) | Model(200) | ~0.5 |
+        | MCTS benefit | Model(200) | Model(0) | >0.5 |
+        | Reproducibility | Same seed twice | | Same results |
         """)
     
     with gr.Tab("Baseline Test"):
@@ -797,13 +814,13 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
             status += f"**Total Models:** {info['count']}\n\n**Models:**\n"
             status += "\n".join(f"- {m}" for m in info['models'])
             
-            return status, gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models)
+            return status, gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models), gr.update(choices=available_models)
         
         models_output = gr.Markdown(show_models())
         refresh_btn = gr.Button("🔄 Reload Models from HF", variant="primary")
         refresh_btn.click(
             fn=reload_models, 
-            outputs=[models_output, model_dropdown, model1_dropdown, model2_dropdown, baseline_model_dropdown, model_dropdown]
+            outputs=[models_output, model_dropdown, p1_model, p2_model, baseline_model_dropdown]
         )
     
     with gr.Tab("API"):
@@ -824,15 +841,20 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
         )
         ```
         
-        #### POST /compare
+        #### POST /arena
         ```python
         result = client.predict(
-            model1_name="model_10",
-            model2_name="model_20",
-            num_games=10,
-            num_simulations=200,
+            p1_type="Model",      # Random, Heuristic, Minimax-2, Minimax-3, Model
+            p1_model="best",
+            p1_sims=200,
+            p2_type="Random",
+            p2_model="best",
+            p2_sims=0,
+            num_games=20,
             temperature=0.0,
-            api_name="/compare"
+            alternate_colors=True,
+            seed=42,
+            api_name="/arena"
         )
         ```
         """)

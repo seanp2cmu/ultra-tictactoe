@@ -101,75 +101,93 @@ class PositionEnumerator:
         if pbar is not None:
             pbar.close()
     
+    # D4 symmetry: 8 index permutations for 3x3 grid
+    # Index mapping: 0 1 2 / 3 4 5 / 6 7 8
+    D4_TRANSFORMS = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8],  # identity
+        [6, 3, 0, 7, 4, 1, 8, 5, 2],  # rotate 90° CW
+        [8, 7, 6, 5, 4, 3, 2, 1, 0],  # rotate 180°
+        [2, 5, 8, 1, 4, 7, 0, 3, 6],  # rotate 270° CW
+        [2, 1, 0, 5, 4, 3, 8, 7, 6],  # flip horizontal
+        [6, 7, 8, 3, 4, 5, 0, 1, 2],  # flip vertical
+        [0, 3, 6, 1, 4, 7, 2, 5, 8],  # flip main diagonal
+        [8, 5, 2, 7, 4, 1, 6, 3, 0],  # flip anti-diagonal
+    ]
+    
     def _compute_normalized_key(self, board: Board) -> Tuple:
         """
-        Compute normalized dedup key with X/O flip.
+        Compute normalized dedup key with D4 symmetry + X/O flip.
         
         Normalization:
-        1. If o_wins > x_wins: flip
-        2. If equal, first non-empty cell in OPEN sub-boards should be X
+        1. Apply all 8 D4 symmetries
+        2. For each, apply X/O flip if needed
+        3. Return minimum (canonical) key
         """
-        # Count X_WIN and O_WIN
-        x_wins = 0
-        o_wins = 0
-        for r in range(3):
-            for c in range(3):
-                if board.completed_boards[r][c] == 1:
-                    x_wins += 1
-                elif board.completed_boards[r][c] == 2:
-                    o_wins += 1
+        constraint = getattr(board, 'constraint', -1)
         
-        # Determine if we need to flip
-        need_flip = False
-        if o_wins > x_wins:
-            need_flip = True
-        elif o_wins == x_wins:
-            # Check first non-empty cell in OPEN sub-boards
-            for sub_idx in range(9):
-                sub_r, sub_c = sub_idx // 3, sub_idx % 3
-                if board.completed_boards[sub_r][sub_c] == 0:  # OPEN
-                    for cell_idx in range(9):
-                        dr, dc = cell_idx // 3, cell_idx % 3
-                        cell = board.boards[sub_r*3 + dr][sub_c*3 + dc]
-                        if cell == 1:  # X first - no flip
-                            break
-                        elif cell == 2:  # O first - flip
-                            need_flip = True
-                            break
-                    break
-        
-        # Build sub_data with optional flip
-        sub_data = []
+        # Build raw sub_data (before symmetry/flip)
+        raw_sub_data = []
         for sub_idx in range(9):
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
             state = board.completed_boards[sub_r][sub_c]
             
             if state != 0:
-                # Completed - flip state if needed (1<->2, 3 stays)
-                if need_flip and state in (1, 2):
-                    state = 3 - state
-                sub_data.append((state, 0, 0))
+                raw_sub_data.append((state, 0, 0))
             else:
-                # OPEN - count X and O
                 x_count = sum(1 for dr in range(3) for dc in range(3) 
                              if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
                 o_count = sum(1 for dr in range(3) for dc in range(3) 
                              if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
-                # Flip counts if needed
-                if need_flip:
-                    x_count, o_count = o_count, x_count
-                sub_data.append((0, x_count, o_count))
+                raw_sub_data.append((0, x_count, o_count))
         
-        return (tuple(sub_data), getattr(board, 'constraint', -1))
+        # Try all 8 D4 symmetries × 2 X/O flips = 16 combinations
+        candidates = []
+        for perm in self.D4_TRANSFORMS:
+            # Apply symmetry permutation
+            sym_data = [raw_sub_data[perm[i]] for i in range(9)]
+            sym_constraint = perm.index(constraint) if constraint >= 0 else -1
+            
+            # Try without X/O flip
+            candidates.append((tuple(sym_data), sym_constraint))
+            
+            # Try with X/O flip
+            flipped_data = []
+            for state, x_count, o_count in sym_data:
+                if state in (1, 2):
+                    flipped_data.append((3 - state, 0, 0))
+                elif state == 0:
+                    flipped_data.append((0, o_count, x_count))
+                else:
+                    flipped_data.append((state, 0, 0))
+            candidates.append((tuple(flipped_data), sym_constraint))
+        
+        # Return minimum (canonical)
+        return min(candidates)
+    
+    def _canonical_meta(self, meta: Tuple[int, ...]) -> Tuple[int, ...]:
+        """Return canonical form of meta-board under D4 symmetry."""
+        candidates = [tuple(meta[p[i]] for i in range(9)) for p in self.D4_TRANSFORMS]
+        return min(candidates)
     
     def _enumerate_meta_boards(self) -> Generator[Tuple[Tuple[int, ...], int, int], None, None]:
         """
-        Enumerate valid meta-board configurations with valid diff range.
+        Enumerate valid CANONICAL meta-board configurations with valid diff range.
         
+        Only yields meta-boards that are their own canonical form (D4 symmetry).
         Yields: (meta, min_valid_diff, max_valid_diff)
-        The diff range tells how many more X than O can be in OPEN boards.
         """
+        seen_canonical = set()
+        
         for meta in product([0, 1, 2, 3], repeat=9):
+            # Skip if not canonical (already seen this equivalence class)
+            canonical = self._canonical_meta(meta)
+            if canonical in seen_canonical:
+                continue
+            seen_canonical.add(canonical)
+            
+            # Use canonical form for all checks
+            meta = canonical
+            
             if self._check_meta_winner(meta) != 0:
                 continue
             
@@ -191,9 +209,6 @@ class PositionEnumerator:
             max_completed = x_wins * 7 + o_wins * 3 + draws * 1
             
             # Valid open_diff: 0 <= open_diff + completed_diff <= 1
-            # open_diff >= -max_completed (to get total >= 0)
-            # open_diff <= 1 - min_completed (to get total <= 1)
-            # Also bounded by: -total_filled <= open_diff <= total_filled
             min_valid_diff = max(-max_completed, -total_filled)
             max_valid_diff = min(1 - min_completed, total_filled)
             

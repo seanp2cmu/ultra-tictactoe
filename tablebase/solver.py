@@ -174,70 +174,51 @@ class TablebaseSolver:
         
         return (best_result, best_dtw)
     
+    # D4 symmetry: 8 index permutations for 3x3 grid
+    D4_TRANSFORMS = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8],  # identity
+        [6, 3, 0, 7, 4, 1, 8, 5, 2],  # rotate 90° CW
+        [8, 7, 6, 5, 4, 3, 2, 1, 0],  # rotate 180°
+        [2, 5, 8, 1, 4, 7, 0, 3, 6],  # rotate 270° CW
+        [2, 1, 0, 5, 4, 3, 8, 7, 6],  # flip horizontal
+        [6, 7, 8, 3, 4, 5, 0, 1, 2],  # flip vertical
+        [0, 3, 6, 1, 4, 7, 2, 5, 8],  # flip main diagonal
+        [8, 5, 2, 7, 4, 1, 6, 3, 0],  # flip anti-diagonal
+    ]
+    
     def _hash_board(self, board: Board) -> int:
-        """Create hash for board position with X/O normalization.
-        
-        Normalization: flip X/O so that:
-        1. If o_wins > x_wins in completed_boards: flip
-        2. If equal, first non-empty cell in OPEN sub-boards should be X
-        """
-        # Count X_WIN and O_WIN
-        x_wins = 0
-        o_wins = 0
-        for r in range(3):
-            for c in range(3):
-                if board.completed_boards[r][c] == 1:
-                    x_wins += 1
-                elif board.completed_boards[r][c] == 2:
-                    o_wins += 1
-        
-        # Determine if we need to flip
-        need_flip = False
-        if o_wins > x_wins:
-            need_flip = True
-        elif o_wins == x_wins:
-            # Check first non-empty cell in OPEN sub-boards
-            for sub_idx in range(9):
-                sub_r, sub_c = sub_idx // 3, sub_idx % 3
-                if board.completed_boards[sub_r][sub_c] == 0:  # OPEN
-                    for cell_idx in range(9):
-                        dr, dc = cell_idx // 3, cell_idx % 3
-                        cell = board.boards[sub_r*3 + dr][sub_c*3 + dc]
-                        if cell == 1:  # X first - no flip
-                            break
-                        elif cell == 2:  # O first - flip
-                            need_flip = True
-                            break
-                    break
-        
-        # Build sub_data with optional flip
-        sub_data = []
+        """Create hash for board position with D4 symmetry + X/O flip normalization."""
+        # Build raw sub_data
+        raw_sub_data = []
         for sub_idx in range(9):
             sub_r, sub_c = sub_idx // 3, sub_idx % 3
             state = board.completed_boards[sub_r][sub_c]
             
             if state != 0:
-                # Completed - flip state if needed (1<->2, 3 stays)
-                if need_flip and state in (1, 2):
-                    state = 3 - state
-                sub_data.append((state, 0, 0))
+                raw_sub_data.append((state, 0, 0))
             else:
-                # OPEN - count X and O
-                x_count = 0
-                o_count = 0
-                for dr in range(3):
-                    for dc in range(3):
-                        cell = board.boards[sub_r*3 + dr][sub_c*3 + dc]
-                        if cell == 1:
-                            x_count += 1
-                        elif cell == 2:
-                            o_count += 1
-                # Flip counts if needed
-                if need_flip:
-                    x_count, o_count = o_count, x_count
-                sub_data.append((0, x_count, o_count))
+                x_count = sum(1 for dr in range(3) for dc in range(3) 
+                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 1)
+                o_count = sum(1 for dr in range(3) for dc in range(3) 
+                             if board.boards[sub_r*3+dr][sub_c*3+dc] == 2)
+                raw_sub_data.append((0, x_count, o_count))
         
-        return hash(tuple(sub_data))
+        # Try all 8 D4 symmetries × 2 X/O flips = 16 combinations
+        candidates = []
+        for perm in self.D4_TRANSFORMS:
+            # Apply symmetry permutation
+            sym_data = tuple(raw_sub_data[perm[i]] for i in range(9))
+            candidates.append(sym_data)
+            
+            # Try with X/O flip
+            flipped_data = tuple(
+                (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
+                for s, x, o in sym_data
+            )
+            candidates.append(flipped_data)
+        
+        # Return hash of minimum (canonical)
+        return hash(min(candidates))
 
 
 class ReachabilityChecker:
