@@ -169,10 +169,23 @@ class TablebaseSolver:
         return (best_result, best_dtw)
     
     def _hash_board(self, board: Board) -> int:
-        """Create hash for board position (without constraint)."""
-        cells = tuple(board.boards[r][c] for r in range(9) for c in range(9))
+        """Create hash for board position (without constraint).
+        
+        Note: Completed board cells are treated as 0 for consistency
+        with enumeration (which doesn't store actual pieces in completed boards).
+        """
+        # For each cell, use 0 if sub-board is completed, otherwise use actual value
+        cells = []
+        for r in range(9):
+            for c in range(9):
+                sub_r, sub_c = r // 3, c // 3
+                if board.completed_boards[sub_r][sub_c] != 0:
+                    cells.append(0)  # Completed board - ignore cell value
+                else:
+                    cells.append(board.boards[r][c])
+        
         completed = tuple(board.completed_boards[r][c] for r in range(3) for c in range(3))
-        return hash((cells, completed, board.current_player))
+        return hash((tuple(cells), completed, board.current_player))
 
 
 class ReachabilityChecker:
