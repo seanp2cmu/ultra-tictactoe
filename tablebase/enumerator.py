@@ -123,8 +123,7 @@ class PositionEnumerator:
             o_wins = meta.count(2)
             draws = meta.count(3)
             
-            if abs(x_wins - o_wins) > 2:
-                continue
+            # Note: x_wins - o_wins balance is checked by diff formula below
             
             total_filled = 9 * num_open - self.empty_cells
             
