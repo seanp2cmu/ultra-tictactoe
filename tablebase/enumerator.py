@@ -16,7 +16,7 @@ from tqdm import tqdm
 import numpy as np
 
 from game import Board
-from ai.utils.board_symmetry import BoardSymmetry
+from utils import BoardSymmetry
 
 
 # Sub-board winning patterns
