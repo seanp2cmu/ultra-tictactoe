@@ -232,7 +232,7 @@ class TablebaseBuilder:
     
     def _mark_children_reached(self, board: Board):
         """Mark all child positions as reached."""
-        moves = board.get_valid_moves()
+        moves = board.get_legal_moves()
         for move in moves:
             child = board.clone()
             child.make_move(move[0], move[1])
