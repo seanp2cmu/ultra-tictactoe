@@ -10,7 +10,7 @@ from .tablebase import Tablebase, CompactTablebase
 from .meta_board import MetaBoardEnumerator
 from .solver import TablebaseSolver, count_empty
 from .enumerator import PositionEnumerator
-from .builder import EndgameTablebaseBuilder, TargetedTablebaseBuilder
+from .builder import TablebaseBuilder
 
 __all__ = [
     'TablebaseGenerator', 
@@ -20,6 +20,5 @@ __all__ = [
     'TablebaseSolver',
     'count_empty',
     'PositionEnumerator',
-    'EndgameTablebaseBuilder',
-    'TargetedTablebaseBuilder'
+    'TablebaseBuilder'
 ]

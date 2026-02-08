@@ -91,7 +91,7 @@ class PositionEnumerator:
                     self.stats['reachable'] += 1
                     count += 1
                     
-                    if pbar:
+                    if pbar is not None:
                         pbar.update(1)
                         pbar.set_postfix({
                             'meta': self.stats['meta_boards'],
@@ -102,13 +102,13 @@ class PositionEnumerator:
                     yield board
                     
                     if max_positions and count >= max_positions:
-                        if pbar:
+                        if pbar is not None:
                             pbar.close()
                         return
                 else:
                     self.stats['unreachable'] += 1
         
-        if pbar:
+        if pbar is not None:
             pbar.close()
     
     def _enumerate_meta_boards(self) -> Generator[Tuple[int, ...], None, None]:

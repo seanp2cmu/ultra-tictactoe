@@ -1,63 +1,58 @@
-"""
-Practical Tablebase Builder
+"""Systematic Tablebase Builder
 
-Instead of enumerating all positions theoretically, this builder:
-1. Plays random games to reach endgame positions
-2. Solves each endgame position exactly
-3. Stores results with canonical hashing (symmetry reduction)
-
-This is more practical and guarantees reachable positions only.
+Builds tablebase using systematic position enumeration:
+1. Enumerate all valid positions with ≤N empty cells
+2. Apply D4 symmetry reduction
+3. Filter with 4-move backward DFS reachability
+4. Solve each position exactly with BFS + memoization
 """
 
 import os
 import pickle
-import random
 import time
 from typing import Dict, Tuple, Optional, Set
 from collections import defaultdict
 from tqdm import tqdm
-import numpy as np
 
 from game import Board
-from .solver import TablebaseSolver, count_empty
+from .solver import TablebaseSolver, ReachabilityChecker, count_empty
 from .enumerator import PositionEnumerator
 from .tablebase import Tablebase, CompactTablebase
 
 
-class EndgameTablebaseBuilder:
+class TablebaseBuilder:
     """
-    Build endgame tablebase by playing games and solving endgame positions.
+    Build endgame tablebase using systematic enumeration.
     
     Strategy:
-    1. Play random games until reaching endgame threshold
-    2. Solve each unique endgame position
-    3. Use symmetry reduction to minimize storage
-    4. Incrementally save progress
+    1. Use PositionEnumerator for systematic generation
+    2. D4 symmetry reduction (8x storage savings)
+    3. 4-move backward DFS reachability filter
+    4. BFS + memoization solver
     """
     
     def __init__(
         self,
-        endgame_threshold: int = 15,
+        empty_cells: int = 15,
         save_interval: int = 10000,
         save_path: str = 'tablebase/endgame.pkl',
         base_tablebase_path: Optional[str] = None
     ):
         """
         Args:
-            endgame_threshold: Max empty playable cells for tablebase
+            empty_cells: Target number of empty playable cells
             save_interval: Save progress every N positions
             save_path: Path to save tablebase
             base_tablebase_path: Path to smaller tablebase for incremental building
         """
-        self.endgame_threshold = endgame_threshold
+        self.empty_cells = empty_cells
         self.save_interval = save_interval
         self.save_path = save_path
         
         # Load base tablebase for incremental building
         base_positions = self._load_base_tablebase(base_tablebase_path)
         
-        self.solver = TablebaseSolver(max_depth=25, base_tablebase=base_positions)
-        self.reachability_checker = ReachabilityChecker(max_depth=4)
+        self.solver = TablebaseSolver(max_depth=30, base_tablebase=base_positions)
         
         # Storage - hash -> (result, dtw, best_move)
         self.positions: Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]] = {}
@@ -97,110 +92,62 @@ class EndgameTablebaseBuilder:
             except Exception as e:
                 print(f"⚠ Failed to load existing: {e}")
     
-    def build(
-        self,
-        num_games: int = 100000,
-        target_positions: Optional[int] = None,
-        verbose: bool = True
-    ) -> Dict[int, Tuple[int, int]]:
+    def build(self, max_positions: Optional[int] = None, verbose: bool = True):
         """
-        Build tablebase by playing random games.
+        Build tablebase using systematic enumeration.
         
         Args:
-            num_games: Number of random games to play
-            target_positions: Stop when reaching this many positions
+            max_positions: Stop after this many positions (None = all)
             verbose: Show progress
-            
-        Returns:
-            Dict mapping canonical hashes to (result, dtw)
         """
         start_time = time.time()
-        start_positions = len(self.positions)
+        start_count = len(self.positions)
         
         print("=" * 60)
-        print(f"Building Endgame Tablebase (≤{self.endgame_threshold} empty cells)")
+        print(f"Building Tablebase: {self.empty_cells} empty cells")
         print("=" * 60)
-        print(f"Starting with {start_positions} existing positions")
+        print(f"Starting with {start_count} existing positions")
         
-        games_played = 0
-        positions_added = 0
+        # Create enumerator
+        enumerator = PositionEnumerator(
+            empty_cells=self.empty_cells,
+            backward_depth=4
+        )
         
-        pbar = tqdm(total=num_games, desc="Games") if verbose else None
+        positions_processed = 0
         
         try:
-            while games_played < num_games:
-                if target_positions and len(self.positions) >= target_positions:
-                    print(f"\n✓ Reached target: {target_positions} positions")
-                    break
-                
-                # Play one game and collect endgame positions
-                new_positions = self._play_game_and_solve()
-                positions_added += new_positions
-                games_played += 1
-                
-                if pbar:
-                    pbar.update(1)
-                    pbar.set_postfix({
-                        'positions': len(self.positions),
-                        'new': new_positions
-                    })
+            for board in enumerator.enumerate(max_positions=max_positions, show_progress=verbose):
+                self._solve_and_store(board)
+                positions_processed += 1
                 
                 # Periodic save
-                if games_played % self.save_interval == 0:
+                if positions_processed % self.save_interval == 0:
                     self._save()
+                    if verbose:
+                        print(f"  Saved: {len(self.positions)} positions")
         
         except KeyboardInterrupt:
             print("\n⚠ Interrupted by user")
         
         finally:
-            if pbar:
-                pbar.close()
             self._save()
         
         elapsed = time.time() - start_time
-        new_total = len(self.positions) - start_positions
+        new_count = len(self.positions) - start_count
         
         print(f"\n{'=' * 60}")
         print(f"Build Complete!")
-        print(f"  Games played: {games_played}")
-        print(f"  New positions: {new_total}")
+        print(f"  Positions processed: {positions_processed}")
+        print(f"  New positions: {new_count}")
         print(f"  Total positions: {len(self.positions)}")
         print(f"  Time: {elapsed:.1f}s")
-        print(f"  Rate: {games_played/elapsed:.1f} games/s")
+        if elapsed > 0:
+            print(f"  Rate: {positions_processed/elapsed:.1f} pos/s")
+        print(f"  Solver stats: {dict(self.solver.stats)}")
         print(f"{'=' * 60}")
         
         return self.positions
-    
-    def _play_game_and_solve(self) -> int:
-        """
-        Play a random game and solve all endgame positions encountered.
-        
-        Returns:
-            Number of new positions added
-        """
-        board = Board()
-        new_count = 0
-        
-        # Play until game ends
-        while board.winner is None:
-            empty = count_empty(board)
-            
-            # Once in endgame range, solve and store
-            if empty <= self.endgame_threshold:
-                if self._solve_and_store(board.clone()):
-                    new_count += 1
-            
-            # Make random move
-            legal_moves = board.get_legal_moves()
-            if not legal_moves:
-                break
-            
-            move = random.choice(legal_moves)
-            board.make_move(move[0], move[1])
-        
-        self.stats['games_played'] += 1
-        
-        return new_count
     
     def _solve_and_store(self, board: Board) -> bool:
         """
@@ -209,25 +156,19 @@ class EndgameTablebaseBuilder:
         Returns:
             True if new position was added
         """
-        # Get canonical hash
         board_hash = self.solver._hash_board(board)
         
         # Skip if already seen
         if board_hash in self.seen_hashes:
-            self.stats['cache_hits'] += 1
-            return False
-        
-        # Check reachability (4-move backward DFS)
-        if not self.reachability_checker.is_reachable(board):
-            self.stats['unreachable'] += 1
+            self.stats['duplicates'] += 1
             return False
         
         self.seen_hashes.add(board_hash)
         
-        # Solve position with BFS + memoization
+        # Solve position
         result, dtw, best_move = self.solver.solve(board)
         
-        # Store result (result, dtw, best_move)
+        # Store result
         self.positions[board_hash] = (result, dtw, best_move)
         
         # Update stats
@@ -249,14 +190,14 @@ class EndgameTablebaseBuilder:
             pickle.dump({
                 'positions': self.positions,
                 'stats': dict(self.stats),
-                'endgame_threshold': self.endgame_threshold
+                'empty_cells': self.empty_cells
             }, f)
     
     def get_stats(self) -> dict:
         """Get builder statistics."""
         return {
             'total_positions': len(self.positions),
-            'endgame_threshold': self.endgame_threshold,
+            'empty_cells': self.empty_cells,
             **dict(self.stats)
         }
     
@@ -268,96 +209,33 @@ class EndgameTablebaseBuilder:
         print(f"✓ Exported compact tablebase: {compact.get_size_mb():.2f} MB")
 
 
-class TargetedTablebaseBuilder(EndgameTablebaseBuilder):
-    """
-    Build tablebase targeting specific game phases.
-    
-    Uses smarter game generation to find diverse endgame positions.
-    """
-    
-    def _play_game_and_solve(self) -> int:
-        """Play a game with varied opening to find diverse endgames."""
-        board = Board()
-        new_count = 0
-        
-        # Random opening moves
-        opening_length = random.randint(10, 50)
-        
-        for _ in range(opening_length):
-            if board.winner is not None:
-                break
-            
-            legal_moves = board.get_legal_moves()
-            if not legal_moves:
-                break
-            
-            # Mix of random and "interesting" moves
-            if random.random() < 0.3:
-                # Prefer center-ish moves
-                scored_moves = []
-                for move in legal_moves:
-                    r, c = move
-                    # Prefer center of sub-boards
-                    sub_r, sub_c = r % 3, c % 3
-                    center_dist = abs(sub_r - 1) + abs(sub_c - 1)
-                    score = random.random() - center_dist * 0.1
-                    scored_moves.append((score, move))
-                scored_moves.sort(reverse=True)
-                move = scored_moves[0][1]
-            else:
-                move = random.choice(legal_moves)
-            
-            board.make_move(move[0], move[1])
-        
-        # Continue to endgame, solving along the way
-        while board.winner is None:
-            empty = count_empty(board)
-            
-            if empty <= self.endgame_threshold:
-                if self._solve_and_store(board.clone()):
-                    new_count += 1
-            
-            legal_moves = board.get_legal_moves()
-            if not legal_moves:
-                break
-            
-            move = random.choice(legal_moves)
-            board.make_move(move[0], move[1])
-        
-        self.stats['games_played'] += 1
-        
-        return new_count
-
-
 def main():
     """Build tablebase from command line."""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Build endgame tablebase')
-    parser.add_argument('--games', type=int, default=10000, help='Number of games')
-    parser.add_argument('--threshold', type=int, default=15, help='Endgame threshold (empty cells)')
+    parser = argparse.ArgumentParser(description='Build endgame tablebase (systematic enumeration)')
+    parser.add_argument('--empty', type=int, default=10, help='Number of empty cells')
     parser.add_argument('--output', type=str, default='tablebase/endgame.pkl', help='Output path')
-    parser.add_argument('--target', type=int, default=None, help='Target number of positions')
+    parser.add_argument('--max', type=int, default=None, help='Max positions to generate')
     parser.add_argument('--base', type=str, default=None, help='Base tablebase for incremental build')
     
     args = parser.parse_args()
     
     print(f"\n{'=' * 60}")
-    print(f"Building tablebase: threshold={args.threshold}, games={args.games}")
+    print(f"Systematic Tablebase Builder")
+    print(f"  Empty cells: {args.empty}")
+    print(f"  Output: {args.output}")
     if args.base:
-        print(f"Using base tablebase: {args.base}")
+        print(f"  Base tablebase: {args.base}")
     print(f"{'=' * 60}\n")
     
-    builder = TargetedTablebaseBuilder(
-        endgame_threshold=args.threshold,
+    builder = TablebaseBuilder(
+        empty_cells=args.empty,
         save_path=args.output,
         base_tablebase_path=args.base
     )
     
-    builder.build(
-        num_games=args.games,
-        target_positions=args.target
-    )
+    builder.build(max_positions=args.max)
     
     # Export compact version
     compact_path = args.output.replace('.pkl', '.npz')
