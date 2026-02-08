@@ -20,6 +20,16 @@ HF_REPO_ID = "sean2474/ultra-tictactoe-models"
 models = {}
 dtw_calculator = None
 
+def ensure_model_on_gpu(model_name: str):
+    """Move model to GPU if CUDA is available (for use inside @spaces.GPU functions)."""
+    if model_name not in models:
+        return None
+    network = models[model_name]
+    if torch.cuda.is_available():
+        network.device = torch.device('cuda')
+        network.model = network.model.to('cuda')
+    return network
+
 def load_models_from_hf(repo_id: str):
     """Load models from Hugging Face Hub"""
     global models, dtw_calculator
@@ -28,12 +38,9 @@ def load_models_from_hf(repo_id: str):
         print("No HF_REPO_ID set, skipping HF model loading")
         return []
     
-    if torch.cuda.is_available():
-        device = 'cuda'
-    elif torch.backends.mps.is_available():
-        device = 'mps'
-    else:
-        device = 'cpu'
+    # Always load to CPU first for ZeroGPU compatibility
+    # Models will be moved to GPU inside @spaces.GPU decorated functions
+    device = 'cpu'
     
     print(f"Loading models from Hugging Face: {repo_id}")
     
@@ -79,15 +86,9 @@ def load_models_from_local():
         print(f"Model directory {MODEL_DIR} not found")
         return []
     
-    if torch.cuda.is_available():
-        device = 'cuda'
-        print(f"Using CUDA GPU: {torch.cuda.get_device_name(0)}")
-    elif torch.backends.mps.is_available():
-        device = 'mps'
-        print("Using Apple MPS GPU")
-    else:
-        device = 'cpu'
-        print("Using CPU")
+    # Always load to CPU first for ZeroGPU compatibility
+    device = 'cpu'
+    print("Loading models to CPU (will move to GPU in @spaces.GPU functions)")
     
     # DTW Calculator 생성 (공유)
     dtw_calculator = DTWCalculator(
@@ -183,8 +184,12 @@ def compare_models(model1_name, model2_name, num_games, num_simulations, tempera
             }, indent=2)
             return
         
+        # Move models to GPU inside @spaces.GPU context
+        network1 = ensure_model_on_gpu(model1_name)
+        network2 = ensure_model_on_gpu(model2_name)
+        
         agent1 = AlphaZeroAgent(
-            network=models[model1_name],
+            network=network1,
             num_simulations=num_simulations,
             c_puct=1.0,
             temperature=temperature,
@@ -193,7 +198,7 @@ def compare_models(model1_name, model2_name, num_games, num_simulations, tempera
         )
         
         agent2 = AlphaZeroAgent(
-            network=models[model2_name],
+            network=network2,
             num_simulations=num_simulations,
             c_puct=1.0,
             temperature=temperature,
@@ -306,6 +311,9 @@ def predict(model_name, board_json, num_simulations=200):
                 'available_models': list(models.keys())
             }, indent=2)
         
+        # Move model to GPU inside @spaces.GPU context
+        network = ensure_model_on_gpu(model_name)
+        
         board = board_from_dict(board_data)
         
         if board.winner is not None:
@@ -315,7 +323,7 @@ def predict(model_name, board_json, num_simulations=200):
             }, indent=2)
         
         agent = AlphaZeroAgent(
-            network=models[model_name],
+            network=network,
             num_simulations=num_simulations,
             c_puct=1.0,
             temperature=0.0,
@@ -325,7 +333,7 @@ def predict(model_name, board_json, num_simulations=200):
         
         root = agent.search(board)
         
-        _, value = models[model_name].predict(board)
+        _, value = network.predict(board)
         
         action_visits = [(action, child.visits, child.value()) 
                         for action, child in root.children.items()]
@@ -406,8 +414,11 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
             }, indent=2)
             return
         
+        # Move model to GPU inside @spaces.GPU context
+        network = ensure_model_on_gpu(model_name)
+        
         az_agent = AlphaZeroAgent(
-            network=models[model_name],
+            network=network,
             num_simulations=num_simulations,
             c_puct=1.0,
             temperature=0.0,
