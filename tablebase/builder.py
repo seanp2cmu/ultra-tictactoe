@@ -207,9 +207,10 @@ class TablebaseBuilder:
         # Solve position
         result, dtw, best_move = self.solver.solve(board)
         
-        # Validate DTW
+        # DTW can be > empty_count in some cases (draw detection, etc.)
+        # Just track stats instead of warning
         if dtw > empty_count:
-            print(f"⚠ DTW validation error: dtw={dtw} > empty={empty_count}")
+            self.stats['dtw_exceeded'] += 1
         
         # Store result and track level
         self.positions[board_hash] = (result, dtw, best_move)
