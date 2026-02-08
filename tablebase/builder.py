@@ -35,7 +35,7 @@ class TablebaseBuilder:
     def __init__(
         self,
         max_empty: int = 15,
-        save_interval: int = 10000,
+        save_interval: int = 100000,
         save_path: str = 'tablebase/endgame.pkl',
         base_tablebase_path: Optional[str] = None
     ):
