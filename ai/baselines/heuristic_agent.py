@@ -6,6 +6,13 @@ from typing import List, Tuple
 from game import Board
 
 
+def _get_completed_2d(board):
+    """Get completed_boards as 2D list (handles both Python Board and Cython BoardCy)."""
+    if hasattr(board, 'get_completed_boards_2d'):
+        return board.get_completed_boards_2d()
+    return board.completed_boards
+
+
 class HeuristicAgent:
     """Agent that uses heuristics to evaluate and select moves."""
     
@@ -71,7 +78,8 @@ class HeuristicAgent:
             score += self.weights['win_local']
             
             # Check if winning this local board wins the game
-            if self._would_win_meta(board.completed_boards, meta_row, meta_col, player):
+            completed = _get_completed_2d(board)
+            if self._would_win_meta(completed, meta_row, meta_col, player):
                 score += self.weights['win_meta']
         
         # 2. Check if this move blocks opponent from winning local board
@@ -91,7 +99,8 @@ class HeuristicAgent:
         
         # 5. Evaluate where we send the opponent
         send_row, send_col = local_row, local_col
-        if board.completed_boards[send_row][send_col] == 0:
+        completed = _get_completed_2d(board)
+        if completed[send_row][send_col] == 0:
             # Check if we're sending opponent to a board where they can win
             send_board_idx = send_row * 3 + send_col
             send_board = board.get_sub_board(send_board_idx)
@@ -102,7 +111,7 @@ class HeuristicAgent:
         
         # 6. Check if winning this local board creates 2-in-a-row on meta
         if self._would_win_local(local_board, local_row, local_col, player):
-            score += self._count_two_in_row_meta(board.completed_boards, meta_row, meta_col, player) * self.weights['two_in_row_meta']
+            score += self._count_two_in_row_meta(completed, meta_row, meta_col, player) * self.weights['two_in_row_meta']
         
         return score
     

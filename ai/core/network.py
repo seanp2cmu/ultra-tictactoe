@@ -122,7 +122,11 @@ class Model(nn.Module):
         opponent_player = 3 - current_player
         
         if hasattr(board_state, 'completed_boards'):
-            completed = board_state.completed_boards
+            # Handle both Cython BoardCy and Python Board
+            if hasattr(board_state, 'get_completed_boards_2d'):
+                completed = board_state.get_completed_boards_2d()
+            else:
+                completed = board_state.completed_boards
             for br in range(3):
                 for bc in range(3):
                     status = completed[br][bc]
@@ -145,13 +149,14 @@ class Model(nn.Module):
             
             target_br, target_bc = last_r % 3, last_c % 3
             if hasattr(board_state, 'completed_boards'):
-                if board_state.completed_boards[target_br][target_bc] == 0:
+                # Use already-retrieved completed variable
+                if completed[target_br][target_bc] == 0:
                     sr, sc = target_br * 3, target_bc * 3
                     tensor[6, sr:sr+3, sc:sc+3] = 1.0
                 else:
                     for br in range(3):
                         for bc in range(3):
-                            if board_state.completed_boards[br][bc] == 0:
+                            if completed[br][bc] == 0:
                                 sr, sc = br * 3, bc * 3
                                 tensor[6, sr:sr+3, sc:sc+3] = 1.0
             else:

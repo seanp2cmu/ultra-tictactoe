@@ -70,7 +70,12 @@ class BoardSymmetry:
     def get_canonical_bytes(board: Board) -> bytes:
         """Get canonical bytes for board (without constraint - stored separately)."""
         boards_arr = np.array(board.to_array(), dtype=np.int8)
-        completed_arr = np.array(board.completed_boards, dtype=np.int8)
+        # Handle both Cython BoardCy and Python Board
+        if hasattr(board, 'get_completed_state'):
+            completed_flat = [board.get_completed_state(i) for i in range(9)]
+            completed_arr = np.array(completed_flat, dtype=np.int8).reshape(3, 3)
+        else:
+            completed_arr = np.array(board.completed_boards, dtype=np.int8)
         player = board.current_player
         
         min_bytes = boards_arr.tobytes() + completed_arr.tobytes() + bytes([player])
@@ -171,7 +176,14 @@ class BoardSymmetry:
             (canonical_boards, canonical_completed, transform_idx)
         """
         boards_arr = np.array(board.to_array(), dtype=np.int8)
-        completed_arr = np.array(board.completed_boards, dtype=np.int8)
+        # Handle both Cython BoardCy and Python Board
+        if hasattr(board, 'get_completed_state'):
+            # Cython Board - use getter method
+            completed_flat = [board.get_completed_state(i) for i in range(9)]
+            completed_arr = np.array(completed_flat, dtype=np.int8).reshape(3, 3)
+        else:
+            # Python Board
+            completed_arr = np.array(board.completed_boards, dtype=np.int8)
         player = board.current_player
         
         min_bytes = boards_arr.tobytes() + completed_arr.tobytes() + bytes([player])

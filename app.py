@@ -7,7 +7,22 @@ import json
 import time
 import gradio as gr
 import torch
-import spaces
+
+# Mock spaces.GPU decorator for local runs
+# Check if we're on HF Spaces by looking for SPACE_ID env var
+if os.environ.get('SPACE_ID'):
+    import spaces
+else:
+    class _MockSpaces:
+        @staticmethod
+        def GPU(fn=None, duration=None):
+            if fn is not None:
+                return fn
+            def decorator(func):
+                return func
+            return decorator
+    spaces = _MockSpaces()
+
 from huggingface_hub import hf_hub_download, list_repo_files
 from ai.core import AlphaZeroNet
 from ai.mcts import AlphaZeroAgent
@@ -20,14 +35,23 @@ HF_REPO_ID = "sean2474/ultra-tictactoe-models"
 models = {}
 dtw_calculator = None
 
+def get_best_device():
+    """Get the best available device (CUDA > MPS > CPU)."""
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        return torch.device('mps')
+    return torch.device('cpu')
+
 def ensure_model_on_gpu(model_name: str):
-    """Move model to GPU if CUDA is available (for use inside @spaces.GPU functions)."""
+    """Move model to best available GPU (CUDA or MPS) or keep on CPU."""
     if model_name not in models:
         return None
     network = models[model_name]
-    if torch.cuda.is_available():
-        network.device = torch.device('cuda')
-        network.model = network.model.to('cuda')
+    device = get_best_device()
+    if device.type != 'cpu':
+        network.device = device
+        network.model = network.model.to(device)
     return network
 
 def load_models_from_hf(repo_id: str):
@@ -247,7 +271,7 @@ def arena_match(p1_type, p1_model, p1_sims, p2_type, p2_model, p2_sims, num_game
             board = Board()
             move_count = 0
             
-            while board.winner is None and move_count < 81:
+            while board.winner in (None, -1) and move_count < 81:
                 is_p1_turn = (board.current_player == 1) == p1_is_X
                 current_agent = agent1 if is_p1_turn else agent2
                 
@@ -268,7 +292,7 @@ def arena_match(p1_type, p1_model, p1_sims, p2_type, p2_model, p2_sims, num_game
             results['total_time'] += game_time
             
             # Determine winner
-            if board.winner == 3 or board.winner is None:
+            if board.winner == 3 or board.winner in (None, -1):
                 results['draws'] += 1
                 result_str = "Draw"
             elif (board.winner == 1 and p1_is_X) or (board.winner == 2 and not p1_is_X):
@@ -498,7 +522,7 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
             }
             
             move_count = 0
-            while board.winner is None and move_count < 81:
+            while board.winner in (None, -1) and move_count < 81:
                 is_model_turn = (board.current_player == 1) == model_is_p1
                 
                 if is_model_turn:
@@ -519,15 +543,15 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
                 board.make_move(move_r, move_c)
                 move_count += 1
                 
-                if board.winner is not None:
+                if board.winner not in (None, -1):
                     break
             
             game_elapsed = time.time() - game_start_time
-            game_record['winner'] = int(board.winner) if board.winner is not None else None
+            game_record['winner'] = int(board.winner) if board.winner not in (None, -1) else None
             game_record['elapsed_time'] = round(game_elapsed, 2)
             game_record['total_moves'] = move_count
             
-            if board.winner == 3 or board.winner is None:
+            if board.winner == 3 or board.winner in (None, -1):
                 results['summary']['draws'] += 1
                 game_record['result'] = 'draw'
             elif (board.winner == 1 and model_is_p1) or (board.winner == 2 and not model_is_p1):

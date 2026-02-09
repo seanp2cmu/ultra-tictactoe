@@ -69,7 +69,13 @@ class AlphaZeroNet:
                 for c in range(9):
                     if boards_arr[r, c] != 0:
                         canonical_board.set_cell(r, c, int(boards_arr[r, c]))
-            canonical_board.completed_boards = completed_arr.tolist()
+            # Handle both Cython BoardCy and Python Board
+            if hasattr(canonical_board, 'set_completed_boards_2d'):
+                # Cython Board - use setter method
+                canonical_board.set_completed_boards_2d(completed_arr.tolist())
+            else:
+                # Python Board - direct assignment
+                canonical_board.completed_boards = completed_arr.tolist()
             canonical_board.current_player = board_state.current_player
             
             # Transform last_move
