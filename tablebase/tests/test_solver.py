@@ -175,8 +175,7 @@ class TestIntegration:
     def test_level2_with_builder(self):
         """L2 solve requires L1 base - use builder."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            save_path = os.path.join(tmpdir, 'tb.pkl')
-            builder = TablebaseBuilder(max_empty=1, save_path=save_path)
+            builder = TablebaseBuilder(max_empty=1, data_dir=tmpdir)
             builder.build(verbose=False)
             
             # Now solve L2 using builder's solver (has L1 cache)
@@ -199,15 +198,13 @@ class TestSaveLoad:
     def test_builder_save_load(self):
         """Build L1 only, save, load, and verify."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            save_path = os.path.join(tmpdir, 'test_tb.pkl')
-            
-            builder = TablebaseBuilder(max_empty=1, save_path=save_path)
+            builder = TablebaseBuilder(max_empty=1, data_dir=tmpdir)
             builder.build(verbose=False)
             
             assert len(builder.positions) > 10000
             
             # Load into new builder
-            builder2 = TablebaseBuilder(max_empty=1, save_path=save_path)
+            builder2 = TablebaseBuilder(max_empty=1, data_dir=tmpdir)
             assert len(builder2.positions) == len(builder.positions)
 
 

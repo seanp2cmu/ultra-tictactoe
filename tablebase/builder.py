@@ -29,22 +29,26 @@ class TablebaseBuilder:
     3. 4-move backward DFS reachability filter
     4. BFS + memoization solver
     5. Build from 1 empty to max_empty (progressive construction)
+    
+    Storage: Per-level files in data_dir/
+    - level_N.pkl: {'positions': {...}, 'reached': set()}
     """
     
     def __init__(
         self,
         max_empty: int = 15,
-        save_path: str = 'tablebase/endgame.pkl',
+        data_dir: str = 'tablebase/data',
         base_tablebase_path: Optional[str] = None
     ):
         """
         Args:
             max_empty: Maximum number of empty playable cells (builds 1 to max_empty)
-            save_path: Path to save tablebase
+            data_dir: Directory to save per-level tablebase files
             base_tablebase_path: Path to existing tablebase to continue from
         """
         self.max_empty = max_empty
-        self.save_path = save_path
+        self.data_dir = data_dir
+        os.makedirs(data_dir, exist_ok=True)
         
         # Load base tablebase for incremental building
         base_positions = self._load_base_tablebase(base_tablebase_path)
@@ -59,17 +63,15 @@ class TablebaseBuilder:
         # constraint: -1..8 -> 0..9 (4 bits)
         self.seen_hashes: Set[int] = set()
         
-        # Track which empty counts are complete
-        self.completed_empty: Set[int] = set()
-        
-        # Forward reachability tracking
-        self.position_levels: Dict[int, int] = {}  # hash -> empty_count
-        self.reached_hashes: Set[int] = set()  # hashes reached from higher levels
+        # Per-level storage: level -> {hash: {constraint: (result, dtw, move)}}
+        self.level_positions: Dict[int, Dict[int, Dict]] = {}
+        # Per-level reached hashes: level -> set of reached hashes
+        self.level_reached: Dict[int, Set[int]] = {}
         
         # Stats
         self.stats = defaultdict(int)
         
-        # Load existing if available
+        # Load existing levels
         self._load_existing()
     
     def _load_base_tablebase(self, path: Optional[str]) -> Dict:
@@ -87,35 +89,49 @@ class TablebaseBuilder:
             print(f"⚠ Failed to load base tablebase: {e}")
             return {}
     
+    def _get_level_path(self, level: int) -> str:
+        """Get file path for a level."""
+        return os.path.join(self.data_dir, f'level_{level}.pkl')
+    
+    def _get_completed_levels(self) -> Set[int]:
+        """Get set of completed levels from existing files."""
+        completed = set()
+        for level in range(1, 82):  # Max possible levels
+            if os.path.exists(self._get_level_path(level)):
+                completed.add(level)
+        return completed
+    
     def _load_existing(self):
-        """Load existing tablebase if available."""
-        if os.path.exists(self.save_path):
+        """Load existing per-level tablebase files."""
+        completed = self._get_completed_levels()
+        if not completed:
+            return
+        
+        print(f"✓ Loading existing levels: {sorted(completed)}")
+        
+        for level in sorted(completed):
             try:
-                with open(self.save_path, 'rb') as f:
+                with open(self._get_level_path(level), 'rb') as f:
                     data = pickle.load(f)
-                self.positions = data.get('positions', {})
-                # Rebuild seen_hashes as packed ints: (hash << 4) | (constraint + 1)
-                self.seen_hashes = set()
-                for h, constraints in self.positions.items():
+                
+                level_pos = data.get('positions', {})
+                level_reached = data.get('reached', set())
+                
+                self.level_positions[level] = level_pos
+                self.level_reached[level] = level_reached
+                
+                # Merge into main positions dict for solver cache
+                for h, constraints in level_pos.items():
+                    self.positions[h] = constraints
                     for c in constraints:
                         self.seen_hashes.add((h << 4) | (c + 1))
-                self.stats = defaultdict(int, data.get('stats', {}))
-                self.completed_empty = set(data.get('completed_empty', []))
                 
-                # Load position_levels and reached_hashes for incremental building
-                self.position_levels = data.get('position_levels', {})
-                self.reached_hashes = data.get('reached_hashes', set())
-                
-                # Share positions with solver cache for child lookups
-                self.solver.cache = self.positions
-                
-                print(f"✓ Loaded existing tablebase: {len(self.positions)} positions")
-                if self.completed_empty:
-                    print(f"  Completed empty counts: {sorted(self.completed_empty)}")
-                if self.reached_hashes:
-                    print(f"  Reached hashes: {len(self.reached_hashes)}")
             except Exception as e:
-                print(f"⚠ Failed to load existing: {e}")
+                print(f"⚠ Failed to load level {level}: {e}")
+        
+        # Share positions with solver cache
+        self.solver.cache = self.positions
+        print(f"  Total positions: {len(self.positions)}")
     
     def build(self, max_positions_per_level: Optional[int] = None, verbose: bool = True):
         """
@@ -128,12 +144,14 @@ class TablebaseBuilder:
         start_time = time.time()
         start_count = len(self.positions)
         
+        completed = self._get_completed_levels()
+        
         print("=" * 60)
         print(f"Building Tablebase: 1 to {self.max_empty} empty cells")
         print("=" * 60)
         print(f"Starting with {start_count} existing positions")
-        if self.completed_empty:
-            print(f"Already completed: {sorted(self.completed_empty)}")
+        if completed:
+            print(f"Already completed: {sorted(completed)}")
         
         total_processed = 0
         
@@ -141,9 +159,15 @@ class TablebaseBuilder:
             # Build from 1 empty to max_empty (progressive order)
             for empty_count in range(1, self.max_empty + 1):
                 # Skip if already completed
-                if empty_count in self.completed_empty:
+                if empty_count in completed:
                     print(f"\n[{empty_count}/{self.max_empty}] Already complete, skipping...")
                     continue
+                
+                # Initialize level storage
+                if empty_count not in self.level_positions:
+                    self.level_positions[empty_count] = {}
+                if empty_count not in self.level_reached:
+                    self.level_reached[empty_count] = set()
                 
                 print(f"\n{'─' * 60}")
                 print(f"[{empty_count}/{self.max_empty}] Building positions with {empty_count} empty cells")
@@ -160,9 +184,8 @@ class TablebaseBuilder:
                     level_processed += 1
                     total_processed += 1
                 
-                # Mark this level as complete (save only at level end)
-                self.completed_empty.add(empty_count)
-                self._save()
+                # Save this level
+                self._save_level(empty_count)
                 
                 level_new = len(self.positions) - level_start
                 print(f"  Level {empty_count}: +{level_new} positions (total: {len(self.positions)})")
@@ -176,9 +199,10 @@ class TablebaseBuilder:
         
         except KeyboardInterrupt:
             print("\n⚠ Interrupted by user - progress saved")
-        
-        finally:
-            self._save()
+            # Save current level in progress
+            current_level = empty_count
+            if current_level in self.level_positions and self.level_positions[current_level]:
+                self._save_level(current_level)
         
         elapsed = time.time() - start_time
         new_count = len(self.positions) - start_count
@@ -186,7 +210,7 @@ class TablebaseBuilder:
         print(f"\n{'=' * 60}")
         print(f"Build Complete!")
         print(f"  Empty range: 1 to {self.max_empty}")
-        print(f"  Completed levels: {sorted(self.completed_empty)}")
+        print(f"  Completed levels: {sorted(self._get_completed_levels())}")
         print(f"  Positions processed: {total_processed}")
         print(f"  New positions: {new_count}")
         print(f"  Total positions: {len(self.positions)}")
@@ -225,11 +249,15 @@ class TablebaseBuilder:
         if board_hash not in self.positions:
             self.positions[board_hash] = {}
         self.positions[board_hash][constraint] = (result, dtw, best_move)
-        self.position_levels[board_hash] = empty_count
+        
+        # Also store in level-specific dict
+        if board_hash not in self.level_positions[empty_count]:
+            self.level_positions[empty_count][board_hash] = {}
+        self.level_positions[empty_count][board_hash][constraint] = (result, dtw, best_move)
         
         # Mark child positions as reached (for forward reachability)
         if empty_count >= 2:
-            self._mark_children_reached(board)
+            self._mark_children_reached(board, empty_count)
         
         # Update stats
         self.stats['positions_solved'] += 1
@@ -242,8 +270,16 @@ class TablebaseBuilder:
         
         return True
     
-    def _mark_children_reached(self, board: Board):
+    def _mark_children_reached(self, board: Board, parent_level: int):
         """Mark all child positions as reached (using make/undo, no clone)."""
+        child_level = parent_level - 1
+        if child_level < 1:
+            return
+        
+        # Initialize reached set for child level if needed
+        if child_level not in self.level_reached:
+            self.level_reached[child_level] = set()
+        
         moves = board.get_legal_moves()
         prev_last_move = board.last_move
         prev_winner = board.winner
@@ -259,39 +295,48 @@ class TablebaseBuilder:
             
             board.make_move(r, c, validate=False)
             child_hash = self.solver._hash_board(board)
-            self.reached_hashes.add(child_hash)
+            self.level_reached[child_level].add(child_hash)
             board.undo_move(r, c, prev_completed, prev_winner, prev_last_move)
     
     def _prune_unreachable(self, level: int, verbose: bool = True):
         """Remove unreachable positions from a level."""
-        to_delete = []
-        for h, lvl in self.position_levels.items():
-            if lvl == level and h not in self.reached_hashes:
-                to_delete.append(h)
+        if level not in self.level_positions:
+            return
+        
+        reached = self.level_reached.get(level, set())
+        to_delete = [h for h in self.level_positions[level] if h not in reached]
         
         for h in to_delete:
-            # Remove all constraints for this hash from seen_hashes
-            if h in self.positions:
-                for constraint in self.positions[h]:
+            # Remove from seen_hashes
+            if h in self.level_positions[level]:
+                for constraint in self.level_positions[level][h]:
                     self.seen_hashes.discard((h << 4) | (constraint + 1))
-            del self.positions[h]
-            del self.position_levels[h]
+            # Remove from main positions
+            if h in self.positions:
+                del self.positions[h]
+            # Remove from level positions
+            del self.level_positions[level][h]
         
-        if verbose and to_delete:
-            print(f"  🗑 Pruned {len(to_delete)} unreachable positions from level {level}")
+        if to_delete:
+            # Update level file after pruning
+            self._save_level(level)
+            if verbose:
+                print(f"  🗑 Pruned {len(to_delete)} unreachable positions from level {level}")
+        
+        # Clear reached set for this level (no longer needed)
+        if level in self.level_reached:
+            del self.level_reached[level]
     
-    def _save(self):
-        """Save current tablebase."""
-        os.makedirs(os.path.dirname(self.save_path) if os.path.dirname(self.save_path) else '.', exist_ok=True)
+    def _save_level(self, level: int):
+        """Save a single level's positions and reached hashes."""
+        if level not in self.level_positions:
+            return
         
-        with open(self.save_path, 'wb') as f:
+        path = self._get_level_path(level)
+        with open(path, 'wb') as f:
             pickle.dump({
-                'positions': self.positions,
-                'stats': dict(self.stats),
-                'max_empty': self.max_empty,
-                'completed_empty': list(self.completed_empty),
-                'position_levels': self.position_levels,
-                'reached_hashes': self.reached_hashes
+                'positions': self.level_positions[level],
+                'reached': self.level_reached.get(level, set())
             }, f, protocol=pickle.HIGHEST_PROTOCOL)
     
     def get_stats(self) -> dict:
@@ -299,7 +344,7 @@ class TablebaseBuilder:
         return {
             'total_positions': len(self.positions),
             'max_empty': self.max_empty,
-            'completed_levels': sorted(self.completed_empty),
+            'completed_levels': sorted(self._get_completed_levels()),
             **dict(self.stats)
         }
     
@@ -340,7 +385,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Build endgame tablebase')
     parser.add_argument('--max-empty', type=int, default=15, help='Maximum empty cells (builds 1 to max)')
-    parser.add_argument('--output', type=str, default='tablebase/endgame.pkl', help='Output path')
+    parser.add_argument('--data-dir', type=str, default='tablebase/data', help='Data directory for level files')
     parser.add_argument('--max-per-level', type=int, default=None, help='Max positions per level (for testing)')
     parser.add_argument('--base', type=str, default=None, help='Continue from existing tablebase')
     parser.add_argument('--upload-hf', action='store_true', help='Upload to HuggingFace after build')
@@ -350,7 +395,7 @@ def main():
     print(f"\n{'=' * 60}")
     print(f"Endgame Tablebase Builder")
     print(f"  Empty range: 1 to {args.max_empty}")
-    print(f"  Output: {args.output}")
+    print(f"  Data dir: {args.data_dir}")
     if args.base:
         print(f"  Continue from: {args.base}")
     if args.upload_hf:
@@ -359,19 +404,21 @@ def main():
     
     builder = TablebaseBuilder(
         max_empty=args.max_empty,
-        save_path=args.output,
+        data_dir=args.data_dir,
         base_tablebase_path=args.base
     )
     
     builder.build(max_positions_per_level=args.max_per_level)
     
     # Export compact version
-    compact_path = args.output.replace('.pkl', '.npz')
+    compact_path = os.path.join(args.data_dir, 'compact.npz')
     builder.export_compact(compact_path)
     
     # Upload to HuggingFace if requested
     if args.upload_hf:
-        upload_to_hf([args.output, compact_path])
+        # Collect all level files + compact
+        level_files = [os.path.join(args.data_dir, f) for f in os.listdir(args.data_dir) if f.endswith('.pkl')]
+        upload_to_hf(level_files + [compact_path])
 
 
 if __name__ == '__main__':
