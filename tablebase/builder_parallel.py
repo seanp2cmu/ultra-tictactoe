@@ -170,6 +170,23 @@ class ParallelTablebaseBuilder:
                 'reached': self.level_reached.get(level, set())
             }, f, protocol=pickle.HIGHEST_PROTOCOL)
     
+    def _clear_old_levels(self, max_level_to_clear: int, verbose: bool = True):
+        """Clear old levels from memory to reduce RAM usage."""
+        if max_level_to_clear < 1:
+            return
+        
+        cleared_count = 0
+        for level in range(1, max_level_to_clear + 1):
+            if level in self.level_positions:
+                for h in self.level_positions[level]:
+                    if h in self.positions:
+                        del self.positions[h]
+                del self.level_positions[level]
+                cleared_count += 1
+        
+        if cleared_count > 0 and verbose:
+            print(f"  💾 Cleared levels 1-{max_level_to_clear} from RAM")
+    
     def build(self, max_positions_per_level: int = None, verbose: bool = True):
         """Build tablebase with parallel processing."""
         start_time = time.time()
@@ -242,6 +259,9 @@ class ParallelTablebaseBuilder:
                 
                 level_new = len(self.positions) - level_start
                 print(f"  Level {empty_count}: +{level_new} positions (total: {len(self.positions)})")
+                
+                # Memory optimization: clear old levels from RAM (keep only recent 7)
+                self._clear_old_levels(empty_count - 6, verbose)
         
         except KeyboardInterrupt:
             print("\n⚠ Interrupted by user")

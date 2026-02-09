@@ -196,6 +196,10 @@ class TablebaseBuilder:
                 prune_level = empty_count - 7
                 if prune_level >= 1:
                     self._prune_unreachable(prune_level, verbose)
+                
+                # Memory optimization: clear old levels from RAM (keep only recent 7)
+                # After level N is done, levels < N-6 are no longer needed for solving
+                self._clear_old_levels(empty_count - 6, verbose)
         
         except KeyboardInterrupt:
             print("\n⚠ Interrupted by user - progress saved")
@@ -320,6 +324,29 @@ class TablebaseBuilder:
         # Clear reached set for this level (no longer needed)
         if level in self.level_reached:
             del self.level_reached[level]
+    
+    def _clear_old_levels(self, max_level_to_clear: int, verbose: bool = True):
+        """Clear old levels from memory to reduce RAM usage.
+        
+        Positions are already saved to disk, so we can safely remove them from RAM.
+        Only clears levels that are no longer needed for solving (children lookups).
+        """
+        if max_level_to_clear < 1:
+            return
+        
+        cleared_count = 0
+        for level in range(1, max_level_to_clear + 1):
+            if level in self.level_positions:
+                # Remove positions from main cache
+                for h in self.level_positions[level]:
+                    if h in self.positions:
+                        del self.positions[h]
+                # Clear level data
+                del self.level_positions[level]
+                cleared_count += 1
+        
+        if cleared_count > 0 and verbose:
+            print(f"  💾 Cleared levels 1-{max_level_to_clear} from RAM (saved on disk)")
     
     def _save_level(self, level: int):
         """Save a single level's positions and reached hashes."""
