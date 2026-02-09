@@ -19,7 +19,7 @@ class TestBoardBasics:
     def test_make_move_first(self):
         board = Board()
         board.make_move(4, 4)
-        assert board.boards[4][4] == 1
+        assert board.get_cell(4, 4) == 1
         assert board.current_player == 2
         assert board.last_move == (4, 4)
     
@@ -27,8 +27,8 @@ class TestBoardBasics:
         board = Board()
         board.make_move(4, 4)  # X at center
         board.make_move(3, 3)  # O at (3,3) - constrained to sub-board (1,1)
-        assert board.boards[4][4] == 1
-        assert board.boards[3][3] == 2
+        assert board.get_cell(4, 4) == 1
+        assert board.get_cell(3, 3) == 2
         assert board.current_player == 1
     
     def test_clone(self):
@@ -37,13 +37,13 @@ class TestBoardBasics:
         board.make_move(3, 3)
         
         clone = board.clone()
-        assert clone.boards[4][4] == 1
-        assert clone.boards[3][3] == 2
+        assert clone.get_cell(4, 4) == 1
+        assert clone.get_cell(3, 3) == 2
         assert clone.current_player == board.current_player
         
         # Modify original, clone should not change
         board.make_move(0, 0)
-        assert clone.boards[0][0] == 0
+        assert clone.get_cell(0, 0) == 0
 
 
 class TestLegalMoves:
@@ -70,6 +70,7 @@ class TestLegalMoves:
         # When target sub-board is completed, player can move anywhere
         # last_move (0,0) constrains to sub-board (0%3, 0%3) = (0,0)
         board.completed_boards[0][0] = 1  # Mark sub-board (0,0) as completed
+        board.completed_mask |= (1 << 0)  # Also update completed_mask
         board.last_move = (0, 0)  # Constrains to (0,0) which is completed
         moves = board.get_legal_moves()
         # Should have moves in all non-completed sub-boards (72 cells)
@@ -172,7 +173,7 @@ class TestUndoMove:
         
         board.undo_move(4, 4, prev_completed, prev_winner, prev_last_move)
         
-        assert board.boards[4][4] == 0
+        assert board.get_cell(4, 4) == 0
         assert board.current_player == 1
         assert board.last_move is None
     
@@ -188,12 +189,12 @@ class TestUndoMove:
         
         # Undo second move
         board.undo_move(3, 3, 0, None, (4, 4))
-        assert board.boards[3][3] == 0
+        assert board.get_cell(3, 3) == 0
         assert board.current_player == 2
         
         # Undo first move
         board.undo_move(4, 4, 0, None, None)
-        assert board.boards[4][4] == 0
+        assert board.get_cell(4, 4) == 0
         assert board.current_player == 1
 
 
@@ -226,13 +227,13 @@ class TestBoardAccess:
     def test_read_cell(self):
         board = Board()
         board.make_move(4, 4)
-        assert board.boards[4][4] == 1
-        assert board.boards[0][0] == 0
+        assert board.get_cell(4, 4) == 1
+        assert board.get_cell(0, 0) == 0
     
     def test_write_cell(self):
         board = Board()
         board.set_cell(0, 0, 1)
-        assert board.boards[0][0] == 1
+        assert board.get_cell(0, 0) == 1
         # Bitmask should also be updated
         assert board.x_masks[0] & 1 == 1
 
@@ -254,6 +255,7 @@ class TestCountEmpty:
         board = Board()
         # Complete sub-board (0,0)
         board.completed_boards[0][0] = 1
+        board.completed_mask |= (1 << 0)  # Also update completed_mask
         # Should not count cells in completed sub-board
         count = board.count_playable_empty_cells()
         assert count == 72  # 81 - 9

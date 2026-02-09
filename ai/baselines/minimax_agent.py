@@ -102,13 +102,7 @@ class MinimaxAgent:
     
     def _copy_board(self, board: Board) -> Board:
         """Create a deep copy of the board."""
-        new_board = Board()
-        new_board.boards = [row[:] for row in board.boards]
-        new_board.completed_boards = [row[:] for row in board.completed_boards]
-        new_board.current_player = board.current_player
-        new_board.winner = board.winner
-        new_board.last_move = board.last_move
-        return new_board
+        return board.clone()
     
     def _evaluate(self, board: Board, player: int) -> float:
         """Evaluate board position for player using heuristics."""
@@ -135,7 +129,7 @@ class MinimaxAgent:
         for i in range(9):
             meta_row, meta_col = i // 3, i % 3
             if board.completed_boards[meta_row][meta_col] == 0:
-                local_board = board.boards[i]
+                local_board = board.get_sub_board(i)
                 
                 # Count pieces
                 player_pieces = local_board.count(player)

@@ -14,7 +14,6 @@ class Board:
     )
     
     def __init__(self):
-        self.boards = [[0 for _ in range(9)] for _ in range(9)] # empty: 0, player 1: 1, player 2: 2
         self.completed_boards = [[0 for _ in range(3)] for _ in range(3)] # empty: 0, player 1: 1, player 2: 2, draw: 3
         self.current_player = 1
         self.winner = None
@@ -31,7 +30,6 @@ class Board:
         Only copies mutable state, shares immutable data
         """
         new_board = Board.__new__(Board)
-        new_board.boards = [row[:] for row in self.boards]
         new_board.completed_boards = [row[:] for row in self.completed_boards]
         new_board.current_player = self.current_player
         new_board.winner = self.winner
@@ -41,32 +39,81 @@ class Board:
         new_board.o_masks = self.o_masks[:]
         new_board.completed_mask = self.completed_mask
         return new_board
+    
+    def get_cell(self, r, c):
+        """Get cell value from bitmasks. Returns 0, 1, or 2."""
+        sub_idx = (r // 3) * 3 + (c // 3)
+        cell_bit = 1 << ((r % 3) * 3 + (c % 3))
+        if self.x_masks[sub_idx] & cell_bit:
+            return 1
+        if self.o_masks[sub_idx] & cell_bit:
+            return 2
+        return 0
+    
+    def get_sub_board(self, sub_idx):
+        """Get sub-board as flat list of 9 values (for AI compatibility)."""
+        result = [0] * 9
+        x_mask = self.x_masks[sub_idx]
+        o_mask = self.o_masks[sub_idx]
+        for i in range(9):
+            if x_mask & (1 << i):
+                result[i] = 1
+            elif o_mask & (1 << i):
+                result[i] = 2
+        return result
+    
+    def to_array(self):
+        """Convert bitmasks to 9x9 array (for network input)."""
+        arr = [[0] * 9 for _ in range(9)]
+        for sub_idx in range(9):
+            sub_r, sub_c = sub_idx // 3, sub_idx % 3
+            x_mask = self.x_masks[sub_idx]
+            o_mask = self.o_masks[sub_idx]
+            for cell_idx in range(9):
+                r = sub_r * 3 + cell_idx // 3
+                c = sub_c * 3 + cell_idx % 3
+                if x_mask & (1 << cell_idx):
+                    arr[r][c] = 1
+                elif o_mask & (1 << cell_idx):
+                    arr[r][c] = 2
+        return arr
 
     def get_legal_moves(self):
         legal_moves = []
         
         if self.last_move is None:
-            for r in range(9):
-                for c in range(9):
-                    board_r, board_c = r // 3, c // 3
-                    if self.boards[r][c] == 0 and self.completed_boards[board_r][board_c] == 0:
+            for sub_idx in range(9):
+                if self.completed_mask & (1 << sub_idx):
+                    continue
+                occupied = self.x_masks[sub_idx] | self.o_masks[sub_idx]
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                for cell_idx in range(9):
+                    if not (occupied & (1 << cell_idx)):
+                        r = sub_r * 3 + cell_idx // 3
+                        c = sub_c * 3 + cell_idx % 3
                         legal_moves.append((r, c))
         else:
             last_r, last_c = self.last_move
-            target_board_r = last_r % 3
-            target_board_c = last_c % 3
+            target_sub_idx = (last_r % 3) * 3 + (last_c % 3)
             
-            if self.completed_boards[target_board_r][target_board_c] == 0:
-                start_r, start_c = target_board_r * 3, target_board_c * 3
-                for r in range(start_r, start_r + 3):
-                    for c in range(start_c, start_c + 3):
-                        if self.boards[r][c] == 0:
-                            legal_moves.append((r, c))
+            if not (self.completed_mask & (1 << target_sub_idx)):
+                occupied = self.x_masks[target_sub_idx] | self.o_masks[target_sub_idx]
+                sub_r, sub_c = target_sub_idx // 3, target_sub_idx % 3
+                for cell_idx in range(9):
+                    if not (occupied & (1 << cell_idx)):
+                        r = sub_r * 3 + cell_idx // 3
+                        c = sub_c * 3 + cell_idx % 3
+                        legal_moves.append((r, c))
             else:
-                for r in range(9):
-                    for c in range(9):
-                        board_r, board_c = r // 3, c // 3
-                        if self.boards[r][c] == 0 and self.completed_boards[board_r][board_c] == 0:
+                for sub_idx in range(9):
+                    if self.completed_mask & (1 << sub_idx):
+                        continue
+                    occupied = self.x_masks[sub_idx] | self.o_masks[sub_idx]
+                    sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                    for cell_idx in range(9):
+                        if not (occupied & (1 << cell_idx)):
+                            r = sub_r * 3 + cell_idx // 3
+                            c = sub_c * 3 + cell_idx % 3
                             legal_moves.append((r, c))
         return legal_moves
     
@@ -75,7 +122,7 @@ class Board:
         if not (0 <= r < 9 and 0 <= c < 9): # loop bounds
             return False
         
-        if self.boards[r][c] != 0: # check already placed
+        if self.get_cell(r, c) != 0: # check already placed
             return False
         
         board_r, board_c = r // 3, c // 3
@@ -100,7 +147,7 @@ class Board:
         cell_bit = 1 << ((r % 3) * 3 + (c % 3))
         
         # Clear old value if any
-        old = self.boards[r][c]
+        old = self.get_cell(r, c)
         if old == 1:
             self.x_masks[sub_idx] &= ~cell_bit
             self.sub_counts[sub_idx][0] -= 1
@@ -109,7 +156,6 @@ class Board:
             self.sub_counts[sub_idx][1] -= 1
         
         # Set new value
-        self.boards[r][c] = player
         if player == 1:
             self.x_masks[sub_idx] |= cell_bit
             self.sub_counts[sub_idx][0] += 1
@@ -121,7 +167,6 @@ class Board:
         if validate and not self._is_valid_move(r, c):
             raise ValueError("Illegal move")
         
-        self.boards[r][c] = self.current_player
         self.last_move = (r, c)
         
         # Update sub_counts and bitmasks
@@ -151,7 +196,6 @@ class Board:
         else:
             self.o_masks[sub_idx] &= ~cell_bit
         
-        self.boards[r][c] = 0
         board_r, board_c = r // 3, c // 3
         self.completed_boards[board_r][board_c] = prev_completed
         # Update completed_mask
@@ -213,14 +257,11 @@ class Board:
         """Count only playable empty cells (excluding completed small boards)."""
         empty_count = 0
         
-        for br in range(3):
-            for bc in range(3):
-                if self.completed_boards[br][bc] == 0:
-                    start_r, start_c = br * 3, bc * 3
-                    for r in range(start_r, start_r + 3):
-                        for c in range(start_c, start_c + 3):
-                            if self.boards[r][c] == 0:
-                                empty_count += 1
+        for sub_idx in range(9):
+            if not (self.completed_mask & (1 << sub_idx)):
+                occupied = self.x_masks[sub_idx] | self.o_masks[sub_idx]
+                # Count zero bits in 9-bit mask
+                empty_count += 9 - bin(occupied).count('1')
         
         return empty_count
     
@@ -354,21 +395,13 @@ class Board:
             return 0.4, "deep_endgame"
     
     def swap_xo(self):
-        """Swap X and O in place. O(1) for masks, O(81) for boards array."""
+        """Swap X and O in place. O(1) for masks."""
         # Swap bitmasks - O(1)
         self.x_masks, self.o_masks = self.o_masks[:], self.x_masks[:]
         
         # Swap sub_counts
         for i in range(9):
             self.sub_counts[i] = [self.sub_counts[i][1], self.sub_counts[i][0]]
-        
-        # Swap boards array (for compatibility) - will be removed later
-        for r in range(9):
-            for c in range(9):
-                if self.boards[r][c] == 1:
-                    self.boards[r][c] = 2
-                elif self.boards[r][c] == 2:
-                    self.boards[r][c] = 1
         
         # Swap completed_boards (1 <-> 2, keep 0 and 3)
         for r in range(3):
@@ -380,3 +413,54 @@ class Board:
         
         # Swap current player
         self.current_player = 3 - self.current_player
+    
+    def transform(self, perm_id: int):
+        """Apply D4 symmetry transform in place using bitmasks. O(9) for masks."""
+        from utils.symmetry import D4_TRANSFORMS, ROTATED_MASKS
+        perm = D4_TRANSFORMS[perm_id]
+        
+        # Transform bitmasks using precomputed lookup
+        # perm[i] means: new position i gets old position perm[i]
+        new_x = [0] * 9
+        new_o = [0] * 9
+        new_counts = [[0, 0] for _ in range(9)]
+        for i in range(9):
+            old_pos = perm[i]
+            new_x[i] = ROTATED_MASKS[perm_id][self.x_masks[old_pos]]
+            new_o[i] = ROTATED_MASKS[perm_id][self.o_masks[old_pos]]
+            new_counts[i] = self.sub_counts[old_pos][:]
+        self.x_masks = new_x
+        self.o_masks = new_o
+        self.sub_counts = new_counts
+        
+        # Transform completed_mask
+        # new[i] gets old[perm[i]]
+        new_completed = 0
+        for i in range(9):
+            old_pos = perm[i]
+            if self.completed_mask & (1 << old_pos):
+                new_completed |= (1 << i)
+        self.completed_mask = new_completed
+        
+        # Transform completed_boards
+        # new[i] gets old[perm[i]]
+        old_completed = [row[:] for row in self.completed_boards]
+        for i in range(9):
+            old_pos = perm[i]
+            old_r, old_c = old_pos // 3, old_pos % 3
+            new_r, new_c = i // 3, i % 3
+            self.completed_boards[new_r][new_c] = old_completed[old_r][old_c]
+        
+        # Transform last_move using INV_TRANSFORMS (find where old pos went)
+        if self.last_move is not None:
+            from utils.symmetry import INV_TRANSFORMS
+            inv = INV_TRANSFORMS[perm_id]
+            r, c = self.last_move
+            old_sub_i = (r // 3) * 3 + (c // 3)
+            old_cell_i = (r % 3) * 3 + (c % 3)
+            # inv[old_pos] = new_pos (where old position ends up)
+            new_sub_i = inv[old_sub_i]
+            new_cell_i = inv[old_cell_i]
+            new_r = (new_sub_i // 3) * 3 + (new_cell_i // 3)
+            new_c = (new_sub_i % 3) * 3 + (new_cell_i % 3)
+            self.last_move = (new_r, new_c)

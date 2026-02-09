@@ -64,7 +64,7 @@ class HeuristicAgent:
         
         # Get the local board
         local_board_idx = meta_row * 3 + meta_col
-        local_board = board.boards[local_board_idx]
+        local_board = board.get_sub_board(local_board_idx)
         
         # 1. Check if this move wins the local board
         if self._would_win_local(local_board, local_row, local_col, player):
@@ -94,7 +94,7 @@ class HeuristicAgent:
         if board.completed_boards[send_row][send_col] == 0:
             # Check if we're sending opponent to a board where they can win
             send_board_idx = send_row * 3 + send_col
-            send_board = board.boards[send_board_idx]
+            send_board = board.get_sub_board(send_board_idx)
             
             # Count opponent's winning opportunities in that board
             opp_wins = self._count_winning_opportunities(send_board, opponent)

@@ -48,7 +48,7 @@ class BoardSymmetry:
             list of (boards_2d, completed_2d) tuples (8개)
 
         """
-        boards_arr = np.array(board.boards)
+        boards_arr = np.array(board.to_array())
         completed_arr = np.array(board.completed_boards)
         
         return [
@@ -69,7 +69,7 @@ class BoardSymmetry:
     @staticmethod
     def get_canonical_bytes(board: Board) -> bytes:
         """Get canonical bytes for board (without constraint - stored separately)."""
-        boards_arr = np.array(board.boards, dtype=np.int8)
+        boards_arr = np.array(board.to_array(), dtype=np.int8)
         completed_arr = np.array(board.completed_boards, dtype=np.int8)
         player = board.current_player
         
@@ -102,26 +102,7 @@ class BoardSymmetry:
         Used for X-O symmetry deduplication.
         """
         swapped = board.clone()
-        
-        # Swap pieces on board (1 <-> 2)
-        for r in range(9):
-            for c in range(9):
-                if swapped.boards[r][c] == 1:
-                    swapped.boards[r][c] = 2
-                elif swapped.boards[r][c] == 2:
-                    swapped.boards[r][c] = 1
-        
-        # Swap completed_boards (1 <-> 2, keep 0 and 3)
-        for r in range(3):
-            for c in range(3):
-                if swapped.completed_boards[r][c] == 1:
-                    swapped.completed_boards[r][c] = 2
-                elif swapped.completed_boards[r][c] == 2:
-                    swapped.completed_boards[r][c] = 1
-        
-        # Swap current player
-        swapped.current_player = 3 - swapped.current_player
-        
+        swapped.swap_xo()
         return swapped
     
     @staticmethod
@@ -189,7 +170,7 @@ class BoardSymmetry:
         Returns:
             (canonical_boards, canonical_completed, transform_idx)
         """
-        boards_arr = np.array(board.boards, dtype=np.int8)
+        boards_arr = np.array(board.to_array(), dtype=np.int8)
         completed_arr = np.array(board.completed_boards, dtype=np.int8)
         player = board.current_player
         
@@ -289,7 +270,11 @@ class BoardSymmetry:
         
         # Create canonical board for prediction
         canonical_board = Board()
-        canonical_board.boards = boards_arr.tolist()
+        # Set cells from array
+        for r in range(9):
+            for c in range(9):
+                if boards_arr[r, c] != 0:
+                    canonical_board.set_cell(r, c, int(boards_arr[r, c]))
         canonical_board.completed_boards = completed_arr.tolist()
         canonical_board.current_player = board.current_player
         

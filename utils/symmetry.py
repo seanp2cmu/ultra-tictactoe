@@ -30,14 +30,17 @@ INV_TRANSFORMS = tuple(
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'data', 'rotated_masks.pkl')
 
 def _build_rotated_masks():
+    # D4_TRANSFORMS convention: new[i] = old[perm[i]]
+    # So for bitmask: new bit i is set if old bit perm[i] is set
     table = []
     for perm in D4_TRANSFORMS:
         perm_table = []
         for mask in range(512):
             rotated = 0
-            for i in range(9):
-                if mask & (1 << i):
-                    rotated |= (1 << perm[i])
+            for i in range(9):  # i is new position
+                old_pos = perm[i]
+                if mask & (1 << old_pos):
+                    rotated |= (1 << i)
             perm_table.append(rotated)
         table.append(tuple(perm_table))
     return tuple(table)

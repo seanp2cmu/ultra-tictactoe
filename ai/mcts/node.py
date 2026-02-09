@@ -41,7 +41,7 @@ class Node:
                 if self.board.completed_boards[br][bc] == 0:
                     for r in range(br*3, br*3+3):
                         for c in range(bc*3, bc*3+3):
-                            if self.board.boards[r][c] == 0:
+                            if self.board.get_cell(r, c) == 0:
                                 self._is_terminal = False
                                 return False
         

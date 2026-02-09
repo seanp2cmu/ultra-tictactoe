@@ -126,8 +126,17 @@ def load_models_from_local():
 def board_from_dict(board_dict):
     """Create a Board object from dictionary representation"""
     board = Board()
-    board.boards = board_dict.get('boards', [[0]*9 for _ in range(9)])
+    boards_data = board_dict.get('boards', [[0]*9 for _ in range(9)])
+    for r in range(9):
+        for c in range(9):
+            if boards_data[r][c] != 0:
+                board.set_cell(r, c, boards_data[r][c])
     board.completed_boards = board_dict.get('completed_boards', [[0]*3 for _ in range(3)])
+    # Sync completed_mask
+    for sub_idx in range(9):
+        sub_r, sub_c = sub_idx // 3, sub_idx % 3
+        if board.completed_boards[sub_r][sub_c] != 0:
+            board.completed_mask |= (1 << sub_idx)
     board.current_player = board_dict.get('current_player', 1)
     board.winner = board_dict.get('winner', None)
     board.last_move = tuple(board_dict['last_move']) if board_dict.get('last_move') else None

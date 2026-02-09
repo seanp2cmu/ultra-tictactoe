@@ -116,7 +116,7 @@ class Model(nn.Module):
         if isinstance(board_state, np.ndarray):
             boards = board_state.copy()
         else:
-            boards = np.array(board_state.boards, dtype=np.float32)
+            boards = np.array(board_state.to_array(), dtype=np.float32)
         
         current_player = board_state.current_player if hasattr(board_state, 'current_player') else 1
         opponent_player = 3 - current_player

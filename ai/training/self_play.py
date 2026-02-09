@@ -215,7 +215,10 @@ class SelfPlayWorker:
         
         # Build canonical board object for tensor conversion
         canonical_board = Board()
-        canonical_board.boards = boards_arr.tolist()
+        for r in range(9):
+            for c in range(9):
+                if boards_arr[r, c] != 0:
+                    canonical_board.set_cell(r, c, int(boards_arr[r, c]))
         canonical_board.completed_boards = completed_arr.tolist()
         canonical_board.current_player = player
         canonical_board.last_move = board.last_move  # Keep last_move for valid moves channel

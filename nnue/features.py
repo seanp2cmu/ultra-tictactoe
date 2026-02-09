@@ -55,7 +55,7 @@ class NNUEFeatureExtractor:
                 # Get cell value
                 row = sub_row * 3 + cell_row
                 col = sub_col * 3 + cell_col
-                cell_value = board.boards[row][col]
+                cell_value = board.get_cell(row, col)
                 
                 # One-hot encoding: [my_piece, opp_piece, empty]
                 if cell_value == current_player:

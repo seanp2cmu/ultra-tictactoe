@@ -150,7 +150,7 @@ class TablebaseSolver:
                     start_r, start_c = sub_r * 3, sub_c * 3
                     for dr in range(3):
                         for dc in range(3):
-                            if board.boards[start_r + dr][start_c + dc] == 0:
+                            if board.get_cell(start_r + dr, start_c + dc) == 0:
                                 moves.append((start_r + dr, start_c + dc))
         else:
             # Specific constraint - only check that sub-board
@@ -159,7 +159,7 @@ class TablebaseSolver:
                 start_r, start_c = sub_r * 3, sub_c * 3
                 for dr in range(3):
                     for dc in range(3):
-                        if board.boards[start_r + dr][start_c + dc] == 0:
+                        if board.get_cell(start_r + dr, start_c + dc) == 0:
                             moves.append((start_r + dr, start_c + dc))
             else:
                 # Constraint sub-board is completed - fall back to "any"

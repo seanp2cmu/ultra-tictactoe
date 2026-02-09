@@ -263,9 +263,6 @@ class PositionEnumerator:
             x_mask = 0
             o_mask = 0
             for j, val in enumerate(cells):
-                r = sub_r * 3 + j // 3
-                c = sub_c * 3 + j % 3
-                board.boards[r][c] = val
                 if val == 1:
                     x_mask |= (1 << j)
                 elif val == 2:
