@@ -96,16 +96,19 @@ class PositionEnumerator:
         
         Uses tuple comparison (fast) + INV_TRANSFORMS for O(1) constraint mapping.
         """
+        # Precompute flipped raw_data once
+        flipped_raw = tuple(
+            (3 - s, 0, 0) if s == 1 or s == 2 else (0, o, x)
+            for s, x, o in raw_data
+        )
+        
         # Precompute all 16 transformed tuples ONCE
         transformed = []  # [(tuple_data, perm_id), ...]
         for perm_id, perm in enumerate(D4_TRANSFORMS):
             sym_data = tuple(raw_data[perm[i]] for i in range(9))
             transformed.append((sym_data, perm_id))
             
-            flipped = tuple(
-                (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
-                for s, x, o in sym_data
-            )
+            flipped = tuple(flipped_raw[perm[i]] for i in range(9))
             transformed.append((flipped, perm_id))
         
         seen_canonical = set()

@@ -280,6 +280,13 @@ class TablebaseSolver:
                 x_count, o_count = board.sub_counts[sub_idx]
                 raw_sub_data.append((0, x_count, o_count))
         
+        # Precompute flipped raw_sub_data once (avoid repeated flip computation)
+        # flip: state 1<->2, swap x_count/o_count
+        flipped_raw = tuple(
+            (3 - s, 0, 0) if s == 1 or s == 2 else (0, o, x)
+            for s, x, o in raw_sub_data
+        )
+        
         # Find minimum canonical form using tuple comparison (fast)
         min_data = None
         min_constraint = -1
@@ -288,17 +295,14 @@ class TablebaseSolver:
             inv = self.INV_TRANSFORMS[perm_id]
             sym_constraint = inv[constraint] if constraint >= 0 else -1
             
-            # Apply permutation
+            # Apply permutation to original
             sym_data = tuple(raw_sub_data[perm[i]] for i in range(9))
             if min_data is None or (sym_data, sym_constraint) < (min_data, min_constraint):
                 min_data = sym_data
                 min_constraint = sym_constraint
             
-            # X/O flip: state 1<->2, swap x_count/o_count
-            flipped_data = tuple(
-                (3 - s, 0, 0) if s in (1, 2) else (0, o, x) if s == 0 else (s, 0, 0)
-                for s, x, o in sym_data
-            )
+            # Apply permutation to pre-flipped
+            flipped_data = tuple(flipped_raw[perm[i]] for i in range(9))
             if (flipped_data, sym_constraint) < (min_data, min_constraint):
                 min_data = flipped_data
                 min_constraint = sym_constraint
