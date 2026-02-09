@@ -176,8 +176,8 @@ class TablebaseBuilder:
                 level_start = len(self.positions)
                 level_processed = 0
                 
-                # Create enumerator for this empty count
-                enumerator = PositionEnumerator(empty_cells=empty_count)
+                # Create enumerator for this empty count (share seen_hashes for dedup)
+                enumerator = PositionEnumerator(empty_cells=empty_count, seen_hashes=self.seen_hashes)
                 
                 for board in enumerator.enumerate(max_positions=max_positions_per_level, show_progress=verbose):
                     self._solve_and_store(board, empty_count)
@@ -232,13 +232,7 @@ class TablebaseBuilder:
         board_hash = self.solver._hash_board(board)
         constraint = getattr(board, 'constraint', -1)
         
-        # Skip if already seen (packed int key)
-        key = (board_hash << 4) | (constraint + 1)
-        if key in self.seen_hashes:
-            self.stats['duplicates'] += 1
-            return False
-        
-        self.seen_hashes.add(key)
+        # Enumerator already handles deduplication via shared seen_hashes
         result, dtw, best_move = self.solver.solve(board)
         
         # DTW can be > empty_count in some cases

@@ -19,10 +19,11 @@ _PERM_GETTERS = [itemgetter(*perm) for perm in D4_TRANSFORMS]
 class PositionEnumerator:
     """Enumerate positions with exactly N empty cells."""
     
-    def __init__(self, empty_cells: int = 15):
+    def __init__(self, empty_cells: int = 15, seen_hashes: Set[int] = None):
         self.empty_cells = empty_cells
         # Pack (packed_key, constraint) into single int: (packed_key << 4) | (constraint + 1)
-        self.seen_hashes: Set[int] = set()
+        # Use external seen_hashes if provided (for incremental building)
+        self.seen_hashes: Set[int] = seen_hashes if seen_hashes is not None else set()
         self.stats = {
             'meta_boards': 0,
             'generated': 0,
