@@ -32,13 +32,20 @@ class Node:
         if self._is_terminal is not None:
             return self._is_terminal
         
-        if self.board.winner is not None:
+        # Handle BoardCy using -1 for no winner
+        if self.board.winner not in (None, -1):
             self._is_terminal = True
             return True
         
+        # Get completed_boards properly for both Python Board and Cython BoardCy
+        if hasattr(self.board, 'get_completed_boards_2d'):
+            completed = self.board.get_completed_boards_2d()
+        else:
+            completed = self.board.completed_boards
+        
         for br in range(3):
             for bc in range(3):
-                if self.board.completed_boards[br][bc] == 0:
+                if completed[br][bc] == 0:
                     for r in range(br*3, br*3+3):
                         for c in range(bc*3, bc*3+3):
                             if self.board.get_cell(r, c) == 0:

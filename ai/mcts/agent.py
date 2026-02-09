@@ -101,7 +101,8 @@ class AlphaZeroAgent:
             for i, node in enumerate(leaf_nodes):
                 if node.is_terminal():
                     # Terminal value in MCTS range (-1~1)
-                    if node.board.winner is None or node.board.winner == 3:
+                    # Handle BoardCy using -1 for no winner
+                    if node.board.winner in (None, -1, 3):
                         value = 0.0  # draw
                     else:
                         if node.board.winner == node.board.current_player:
