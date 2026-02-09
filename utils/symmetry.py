@@ -3,6 +3,9 @@ Precomputed D4 symmetry transformations for Ultimate Tic-Tac-Toe.
 All symmetry-related constants and lookup tables in one place.
 """
 
+import os
+import pickle
+
 # D4 symmetry group: 8 index permutations for 3x3 grid
 # Each permutation maps original position -> new position
 D4_TRANSFORMS = (
@@ -24,6 +27,8 @@ INV_TRANSFORMS = tuple(
 # Precomputed rotated 9-bit masks for all 512 possible masks × 8 transforms
 # ROTATED_MASKS[perm_id][mask] = rotated_mask
 # Usage: rotated = ROTATED_MASKS[perm_id][original_mask]
+DATA_FILE = os.path.join(os.path.dirname(__file__), 'data', 'rotated_masks.pkl')
+
 def _build_rotated_masks():
     table = []
     for perm in D4_TRANSFORMS:
@@ -37,7 +42,22 @@ def _build_rotated_masks():
         table.append(tuple(perm_table))
     return tuple(table)
 
-ROTATED_MASKS = _build_rotated_masks()
+def _load_or_build():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'rb') as f:
+            return pickle.load(f)
+    return _build_rotated_masks()
+
+ROTATED_MASKS = _load_or_build()
+
+
+if __name__ == '__main__':
+    # Generate and save precomputed data
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+    data = _build_rotated_masks()
+    with open(DATA_FILE, 'wb') as f:
+        pickle.dump(data, f)
+    print(f'Saved {len(data)}x{len(data[0])} masks to {DATA_FILE}')
 
 # Win patterns for 3x3 board (bitmask form)
 WIN_MASKS = (
