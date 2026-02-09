@@ -199,11 +199,11 @@ class TablebaseSolver:
             return (-1 if board.winner != 3 else 0, 0)
         elif not board.get_legal_moves():
             return (0, 0)
-        else:
-            self.stats['missing_child'] += 1
-            # Recursively solve (may be slow for deep positions)
-            result, dtw, _ = self._solve_recursive(board)
-            return (result, dtw)
+        
+        # Not in cache - should not happen in progressive building
+        # Return unknown (caller should handle)
+        self.stats['missing_child'] += 1
+        return (0, 999)  # Unknown - treat as draw with high dtw
     
     def _lookup_best_constraint(self, h: int, board: Board) -> Tuple[int, int]:
         """For 'any' constraint, find best result among all OPEN boards."""
@@ -229,11 +229,10 @@ class TablebaseSolver:
                 return (-1 if board.winner != 3 else 0, 0)
             elif not board.get_legal_moves():
                 return (0, 0)
-            else:
-                self.stats['missing_child'] += 1
-                # Recursively solve (may be slow for deep positions)
-                result, dtw, _ = self._solve_recursive(board)
-                return (result, dtw)
+            
+            # Not in cache - should not happen in progressive building
+            self.stats['missing_child'] += 1
+            return (0, 999)  # Unknown - treat as draw with high dtw
         
         return (best_result, best_dtw)
     

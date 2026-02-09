@@ -11,6 +11,7 @@ import mmap
 from typing import Optional, Tuple, Dict
 import numpy as np
 from game import Board
+from .meta_boards import hash_board
 
 
 class Tablebase:
@@ -77,17 +78,12 @@ class Tablebase:
             return None
         
         # Get canonical hash
-        board_hash = self._hash_board(board)
+        board_hash = hash_board(board)
         
         # Try direct lookup
         if board_hash in self.positions:
             return self.positions[board_hash]
-        
-        # Try symmetric positions
-        for sym_hash in self._get_symmetric_hashes(board):
-            if sym_hash in self.positions:
-                return self.positions[sym_hash]
-        
+
         return None
     
     def probe(self, board: Board) -> Optional[dict]:
@@ -121,19 +117,6 @@ class Tablebase:
                     if board.completed_boards[sub_row][sub_col] == 0:
                         count += 1
         return count
-    
-    def _hash_board(self, board: Board) -> int:
-        """Create deterministic hash for board position.
-        
-        Uses shared hash_board function for consistency.
-        """
-        from .meta_boards import hash_board
-        return hash_board(board)
-    
-    def _get_symmetric_hashes(self, board: Board) -> list:
-        """D4 symmetry already handled in _hash_board canonicalization."""
-        return []
-    
     
     def _result_to_str(self, result: int) -> str:
         """Convert result code to string."""
