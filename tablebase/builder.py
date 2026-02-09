@@ -15,7 +15,7 @@ from collections import defaultdict
 from tqdm import tqdm
 
 from game import Board
-from .solver import TablebaseSolver, ReachabilityChecker, count_empty
+from .solver import TablebaseSolver, count_empty
 from .enumerator import PositionEnumerator
 from .tablebase import Tablebase, CompactTablebase
 
