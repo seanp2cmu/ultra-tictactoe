@@ -227,9 +227,8 @@ class TablebaseSolver:
             return (0, 0)
         
         # Not in cache - should not happen in progressive building
-        # Return unknown (caller should handle)
         self.stats['missing_child'] += 1
-        return (0, 999)  # Unknown - treat as draw with high dtw
+        raise RuntimeError(f"Missing child position: hash={h}, constraint={constraint}")
     
     def _lookup_best_constraint(self, h: int, board: Board) -> Tuple[int, int]:
         """For 'any' constraint, find best result among all OPEN boards."""
@@ -258,7 +257,7 @@ class TablebaseSolver:
             
             # Not in cache - should not happen in progressive building
             self.stats['missing_child'] += 1
-            return (0, 999)  # Unknown - treat as draw with high dtw
+            raise RuntimeError(f"Missing child position (any constraint): hash={h}")
         
         return (best_result, best_dtw)
     
