@@ -73,7 +73,7 @@ class TablebaseSolver:
         
         return (result, dtw, best_move)
     
-    def _solve_recursive(self, board: Board, depth: int = 0) -> Tuple[int, int, Optional[Tuple[int, int]]]:
+    def _solve_recursive(self, board: Board) -> Tuple[int, int, Optional[Tuple[int, int]]]:
         """
         Progressive solver - lookup children from previous levels.
         Optimized: constraint-based moves + undo pattern (no clone).
