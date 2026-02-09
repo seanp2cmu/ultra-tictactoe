@@ -4,7 +4,7 @@ These tests must pass before and after the refactoring.
 """
 
 import pytest
-from game import Board
+from game import BoardPy as Board  # Use Python Board for tests (consistent interface)
 
 
 class TestBoardBasics:

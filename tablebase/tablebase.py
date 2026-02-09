@@ -8,6 +8,22 @@ from typing import Optional, Tuple, Dict
 import numpy as np
 
 
+def deterministic_hash_64(key: int) -> int:
+    """Deterministic 64-bit hash from arbitrary integer.
+    
+    Uses FNV-1a style mixing to reduce to 64 bits.
+    Same input always produces same output.
+    """
+    # Split into 64-bit chunks and mix
+    h = 0xcbf29ce484222325  # FNV offset basis
+    while key > 0:
+        chunk = key & 0xFFFFFFFFFFFFFFFF
+        h ^= chunk
+        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF  # FNV prime
+        key >>= 64
+    return h
+
+
 class CompactTablebase:
     """
     Memory-efficient tablebase using numpy arrays.
@@ -53,7 +69,7 @@ class CompactTablebase:
         self.dtws = np.zeros(n, dtype=np.uint8)
         
         for i, (h, (r, d)) in enumerate(flattened.items()):
-            self.hashes[i] = h & 0xFFFFFFFFFFFFFFFF  # Ensure positive
+            self.hashes[i] = deterministic_hash_64(h)  # Deterministic 64-bit hash
             self.results[i] = r
             self.dtws[i] = min(d, 255)
         
@@ -68,7 +84,7 @@ class CompactTablebase:
         if self.hashes is None:
             return None
         
-        h = board_hash & 0xFFFFFFFFFFFFFFFF
+        h = deterministic_hash_64(board_hash)  # Same transform as storage
         idx = np.searchsorted(self.hashes, h)
         
         if idx < len(self.hashes) and self.hashes[idx] == h:
