@@ -102,12 +102,18 @@ class TablebaseBuilder:
                 self.stats = defaultdict(int, data.get('stats', {}))
                 self.completed_empty = set(data.get('completed_empty', []))
                 
+                # Load position_levels and reached_hashes for incremental building
+                self.position_levels = data.get('position_levels', {})
+                self.reached_hashes = data.get('reached_hashes', set())
+                
                 # Share positions with solver cache for child lookups
                 self.solver.cache = self.positions
                 
                 print(f"✓ Loaded existing tablebase: {len(self.positions)} positions")
                 if self.completed_empty:
                     print(f"  Completed empty counts: {sorted(self.completed_empty)}")
+                if self.reached_hashes:
+                    print(f"  Reached hashes: {len(self.reached_hashes)}")
             except Exception as e:
                 print(f"⚠ Failed to load existing: {e}")
     
@@ -283,8 +289,10 @@ class TablebaseBuilder:
                 'positions': self.positions,
                 'stats': dict(self.stats),
                 'max_empty': self.max_empty,
-                'completed_empty': list(self.completed_empty)
-            }, f)
+                'completed_empty': list(self.completed_empty),
+                'position_levels': self.position_levels,
+                'reached_hashes': self.reached_hashes
+            }, f, protocol=pickle.HIGHEST_PROTOCOL)
     
     def get_stats(self) -> dict:
         """Get builder statistics."""
