@@ -242,7 +242,12 @@ class TablebaseBuilder:
         
         for r, c in moves:
             sub_r, sub_c = r // 3, c // 3
-            prev_completed = board.completed_boards[sub_r][sub_c]
+            sub_idx = sub_r * 3 + sub_c
+            # Compatible with BoardCy (1D) and Board (2D)
+            if hasattr(board, 'get_completed_state'):
+                prev_completed = board.get_completed_state(sub_idx)
+            else:
+                prev_completed = board.completed_boards[sub_r][sub_c]
             
             board.make_move(r, c, validate=False)
             child_hash = self.solver._hash_board(board)

@@ -103,7 +103,11 @@ class TablebaseSolver:
         for r, c in moves:
             # Save sub-board state
             sub_r, sub_c = r // 3, c // 3
-            prev_completed = board.completed_boards[sub_r][sub_c]
+            sub_idx = sub_r * 3 + sub_c
+            if hasattr(board, 'get_completed_state'):
+                prev_completed = board.get_completed_state(sub_idx)
+            else:
+                prev_completed = board.completed_boards[sub_r][sub_c]
             
             # Make move (no clone)
             board.make_move(r, c, validate=False)
@@ -116,7 +120,7 @@ class TablebaseSolver:
             if board.winner is not None:
                 child_result = -1 if board.winner != 3 else 0
                 child_dtw = 0
-            elif board.completed_boards[target_sub_r][target_sub_c] != 0:
+            elif (board.get_completed_state(target_sub) if hasattr(board, 'get_completed_state') else board.completed_boards[target_sub_r][target_sub_c]) != 0:
                 # "any" constraint
                 child_hash = self._hash_board(board)
                 child_result, child_dtw = self._lookup_best_constraint(child_hash, board)
@@ -146,7 +150,7 @@ class TablebaseSolver:
             # No constraint or "any" - check all open sub-boards
             for sub_idx in range(9):
                 sub_r, sub_c = sub_idx // 3, sub_idx % 3
-                if board.completed_boards[sub_r][sub_c] == 0:
+                if (board.get_completed_state(sub_idx) if hasattr(board, 'get_completed_state') else board.completed_boards[sub_r][sub_c]) == 0:
                     start_r, start_c = sub_r * 3, sub_c * 3
                     for dr in range(3):
                         for dc in range(3):
@@ -155,7 +159,7 @@ class TablebaseSolver:
         else:
             # Specific constraint - only check that sub-board
             sub_r, sub_c = constraint // 3, constraint % 3
-            if board.completed_boards[sub_r][sub_c] == 0:
+            if (board.get_completed_state(constraint) if hasattr(board, 'get_completed_state') else board.completed_boards[sub_r][sub_c]) == 0:
                 start_r, start_c = sub_r * 3, sub_c * 3
                 for dr in range(3):
                     for dc in range(3):
