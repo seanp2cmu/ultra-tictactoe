@@ -352,3 +352,31 @@ class Board:
             return 0.6, "endgame"
         else:
             return 0.4, "deep_endgame"
+    
+    def swap_xo(self):
+        """Swap X and O in place. O(1) for masks, O(81) for boards array."""
+        # Swap bitmasks - O(1)
+        self.x_masks, self.o_masks = self.o_masks[:], self.x_masks[:]
+        
+        # Swap sub_counts
+        for i in range(9):
+            self.sub_counts[i] = [self.sub_counts[i][1], self.sub_counts[i][0]]
+        
+        # Swap boards array (for compatibility) - will be removed later
+        for r in range(9):
+            for c in range(9):
+                if self.boards[r][c] == 1:
+                    self.boards[r][c] = 2
+                elif self.boards[r][c] == 2:
+                    self.boards[r][c] = 1
+        
+        # Swap completed_boards (1 <-> 2, keep 0 and 3)
+        for r in range(3):
+            for c in range(3):
+                if self.completed_boards[r][c] == 1:
+                    self.completed_boards[r][c] = 2
+                elif self.completed_boards[r][c] == 2:
+                    self.completed_boards[r][c] = 1
+        
+        # Swap current player
+        self.current_player = 3 - self.current_player
