@@ -55,7 +55,9 @@ class TablebaseBuilder:
         # Share dict with solver.cache so lookups work during build
         self.positions: Dict[int, Dict[int, Tuple[int, int, Optional[Tuple[int, int]]]]] = {}
         self.solver.cache = self.positions  # Share reference
-        self.seen_hashes: Set[Tuple[int, int]] = set()  # (hash, constraint) pairs
+        # Pack (hash, constraint) into single int: key = (hash << 4) | (constraint + 1)
+        # constraint: -1..8 -> 0..9 (4 bits)
+        self.seen_hashes: Set[int] = set()
         
         # Track which empty counts are complete
         self.completed_empty: Set[int] = set()
@@ -92,11 +94,11 @@ class TablebaseBuilder:
                 with open(self.save_path, 'rb') as f:
                     data = pickle.load(f)
                 self.positions = data.get('positions', {})
-                # Rebuild seen_hashes as (hash, constraint) pairs
+                # Rebuild seen_hashes as packed ints: (hash << 4) | (constraint + 1)
                 self.seen_hashes = set()
                 for h, constraints in self.positions.items():
                     for c in constraints:
-                        self.seen_hashes.add((h, c))
+                        self.seen_hashes.add((h << 4) | (c + 1))
                 self.stats = defaultdict(int, data.get('stats', {}))
                 self.completed_empty = set(data.get('completed_empty', []))
                 
@@ -200,8 +202,8 @@ class TablebaseBuilder:
         board_hash = self.solver._hash_board(board)
         constraint = getattr(board, 'constraint', -1)
         
-        # Skip if already seen (check hash + constraint pair)
-        key = (board_hash, constraint)
+        # Skip if already seen (packed int key)
+        key = (board_hash << 4) | (constraint + 1)
         if key in self.seen_hashes:
             self.stats['duplicates'] += 1
             return False
@@ -265,7 +267,7 @@ class TablebaseBuilder:
             # Remove all constraints for this hash from seen_hashes
             if h in self.positions:
                 for constraint in self.positions[h]:
-                    self.seen_hashes.discard((h, constraint))
+                    self.seen_hashes.discard((h << 4) | (constraint + 1))
             del self.positions[h]
             del self.position_levels[h]
         

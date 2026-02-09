@@ -6,8 +6,12 @@ Includes 4-move DFS reachability check to filter illegal positions.
 """
 
 from typing import Dict, Tuple, Optional, List
+from operator import itemgetter
 from game import Board
 from utils.symmetry import D4_TRANSFORMS, INV_TRANSFORMS
+
+# Precompute itemgetters for each permutation (C-level tuple creation)
+_PERM_GETTERS = [itemgetter(*perm) for perm in D4_TRANSFORMS]
 
 
 class TablebaseSolver:
@@ -143,31 +147,48 @@ class TablebaseSolver:
         return (best_value, best_dtw + 1, best_move)
     
     def _get_moves_for_constraint(self, board: Board, constraint: int) -> List[Tuple[int, int]]:
-        """Get legal moves based on constraint (faster than get_legal_moves)."""
+        """Get legal moves based on constraint using bitmasks (fast)."""
         moves = []
         
         if constraint == -1:
-            # No constraint or "any" - check all open sub-boards
+            # No constraint - check all open sub-boards using bitmasks
             for sub_idx in range(9):
+                if board.completed_mask & (1 << sub_idx):
+                    continue
+                # Use bitmasks directly for empty cell detection
+                occ = board.x_masks[sub_idx] | board.o_masks[sub_idx]
+                if occ == 0x1FF:  # All 9 bits set = full
+                    continue
                 sub_r, sub_c = sub_idx // 3, sub_idx % 3
-                if (board.get_completed_state(sub_idx) if hasattr(board, 'get_completed_state') else board.completed_boards[sub_r][sub_c]) == 0:
-                    start_r, start_c = sub_r * 3, sub_c * 3
-                    for dr in range(3):
-                        for dc in range(3):
-                            if board.get_cell(start_r + dr, start_c + dc) == 0:
-                                moves.append((start_r + dr, start_c + dc))
-        else:
-            # Specific constraint - only check that sub-board
-            sub_r, sub_c = constraint // 3, constraint % 3
-            if (board.get_completed_state(constraint) if hasattr(board, 'get_completed_state') else board.completed_boards[sub_r][sub_c]) == 0:
                 start_r, start_c = sub_r * 3, sub_c * 3
-                for dr in range(3):
-                    for dc in range(3):
-                        if board.get_cell(start_r + dr, start_c + dc) == 0:
-                            moves.append((start_r + dr, start_c + dc))
-            else:
-                # Constraint sub-board is completed - fall back to "any"
+                # Extract empty cells from bitmask
+                empty = (~occ) & 0x1FF
+                while empty:
+                    bit = empty & (-empty)  # Lowest set bit
+                    cell_idx = (bit - 1).bit_length()  # 0-8
+                    if cell_idx < 9:
+                        r = start_r + cell_idx // 3
+                        c = start_c + cell_idx % 3
+                        moves.append((r, c))
+                    empty &= empty - 1  # Clear lowest bit
+        else:
+            # Specific constraint
+            if board.completed_mask & (1 << constraint):
+                # Constraint sub-board completed - fall back to "any"
                 return self._get_moves_for_constraint(board, -1)
+            
+            occ = board.x_masks[constraint] | board.o_masks[constraint]
+            sub_r, sub_c = constraint // 3, constraint % 3
+            start_r, start_c = sub_r * 3, sub_c * 3
+            empty = (~occ) & 0x1FF
+            while empty:
+                bit = empty & (-empty)
+                cell_idx = (bit - 1).bit_length()
+                if cell_idx < 9:
+                    r = start_r + cell_idx // 3
+                    c = start_c + cell_idx % 3
+                    moves.append((r, c))
+                empty &= empty - 1
         
         return moves
     
@@ -285,18 +306,19 @@ class TablebaseSolver:
         min_data = None
         min_constraint = -1
         
-        for perm_id, perm in enumerate(D4_TRANSFORMS):
+        raw_tuple = tuple(raw_sub_data)
+        for perm_id, getter in enumerate(_PERM_GETTERS):
             inv = INV_TRANSFORMS[perm_id]
             sym_constraint = inv[constraint] if constraint >= 0 else -1
             
-            # Apply permutation to original
-            sym_data = tuple(raw_sub_data[perm[i]] for i in range(9))
+            # Apply permutation using precomputed itemgetter (C-level)
+            sym_data = getter(raw_tuple)
             if min_data is None or (sym_data, sym_constraint) < (min_data, min_constraint):
                 min_data = sym_data
                 min_constraint = sym_constraint
             
             # Apply permutation to pre-flipped
-            flipped_data = tuple(flipped_raw[perm[i]] for i in range(9))
+            flipped_data = getter(flipped_raw)
             if (flipped_data, sym_constraint) < (min_data, min_constraint):
                 min_data = flipped_data
                 min_constraint = sym_constraint

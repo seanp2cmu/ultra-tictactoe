@@ -5,11 +5,15 @@ Uses precomputed local_boards and meta_boards for efficient enumeration.
 """
 
 from typing import Generator, Tuple, List, Set
+from operator import itemgetter
 from tqdm import tqdm
 
 from game import Board
 from .local_boards import OPEN_BOARDS, _make_key as local_key
 from .meta_boards import META_BOARDS, D4_TRANSFORMS, INV_TRANSFORMS, pack_sub_data, _make_key as meta_key
+
+# Precompute itemgetters for each permutation (C-level tuple creation)
+_PERM_GETTERS = [itemgetter(*perm) for perm in D4_TRANSFORMS]
 
 
 class PositionEnumerator:
@@ -17,7 +21,8 @@ class PositionEnumerator:
     
     def __init__(self, empty_cells: int = 15):
         self.empty_cells = empty_cells
-        self.seen_hashes: Set[Tuple] = set()
+        # Pack (packed_key, constraint) into single int: (packed_key << 4) | (constraint + 1)
+        self.seen_hashes: Set[int] = set()
         self.stats = {
             'meta_boards': 0,
             'generated': 0,
@@ -102,13 +107,13 @@ class PositionEnumerator:
             for s, x, o in raw_data
         )
         
-        # Precompute all 16 transformed tuples ONCE
+        # Precompute all 16 transformed tuples ONCE using itemgetters (C-level)
         transformed = []  # [(tuple_data, perm_id), ...]
-        for perm_id, perm in enumerate(D4_TRANSFORMS):
-            sym_data = tuple(raw_data[perm[i]] for i in range(9))
+        for perm_id, getter in enumerate(_PERM_GETTERS):
+            sym_data = getter(raw_data)
             transformed.append((sym_data, perm_id))
             
-            flipped = tuple(flipped_raw[perm[i]] for i in range(9))
+            flipped = getter(flipped_raw)
             transformed.append((flipped, perm_id))
         
         seen_canonical = set()
@@ -124,8 +129,9 @@ class PositionEnumerator:
                     min_data = tuple_data
                     min_constraint = sym_constraint
             
-            # Pack only for storage key
-            canonical = (pack_sub_data(min_data), min_constraint)
+            # Pack into single int for fast lookup: (packed_key << 4) | (constraint + 1)
+            packed_key = pack_sub_data(min_data)
+            canonical = (packed_key << 4) | (min_constraint + 1)
             if canonical not in seen_canonical:
                 seen_canonical.add(canonical)
                 result.append((constraint, canonical))
