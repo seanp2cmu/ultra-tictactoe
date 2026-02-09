@@ -49,6 +49,44 @@ def pack_sub_data(sub_data) -> int:
     return result
 
 
+def hash_board(board) -> int:
+    """Create deterministic canonical hash for board position.
+    
+    Uses D4 symmetry + X/O flip canonicalization.
+    Returns packed 90-bit integer key.
+    """
+    # Build raw sub_data
+    raw_sub_data = []
+    for sub_idx in range(9):
+        sub_r, sub_c = sub_idx // 3, sub_idx % 3
+        state = board.completed_boards[sub_r][sub_c]
+        
+        if state != 0:
+            raw_sub_data.append((state, 0, 0))
+        else:
+            x_count, o_count = board.sub_counts[sub_idx]
+            raw_sub_data.append((0, x_count, o_count))
+    
+    # Precompute flipped
+    flipped_raw = tuple(
+        (3 - s, 0, 0) if s == 1 or s == 2 else (0, o, x)
+        for s, x, o in raw_sub_data
+    )
+    
+    # Find minimum canonical form
+    min_data = None
+    for perm_id, perm in enumerate(D4_TRANSFORMS):
+        sym_data = tuple(raw_sub_data[perm[i]] for i in range(9))
+        if min_data is None or sym_data < min_data:
+            min_data = sym_data
+        
+        flipped_data = tuple(flipped_raw[perm[i]] for i in range(9))
+        if flipped_data < min_data:
+            min_data = flipped_data
+    
+    return pack_sub_data(min_data)
+
+
 def _make_key(num_open: int, empty_cells: int) -> str:
     return f"{num_open}_{empty_cells}"
 

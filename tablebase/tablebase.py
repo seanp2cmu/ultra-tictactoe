@@ -123,28 +123,15 @@ class Tablebase:
         return count
     
     def _hash_board(self, board: Board) -> int:
-        """Create hash for board position."""
-        # Flatten board to tuple
-        cells = []
-        for row in range(9):
-            for col in range(9):
-                cells.append(board.boards[row][col])
+        """Create deterministic hash for board position.
         
-        # Include current player in hash
-        cells.append(board.current_player)
-        
-        # Include last move constraint
-        if board.last_move:
-            cells.append(board.last_move[0] * 9 + board.last_move[1])
-        else:
-            cells.append(-1)
-        
-        return hash(tuple(cells))
+        Uses shared hash_board function for consistency.
+        """
+        from .meta_boards import hash_board
+        return hash_board(board)
     
     def _get_symmetric_hashes(self, board: Board) -> list:
-        """Get hashes for all symmetric positions (D4 symmetry)."""
-        # TODO: Implement D4 symmetry on the big board
-        # For now, return empty list
+        """D4 symmetry already handled in _hash_board canonicalization."""
         return []
     
     
