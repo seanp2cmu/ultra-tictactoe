@@ -1,19 +1,7 @@
 import numpy as np
 
 class Board:
-    CHECKER = (
-        ((0,0), (0,1), (0,2)),
-        ((1,0), (1,1), (1,2)),
-        ((2,0), (2,1), (2,2)),
-        ((0,0), (1,0), (2,0)),
-        ((0,1), (1,1), (2,1)),
-        ((0,2), (1,2), (2,2)),
-        ((0,0), (1,1), (2,2)),
-        ((0,2), (1,1), (2,0))
-    )
-    
     # Bitmask win patterns for fast check (position = r*3+c)
-    # 0b111000000 = row 0, 0b000111000 = row 1, etc.
     WIN_MASKS = (
         0b111000000,  # row 0
         0b000111000,  # row 1
@@ -133,12 +121,26 @@ class Board:
         board_r, board_c = r // 3, c // 3
         start_r, start_c = board_r * 3, board_c * 3
         
-        for pattern in Board.CHECKER:
-            if all(self.boards[start_r + pr][start_c + pc] == self.current_player for pr, pc in pattern):
+        # Build bitmasks for current player and filled cells
+        p_mask = 0
+        filled_mask = 0
+        for pr in range(3):
+            for pc in range(3):
+                bit = 1 << (pr * 3 + pc)
+                cell = self.boards[start_r + pr][start_c + pc]
+                if cell == self.current_player:
+                    p_mask |= bit
+                if cell != 0:
+                    filled_mask |= bit
+        
+        # Check win patterns
+        for mask in Board.WIN_MASKS:
+            if (p_mask & mask) == mask:
                 self.completed_boards[board_r][board_c] = self.current_player
                 return
         
-        if all(self.boards[start_r + pr][start_c + pc] != 0 for pr in range(3) for pc in range(3)):
+        # Check draw (all 9 filled)
+        if filled_mask == 0b111111111:
             self.completed_boards[board_r][board_c] = 3
 
     def check_winner(self):
