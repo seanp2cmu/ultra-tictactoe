@@ -12,6 +12,19 @@ class Board:
         ((0,2), (1,1), (2,0))
     )
     
+    # Bitmask win patterns for fast check (position = r*3+c)
+    # 0b111000000 = row 0, 0b000111000 = row 1, etc.
+    WIN_MASKS = (
+        0b111000000,  # row 0
+        0b000111000,  # row 1
+        0b000000111,  # row 2
+        0b100100100,  # col 0
+        0b010010010,  # col 1
+        0b001001001,  # col 2
+        0b100010001,  # diag
+        0b001010100,  # anti-diag
+    )
+    
     def __init__(self):
         self.boards = [[0 for _ in range(9)] for _ in range(9)] # empty: 0, player 1: 1, player 2: 2
         self.completed_boards = [[0 for _ in range(3)] for _ in range(3)] # empty: 0, player 1: 1, player 2: 2, draw: 3
@@ -129,12 +142,25 @@ class Board:
             self.completed_boards[board_r][board_c] = 3
 
     def check_winner(self):
-        for pattern in Board.CHECKER:
-            if all(self.completed_boards[pr][pc] == self.current_player for pr, pc in pattern):
+        # Build bitmasks for current player and all filled
+        p_mask = 0
+        filled_mask = 0
+        for r in range(3):
+            for c in range(3):
+                bit = 1 << (r * 3 + c)
+                if self.completed_boards[r][c] == self.current_player:
+                    p_mask |= bit
+                if self.completed_boards[r][c] != 0:
+                    filled_mask |= bit
+        
+        # Check win patterns with bitmask AND
+        for mask in Board.WIN_MASKS:
+            if (p_mask & mask) == mask:
                 self.winner = self.current_player
                 return
         
-        if all(self.completed_boards[r][c] != 0 for r in range(3) for c in range(3)):
+        # Check draw (all 9 filled)
+        if filled_mask == 0b111111111:
             self.winner = 3
 
     def is_game_over(self): 

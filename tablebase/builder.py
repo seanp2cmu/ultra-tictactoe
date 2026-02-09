@@ -159,8 +159,10 @@ class TablebaseBuilder:
                 level_new = len(self.positions) - level_start
                 print(f"  Level {empty_count}: +{level_new} positions (total: {len(self.positions)})")
                 
-                # Prune unreachable positions from level (empty_count - 6)
-                prune_level = empty_count - 6
+                # Prune unreachable positions from level (empty_count - 7)
+                # At level N, children go down to N-1, so level 1 is child of level 2
+                # Level 8 can safely prune level 1 (7 hops: 8→7→6→5→4→3→2→1)
+                prune_level = empty_count - 7
                 if prune_level >= 1:
                     self._prune_unreachable(prune_level, verbose)
         
