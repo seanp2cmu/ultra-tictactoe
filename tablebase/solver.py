@@ -311,32 +311,3 @@ class TablebaseSolver:
         h, _ = self._hash_board_with_constraint(board, -1)
         return h
 
-
-def count_empty(board: Board) -> int:
-    """Count playable empty cells."""
-    count = 0
-    for r in range(9):
-        for c in range(9):
-            if board.boards[r][c] == 0:
-                sub_r, sub_c = r // 3, c // 3
-                if board.completed_boards[sub_r][sub_c] == 0:
-                    count += 1
-    return count
-
-
-if __name__ == '__main__':
-    # Test solver
-    solver = TablebaseSolver()
-    
-    board = Board()
-    # Play some moves
-    moves = [(4, 4), (3, 3), (0, 0), (0, 4)]
-    for r, c in moves:
-        if (r, c) in board.get_legal_moves():
-            board.make_move(r, c)
-    
-    print(f"Empty cells: {count_empty(board)}")
-    
-    result, dtw = solver.solve(board)
-    print(f"Result: {result}, DTW: {dtw}")
-    print(f"Stats: {solver.stats}")

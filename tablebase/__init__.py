@@ -6,7 +6,7 @@ Uses progressive endgame construction to compute exact game-theoretic values.
 """
 
 from .tablebase import Tablebase, CompactTablebase
-from .solver import TablebaseSolver, count_empty
+from .solver import TablebaseSolver
 from .enumerator import PositionEnumerator
 from .builder import TablebaseBuilder
 
@@ -14,7 +14,6 @@ __all__ = [
     'Tablebase', 
     'CompactTablebase',
     'TablebaseSolver',
-    'count_empty',
     'PositionEnumerator',
     'TablebaseBuilder'
 ]
