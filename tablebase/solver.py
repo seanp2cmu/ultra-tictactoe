@@ -253,15 +253,21 @@ class TablebaseSolver:
         Returns: (deterministic_packed_key, canonical_constraint)
         """
         # Build raw sub_data using cached sub_counts (O(9) instead of O(81))
+        # Compatible with both Board (2D) and BoardCy (1D via getter methods)
         raw_sub_data = []
+        is_cython = hasattr(board, 'get_completed_state')
         for sub_idx in range(9):
-            sub_r, sub_c = sub_idx // 3, sub_idx % 3
-            state = board.completed_boards[sub_r][sub_c]
+            if is_cython:
+                state = board.get_completed_state(sub_idx)
+                x_count, o_count = board.get_sub_count_pair(sub_idx)
+            else:
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                state = board.completed_boards[sub_r][sub_c]
+                x_count, o_count = board.sub_counts[sub_idx]
             
             if state != 0:
                 raw_sub_data.append((state, 0, 0))
             else:
-                x_count, o_count = board.sub_counts[sub_idx]
                 raw_sub_data.append((0, x_count, o_count))
         
         # Precompute flipped raw_sub_data once (avoid repeated flip computation)

@@ -255,7 +255,11 @@ class PositionEnumerator:
             filled = 9 - empty_dist[i]
             x_count = (filled + diff_dist[i]) // 2
             o_count = (filled - diff_dist[i]) // 2
-            board.sub_counts[sub_idx] = [x_count, o_count]
+            # Compatible with both Board and BoardCy
+            if hasattr(board, 'set_sub_count'):
+                board.set_sub_count(sub_idx, x_count, o_count)
+            else:
+                board.sub_counts[sub_idx] = [x_count, o_count]
             total_x += x_count
             total_o += o_count
             
@@ -270,14 +274,21 @@ class PositionEnumerator:
             board.x_masks[sub_idx] = x_mask
             board.o_masks[sub_idx] = o_mask
         
-        # Set meta-board state
-        for sub_idx in range(9):
-            sub_r, sub_c = sub_idx // 3, sub_idx % 3
-            board.completed_boards[sub_r][sub_c] = meta[sub_idx]
+        # Set meta-board state (compatible with BoardCy)
+        if hasattr(board, 'set_completed_boards_2d'):
+            board.set_completed_boards_2d([[meta[r*3+c] for c in range(3)] for r in range(3)])
+        else:
+            for sub_idx in range(9):
+                sub_r, sub_c = sub_idx // 3, sub_idx % 3
+                board.completed_boards[sub_r][sub_c] = meta[sub_idx]
         
         # Set current player (use cached totals)
         board.current_player = 1 if total_x == total_o else 2
-        board.winner = None
+        # BoardCy uses -1 for no winner, Board uses None
+        if hasattr(board, 'set_sub_count'):
+            board.winner = -1
+        else:
+            board.winner = None
         
         return board
 
