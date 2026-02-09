@@ -14,29 +14,13 @@ from typing import Dict, List, Tuple
 from collections import defaultdict
 from itertools import product
 
+from utils.symmetry import D4_TRANSFORMS, INV_TRANSFORMS, WIN_LINES
+
 
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'data', 'meta_boards.pkl')
 
 
-WIN_PATTERNS = [
-    (0, 1, 2), (3, 4, 5), (6, 7, 8),
-    (0, 3, 6), (1, 4, 7), (2, 5, 8),
-    (0, 4, 8), (2, 4, 6)
-]
-
-D4_TRANSFORMS = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8],  # identity
-    [6, 3, 0, 7, 4, 1, 8, 5, 2],  # rotate 90°
-    [8, 7, 6, 5, 4, 3, 2, 1, 0],  # rotate 180°
-    [2, 5, 8, 1, 4, 7, 0, 3, 6],  # rotate 270°
-    [2, 1, 0, 5, 4, 3, 8, 7, 6],  # flip horizontal
-    [6, 7, 8, 3, 4, 5, 0, 1, 2],  # flip vertical
-    [0, 3, 6, 1, 4, 7, 2, 5, 8],  # flip main diagonal
-    [8, 5, 2, 7, 4, 1, 6, 3, 0],  # flip anti-diagonal
-]
-
-# Precompute inverse maps for O(1) constraint transformation
-INV_TRANSFORMS = [[perm.index(i) for i in range(9)] for perm in D4_TRANSFORMS]
+WIN_PATTERNS = WIN_LINES
 
 
 def pack_sub_data(sub_data) -> int:

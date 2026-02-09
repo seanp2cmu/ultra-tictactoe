@@ -7,6 +7,7 @@ Includes 4-move DFS reachability check to filter illegal positions.
 
 from typing import Dict, Tuple, Optional, List
 from game import Board
+from utils.symmetry import D4_TRANSFORMS, INV_TRANSFORMS
 
 
 class TablebaseSolver:
@@ -236,22 +237,6 @@ class TablebaseSolver:
         
         return (best_result, best_dtw)
     
-    # D4 symmetry: 8 index permutations for 3x3 grid
-    D4_TRANSFORMS = [
-        [0, 1, 2, 3, 4, 5, 6, 7, 8],  # identity
-        [6, 3, 0, 7, 4, 1, 8, 5, 2],  # rotate 90° CW
-        [8, 7, 6, 5, 4, 3, 2, 1, 0],  # rotate 180°
-        [2, 5, 8, 1, 4, 7, 0, 3, 6],  # rotate 270° CW
-        [2, 1, 0, 5, 4, 3, 8, 7, 6],  # flip horizontal
-        [6, 7, 8, 3, 4, 5, 0, 1, 2],  # flip vertical
-        [0, 3, 6, 1, 4, 7, 2, 5, 8],  # flip main diagonal
-        [8, 5, 2, 7, 4, 1, 6, 3, 0],  # flip anti-diagonal
-    ]
-    
-    # Precompute inverse maps for O(1) constraint transformation
-    # INV_TRANSFORMS[perm_id][original_pos] = new_pos after transform
-    INV_TRANSFORMS = [[perm.index(i) for i in range(9)] for perm in D4_TRANSFORMS]
-    
     @staticmethod
     def pack_canonical_key(canonical_data: Tuple) -> int:
         """Pack canonical tuple into deterministic 90-bit integer for storage.
@@ -290,8 +275,8 @@ class TablebaseSolver:
         min_data = None
         min_constraint = -1
         
-        for perm_id, perm in enumerate(self.D4_TRANSFORMS):
-            inv = self.INV_TRANSFORMS[perm_id]
+        for perm_id, perm in enumerate(D4_TRANSFORMS):
+            inv = INV_TRANSFORMS[perm_id]
             sym_constraint = inv[constraint] if constraint >= 0 else -1
             
             # Apply permutation to original
