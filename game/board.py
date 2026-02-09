@@ -20,6 +20,10 @@ class Board:
         self.winner = None
         self.last_move = None
         self.sub_counts = [[0, 0] for _ in range(9)]  # [x_count, o_count] per sub-board
+        # Bitmask representation: x_masks[sub_idx] and o_masks[sub_idx] are 9-bit masks
+        self.x_masks = [0] * 9  # X pieces per sub-board
+        self.o_masks = [0] * 9  # O pieces per sub-board
+        self.completed_mask = 0  # 9-bit: which sub-boards are completed
     
     def clone(self):
         """
@@ -33,6 +37,9 @@ class Board:
         new_board.winner = self.winner
         new_board.last_move = self.last_move
         new_board.sub_counts = [c[:] for c in self.sub_counts]
+        new_board.x_masks = self.x_masks[:]
+        new_board.o_masks = self.o_masks[:]
+        new_board.completed_mask = self.completed_mask
         return new_board
 
     def get_legal_moves(self):
@@ -87,6 +94,29 @@ class Board:
         
         return board_r == target_board_r and board_c == target_board_c
     
+    def set_cell(self, r, c, player):
+        """Set cell directly (for testing/setup). Updates bitmasks."""
+        sub_idx = (r // 3) * 3 + (c // 3)
+        cell_bit = 1 << ((r % 3) * 3 + (c % 3))
+        
+        # Clear old value if any
+        old = self.boards[r][c]
+        if old == 1:
+            self.x_masks[sub_idx] &= ~cell_bit
+            self.sub_counts[sub_idx][0] -= 1
+        elif old == 2:
+            self.o_masks[sub_idx] &= ~cell_bit
+            self.sub_counts[sub_idx][1] -= 1
+        
+        # Set new value
+        self.boards[r][c] = player
+        if player == 1:
+            self.x_masks[sub_idx] |= cell_bit
+            self.sub_counts[sub_idx][0] += 1
+        elif player == 2:
+            self.o_masks[sub_idx] |= cell_bit
+            self.sub_counts[sub_idx][1] += 1
+    
     def make_move(self, r, c, validate=True):
         if validate and not self._is_valid_move(r, c):
             raise ValueError("Illegal move")
@@ -94,9 +124,14 @@ class Board:
         self.boards[r][c] = self.current_player
         self.last_move = (r, c)
         
-        # Update sub_counts
+        # Update sub_counts and bitmasks
         sub_idx = (r // 3) * 3 + (c // 3)
+        cell_bit = 1 << ((r % 3) * 3 + (c % 3))
         self.sub_counts[sub_idx][self.current_player - 1] += 1
+        if self.current_player == 1:
+            self.x_masks[sub_idx] |= cell_bit
+        else:
+            self.o_masks[sub_idx] |= cell_bit
         
         self.update_completed_boards(r, c)
         self.check_winner()
@@ -105,43 +140,49 @@ class Board:
     
     def undo_move(self, r, c, prev_completed, prev_winner, prev_last_move):
         """Undo a move (for solver optimization). Caller must save state before make_move."""
-        # Decrement sub_counts (current_player is already switched, so use opposite)
         sub_idx = (r // 3) * 3 + (c // 3)
+        cell_bit = 1 << ((r % 3) * 3 + (c % 3))
         player = self.current_player % 2 + 1  # The player who made the move
+        
+        # Decrement sub_counts and clear bitmask bit
         self.sub_counts[sub_idx][player - 1] -= 1
+        if player == 1:
+            self.x_masks[sub_idx] &= ~cell_bit
+        else:
+            self.o_masks[sub_idx] &= ~cell_bit
         
         self.boards[r][c] = 0
         board_r, board_c = r // 3, c // 3
         self.completed_boards[board_r][board_c] = prev_completed
+        # Update completed_mask
+        if prev_completed == 0:
+            self.completed_mask &= ~(1 << sub_idx)
         self.winner = prev_winner
         self.last_move = prev_last_move
         self.current_player = self.current_player % 2 + 1
 
     def update_completed_boards(self, r, c):
         board_r, board_c = r // 3, c // 3
-        start_r, start_c = board_r * 3, board_c * 3
+        sub_idx = board_r * 3 + board_c
         
-        # Build bitmasks for current player and filled cells
-        p_mask = 0
-        filled_mask = 0
-        for pr in range(3):
-            for pc in range(3):
-                bit = 1 << (pr * 3 + pc)
-                cell = self.boards[start_r + pr][start_c + pc]
-                if cell == self.current_player:
-                    p_mask |= bit
-                if cell != 0:
-                    filled_mask |= bit
+        # Use bitmasks directly
+        if self.current_player == 1:
+            p_mask = self.x_masks[sub_idx]
+        else:
+            p_mask = self.o_masks[sub_idx]
+        filled_mask = self.x_masks[sub_idx] | self.o_masks[sub_idx]
         
         # Check win patterns
         for mask in Board.WIN_MASKS:
             if (p_mask & mask) == mask:
                 self.completed_boards[board_r][board_c] = self.current_player
+                self.completed_mask |= (1 << sub_idx)
                 return
         
         # Check draw (all 9 filled)
         if filled_mask == 0b111111111:
             self.completed_boards[board_r][board_c] = 3
+            self.completed_mask |= (1 << sub_idx)
 
     def check_winner(self):
         # Build bitmasks for current player and all filled

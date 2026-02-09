@@ -89,24 +89,24 @@ class TestSubBoardCompletion:
     def test_sub_board_win_row(self):
         board = Board()
         # Fill row 0 of sub-board (0,0)
-        board.boards[0][0] = 1
-        board.boards[0][1] = 1
+        board.set_cell(0, 0, 1)
+        board.set_cell(0, 1, 1)
         board.current_player = 1
         board.make_move(0, 2, validate=False)
         assert board.completed_boards[0][0] == 1
     
     def test_sub_board_win_col(self):
         board = Board()
-        board.boards[0][0] = 1
-        board.boards[1][0] = 1
+        board.set_cell(0, 0, 1)
+        board.set_cell(1, 0, 1)
         board.current_player = 1
         board.make_move(2, 0, validate=False)
         assert board.completed_boards[0][0] == 1
     
     def test_sub_board_win_diag(self):
         board = Board()
-        board.boards[0][0] = 1
-        board.boards[1][1] = 1
+        board.set_cell(0, 0, 1)
+        board.set_cell(1, 1, 1)
         board.current_player = 1
         board.make_move(2, 2, validate=False)
         assert board.completed_boards[0][0] == 1
@@ -120,7 +120,7 @@ class TestSubBoardCompletion:
             (2, 0, 2), (2, 1, 1)
         ]
         for r, c, p in pattern:
-            board.boards[r][c] = p
+            board.set_cell(r, c, p)
         board.current_player = 2
         board.make_move(2, 2, validate=False)
         assert board.completed_boards[0][0] == 3  # Draw
@@ -231,8 +231,10 @@ class TestBoardAccess:
     
     def test_write_cell(self):
         board = Board()
-        board.boards[0][0] = 1
+        board.set_cell(0, 0, 1)
         assert board.boards[0][0] == 1
+        # Bitmask should also be updated
+        assert board.x_masks[0] & 1 == 1
 
 
 class TestCountEmpty:

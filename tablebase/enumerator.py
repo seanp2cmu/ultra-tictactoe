@@ -259,10 +259,19 @@ class PositionEnumerator:
             total_x += x_count
             total_o += o_count
             
+            # Update bitmasks for this sub-board
+            x_mask = 0
+            o_mask = 0
             for j, val in enumerate(cells):
                 r = sub_r * 3 + j // 3
                 c = sub_c * 3 + j % 3
                 board.boards[r][c] = val
+                if val == 1:
+                    x_mask |= (1 << j)
+                elif val == 2:
+                    o_mask |= (1 << j)
+            board.x_masks[sub_idx] = x_mask
+            board.o_masks[sub_idx] = o_mask
         
         # Set meta-board state
         for sub_idx in range(9):
