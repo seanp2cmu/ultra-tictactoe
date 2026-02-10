@@ -2,8 +2,8 @@ from dataclasses import dataclass
 
 @dataclass
 class NetworkConfig:
-    num_res_blocks: int = 20
-    num_channels: int = 320 
+    num_res_blocks: int = 30
+    num_channels: int = 256
     
 @dataclass
 class TrainingConfig:
