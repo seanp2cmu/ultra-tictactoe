@@ -69,9 +69,13 @@ class Node:
         sqrt_visits = math.sqrt(self.visits)
         exploration_factor = c_puct * sqrt_visits
         
+        # FPU: use parent's value (negated for opponent) as default for unvisited nodes
+        # This encourages exploration of unvisited nodes when parent is losing
+        parent_value = self.value() if self.visits > 0 else 0.0
+        fpu = -parent_value  # Opponent's perspective
+        
         for action, child in self.children.items():
-            # FPU (First Play Urgency) = -1 for unvisited nodes (AlphaZero style)
-            q_value = child.value_sum / child.visits if child.visits > 0 else -1.0
+            q_value = child.value_sum / child.visits if child.visits > 0 else fpu
             u_value = exploration_factor * child.prior_prob / (1 + child.visits)
             score = q_value + u_value
             

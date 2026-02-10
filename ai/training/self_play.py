@@ -92,7 +92,7 @@ class SelfPlayWorker:
         game_data = []
         step = 0
         
-        while board.winner is None:
+        while board.winner in (None, -1):  # BoardCy uses -1 for no winner
             legal_moves = board.get_legal_moves()
             if not legal_moves:
                 break
@@ -172,7 +172,7 @@ class SelfPlayWorker:
             board.make_move(row, col)
             step += 1
         
-        if board.winner is None or board.winner == 3:
+        if board.winner in (None, -1, 3):  # BoardCy uses -1 for no winner
             winner = None
         else:
             winner = board.winner
@@ -219,7 +219,11 @@ class SelfPlayWorker:
             for c in range(9):
                 if boards_arr[r, c] != 0:
                     canonical_board.set_cell(r, c, int(boards_arr[r, c]))
-        canonical_board.completed_boards = completed_arr.tolist()
+        # Handle both Cython BoardCy and Python Board
+        if hasattr(canonical_board, 'set_completed_boards_2d'):
+            canonical_board.set_completed_boards_2d(completed_arr.tolist())
+        else:
+            canonical_board.completed_boards = completed_arr.tolist()
         canonical_board.current_player = player
         canonical_board.last_move = board.last_move  # Keep last_move for valid moves channel
         
