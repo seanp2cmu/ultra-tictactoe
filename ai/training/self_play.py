@@ -132,7 +132,7 @@ class SelfPlayWorker:
             
             # === MCTS Search ===
             t0 = time.time()
-            root = self.agent.search(board)
+            root = self.agent.search(board, add_noise=True)  # Dirichlet noise for exploration
             elapsed = time.time() - t0
             _timing_stats['mcts_search'] += elapsed
             _timing_stats['mcts_count'] += 1

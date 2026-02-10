@@ -55,14 +55,24 @@ class AlphaZeroAgent:
                 cold_size=500000
             )
     
-    def search(self, board: Board) -> Node:
-        """Run MCTS from root position."""
+    def search(self, board: Board, add_noise: bool = False) -> Node:
+        """Run MCTS from root position.
+        
+        Args:
+            board: Current board state
+            add_noise: If True, add Dirichlet noise to root for exploration (use during self-play)
+        """
         global _mcts_timing
         root = Node(board)
         
         t0 = time.time()
         policy_probs, _ = self.network.predict(board)
         _mcts_timing['network_predict'] += time.time() - t0
+        
+        # Add Dirichlet noise at root for exploration during self-play
+        if add_noise:
+            noise = np.random.dirichlet([0.3] * 81)  # alpha=0.3 for 9x9 board (AlphaZero used 0.03 for Go)
+            policy_probs = 0.75 * policy_probs + 0.25 * noise  # 25% noise weight
         
         action_probs = dict(enumerate(policy_probs))
         root.expand(action_probs)
