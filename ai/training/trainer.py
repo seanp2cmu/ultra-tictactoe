@@ -127,11 +127,20 @@ class Trainer:
         if total > 0:
             network_pct = (network / total) * 100
             overhead_pct = (overhead / total) * 100
+            games = stats.get('games', 0)
+            moves = stats.get('moves', 0)
+            batches = stats.get('batches', 0)
             
             with open(log_path, 'a') as f:
-                f.write(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] TIMING\n")
-                f.write(f"  Total: {total:.1f}s | Games: {stats['games']} | Moves: {stats['moves']}\n")
-                f.write(f"  Network: {network:.1f}s ({network_pct:.1f}%) | MCTS: {overhead:.1f}s ({overhead_pct:.1f}%)\n")
+                f.write(f"\n[Timing Breakdown]\n")
+                f.write(f"  Total Time: {total:.1f}s\n")
+                f.write(f"  Games: {games:,} | Total Moves: {moves:,} | Batches: {batches:,}\n")
+                if games > 0:
+                    f.write(f"  Avg Time/Game: {total/games:.2f}s | Avg Moves/Game: {moves/games:.1f}\n")
+                f.write(f"  Network Inference: {network:.1f}s ({network_pct:.1f}%)\n")
+                f.write(f"  MCTS Overhead: {overhead:.1f}s ({overhead_pct:.1f}%)\n")
+                if moves > 0:
+                    f.write(f"  Avg Time/Move: {total/moves*1000:.2f}ms\n")
     
     def train(self, num_epochs: int = 10, verbose: bool = False, disable_tqdm: bool = False) -> Dict:
         """Train network on replay buffer."""
@@ -143,7 +152,7 @@ class Trainer:
         total_value_loss = 0
         num_batches = 0
         
-        epoch_pbar = tqdm(range(num_epochs), desc="Training", leave=False, disable=disable_tqdm, ncols=100)
+        epoch_pbar = tqdm(range(num_epochs), desc="Training", leave=False, disable=disable_tqdm, ncols=100, position=1)
         
         for _ in epoch_pbar:
             boards, policies, values, _ = self.replay_buffer.sample(self.batch_size)

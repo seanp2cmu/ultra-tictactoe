@@ -87,10 +87,18 @@ def main():
     num_sims = config.training.num_simulations  # 800 고정
     num_games = config.training.num_self_play_games  # 2048 고정
     
-    print("Starting training...")
-    print("=" * 80 + "\n")
+    print("Starting training...\n")
     
-    for iteration in tqdm(range(start_iteration, config.training.num_iterations), desc="Training", ncols=100, initial=start_iteration, total=config.training.num_iterations, leave=True, position=0):
+    # Log file path
+    log_path = os.path.join(config.training.save_dir, 'training.log')
+    
+    # Main progress bar (position 0)
+    main_pbar = tqdm(range(start_iteration, config.training.num_iterations), 
+                     desc="Training", ncols=100, 
+                     initial=start_iteration, total=config.training.num_iterations, 
+                     leave=True, position=0)
+    
+    for iteration in main_pbar:
         iter_start_time = time.time()
         
         result = trainer.train_iteration(
@@ -104,14 +112,46 @@ def main():
             iteration=iteration
         )
         
-        # Compact output - single line per iteration
+        # Log to file (detailed)
         iter_elapsed = time.time() - iter_start_time
-        loss = result['avg_loss']['total_loss']
+        loss = result['avg_loss']
         samples = result['num_samples']
         buffer_stats = trainer.replay_buffer.get_stats() if hasattr(trainer.replay_buffer, 'get_stats') else {}
-        buffer_total = buffer_stats.get('total', 0)
+        lr = result.get('learning_rate', 0)
         
-        tqdm.write(f"[{iteration+1:03d}] Loss: {loss:.4f} | Samples: {samples:,} | Buffer: {buffer_total:,} | Time: {iter_elapsed:.0f}s")
+        import datetime
+        with open(log_path, 'a') as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ITERATION {iteration+1}/{config.training.num_iterations}\n")
+            f.write(f"{'='*60}\n")
+            f.write(f"[Self-Play]\n")
+            f.write(f"  Games: {num_games} | Simulations: {num_sims} | Temperature: {temp}\n")
+            f.write(f"  Samples Generated: {samples:,}\n")
+            f.write(f"\n[Replay Buffer]\n")
+            f.write(f"  Total Samples: {buffer_stats.get('total', 0):,}\n")
+            f.write(f"  Total Games: {buffer_stats.get('games', 0):,}\n")
+            f.write(f"  Avg Positions/Game: {buffer_stats.get('avg_positions_per_game', 0):.1f}\n")
+            f.write(f"  Current Iteration: {buffer_stats.get('current_iteration', 0)}\n")
+            f.write(f"\n[Training]\n")
+            f.write(f"  Epochs: {config.training.num_train_epochs} | Batch Size: {config.training.batch_size}\n")
+            f.write(f"  Total Loss: {loss['total_loss']:.6f}\n")
+            f.write(f"  Policy Loss: {loss['policy_loss']:.6f}\n")
+            f.write(f"  Value Loss: {loss['value_loss']:.6f}\n")
+            f.write(f"  Learning Rate: {lr:.8f}\n")
+            f.write(f"\n[Time]\n")
+            f.write(f"  Iteration Time: {iter_elapsed:.1f}s ({iter_elapsed/60:.1f} min)\n")
+            f.write(f"  Estimated Remaining: {iter_elapsed * (config.training.num_iterations - iteration - 1) / 3600:.1f} hours\n")
+            
+            # DTW stats
+            if trainer.dtw_calculator:
+                dtw_stats = trainer.dtw_calculator.get_stats()
+                if dtw_stats:
+                    f.write(f"\n[DTW Cache]\n")
+                    f.write(f"  Total Queries: {dtw_stats.get('total_queries', 0):,}\n")
+                    f.write(f"  Hit Rate: {dtw_stats.get('hit_rate', 'N/A')}\n")
+                    f.write(f"  Cache Size: {dtw_stats.get('total_mb', 0):.2f} MB\n")
+                    f.write(f"  Hot Entries: {dtw_stats.get('hot_entries', 0):,}\n")
+                    f.write(f"  Cold Entries: {dtw_stats.get('cold_entries', 0):,}\n")
         
         if 'dtw_stats' in result:
             trainer.dtw_calculator.reset_search_stats()
@@ -121,13 +161,11 @@ def main():
             best_loss = current_loss
             save_path = os.path.join(config.training.save_dir, 'best.pt')
             trainer.save(save_path, iteration=iteration)
-            tqdm.write(f"  ✓ New best! (loss: {best_loss:.4f})")
             upload_to_hf(save_path, 'best.pt')
         
         if (iteration + 1) % 5 == 0:
             ckpt_path = os.path.join(config.training.save_dir, f'checkpoint_{iteration + 1}.pt')
             trainer.save(ckpt_path, iteration=iteration)
-            tqdm.write(f"  ✓ Checkpoint: checkpoint_{iteration + 1}.pt")
             
             old_iter = iteration + 1 - 10
             if old_iter > 0:
@@ -138,7 +176,6 @@ def main():
         if (iteration + 1) % 20 == 0:
             model_path = os.path.join(config.training.save_dir, f'model_{iteration + 1}.pt')
             trainer.save(model_path, iteration=iteration)
-            tqdm.write(f"  ✓ Model: model_{iteration + 1}.pt → HF")
             upload_to_hf(model_path, f'model_{iteration + 1}.pt')
         
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:

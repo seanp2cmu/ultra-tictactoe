@@ -214,8 +214,8 @@ class SelfPlayWorker:
         
         start_time = time.perf_counter()
         
-        pbar = tqdm(total=num_games, desc="Parallel self-play", 
-                    disable=disable_tqdm, ncols=100, leave=False)
+        pbar = tqdm(total=num_games, desc="Self-play", 
+                    disable=disable_tqdm, ncols=100, leave=False, position=1)
         
         while games_completed < num_games:
             # Start batch of parallel games with unique game_ids
