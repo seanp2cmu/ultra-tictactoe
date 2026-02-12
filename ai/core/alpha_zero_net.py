@@ -256,6 +256,23 @@ class AlphaZeroNet:
                 weight_decay=self.optimizer.param_groups[0]['weight_decay']
             )
         
+        # Handle torch.compile state_dict prefix mismatch
+        # If model is compiled, keys have "_orig_mod." prefix
+        # If checkpoint was saved without compile, keys don't have prefix
+        model_keys = list(self.model.state_dict().keys())
+        checkpoint_keys = list(state_dict.keys())
+        
+        if model_keys and checkpoint_keys:
+            model_has_prefix = model_keys[0].startswith('_orig_mod.')
+            ckpt_has_prefix = checkpoint_keys[0].startswith('_orig_mod.')
+            
+            if model_has_prefix and not ckpt_has_prefix:
+                # Add prefix to checkpoint keys
+                state_dict = {'_orig_mod.' + k: v for k, v in state_dict.items()}
+            elif not model_has_prefix and ckpt_has_prefix:
+                # Remove prefix from checkpoint keys
+                state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+        
         self.model.load_state_dict(state_dict)
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
@@ -265,8 +282,9 @@ class AlphaZeroNet:
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         
-        # torch.compile after loading (CUDA only)
-        self._try_compile()
+        # torch.compile after loading (CUDA only) - only if not already compiled
+        if not self._compiled:
+            self._try_compile()
         
         return checkpoint.get('iteration', 0)
     
