@@ -89,7 +89,7 @@ def main():
         config.training.num_simulations // 4, config.training.num_simulations
     )
     get_num_games = create_games_schedule(
-        config.training.num_self_play_games // 4, config.training.num_self_play_games,  step=config.gpu.parallel_games
+        config.training.num_self_play_games // 3, config.training.num_self_play_games,  step=config.gpu.parallel_games
     )
     
     print("=" * 80)
