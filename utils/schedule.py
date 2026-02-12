@@ -32,16 +32,24 @@ def create_simulation_schedule(min_sim: int, max_sim: int):
     return get_num_simulations
 
 
-def create_games_schedule(min_games: int, max_games: int):
-    """Create game count schedule function."""
+def create_games_schedule(min_games: int, max_games: int, step: int = 128):
+    """Create game count schedule function.
+    
+    Returns values rounded to step (default 128 for parallel_games).
+    """
+    def round_to_step(n):
+        return max(step, ((n + step - 1) // step) * step)
+    
     def get_num_games(iteration: int, total_iterations: int) -> int:
         progress = iteration / total_iterations
         if progress < 0.2:
-            return min_games
+            return round_to_step(min_games)
         elif progress < 0.5:
-            return min_games + int((max_games - min_games) * 0.3)
+            raw = min_games + int((max_games - min_games) * 0.3)
+            return round_to_step(raw)
         elif progress < 0.8:
-            return min_games + int((max_games - min_games) * 0.6)
+            raw = min_games + int((max_games - min_games) * 0.6)
+            return round_to_step(raw)
         else:
-            return max_games
+            return round_to_step(max_games)
     return get_num_games
