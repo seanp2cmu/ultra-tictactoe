@@ -1,84 +1,133 @@
-"""Weighted replay buffer for self-play data."""
+"""Lc0-style replay buffer with game-aware sampling."""
 from typing import Tuple, Dict, List, Optional
-from collections import deque, Counter
+from collections import defaultdict
 import numpy as np
 
 
 class SelfPlayData:
-    """Position-weighted replay buffer."""
+    """
+    Replay buffer with Lc0-style sampling:
+    - Game ID tracking
+    - One position per game per batch
+    - Age-based weighting (history discounting)
+    """
     
-    def __init__(self, max_size: int = 10000) -> None:
-        self.data = deque(maxlen=max_size)
-        self.weights = deque(maxlen=max_size)
-        self.categories = deque(maxlen=max_size)
-        self._probs_cache: Optional[np.ndarray] = None
-        self._cache_dirty = True
-    
-    def _get_weight(self, state: np.ndarray) -> Tuple[float, str]:
-        """Calculate position weight from state tensor."""
-        # state shape: (7, 9, 9) - channels 0,1 are player pieces
-        # Count filled cells from channels 0 and 1
-        if state.ndim == 3:
-            filled = np.sum(state[0] > 0) + np.sum(state[1] > 0)
-        else:
-            filled = 0
+    def __init__(self, max_size: int = 2000000, decay_factor: float = 0.97) -> None:
+        self.max_size = max_size
+        self.decay_factor = decay_factor
         
-        total = 81
-        progress = filled / total
+        # Storage: (state, policy, value, game_id, iteration)
+        self.data: List[Tuple] = []
+        self.game_to_indices: Dict[int, List[int]] = defaultdict(list)
         
-        if progress < 0.2:
-            return 1.0, "opening"
-        elif progress < 0.5:
-            return 1.5, "midgame"
-        elif progress < 0.8:
-            return 2.0, "endgame"
-        else:
-            return 2.5, "late_endgame"
+        self._next_game_id = 0
+        self._current_iteration = 0
     
-    def add(self, state: np.ndarray, policy: np.ndarray, value: float, dtw: Optional[int] = None) -> None:
-        """Add training sample with automatic weighting."""
-        weight, category = self._get_weight(state)
-        self.data.append((state, policy, value, dtw))
-        self.weights.append(weight)
-        self.categories.append(category)
-        self._cache_dirty = True
+    def new_game_id(self) -> int:
+        """Get a new unique game ID."""
+        game_id = self._next_game_id
+        self._next_game_id += 1
+        return game_id
+    
+    def set_iteration(self, iteration: int) -> None:
+        """Set current iteration for age weighting."""
+        self._current_iteration = iteration
+    
+    def add(self, state: np.ndarray, policy: np.ndarray, value: float, 
+            game_id: int, iteration: Optional[int] = None) -> None:
+        """Add training sample with game ID."""
+        if iteration is None:
+            iteration = self._current_iteration
+        
+        idx = len(self.data)
+        self.data.append((state, policy, value, game_id, iteration))
+        self.game_to_indices[game_id].append(idx)
+        
+        # Evict old data if over capacity
+        if len(self.data) > self.max_size:
+            self._evict_oldest()
+    
+    def _evict_oldest(self) -> None:
+        """Remove oldest 10% of data."""
+        remove_count = self.max_size // 10
+        self.data = self.data[remove_count:]
+        
+        # Rebuild game index
+        self.game_to_indices.clear()
+        for idx, (_, _, _, game_id, _) in enumerate(self.data):
+            self.game_to_indices[game_id].append(idx)
     
     def sample(self, batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List]:
-        """Weighted sampling."""
-        if len(self.data) < batch_size:
-            batch_indices = list(range(len(self.data)))
-        else:
-            if self._cache_dirty:
-                weights_array = np.array(self.weights)
-                total_weight = np.sum(weights_array)
-                self._probs_cache = weights_array / total_weight
-                self._cache_dirty = False
-            
-            batch_indices = np.random.choice(
-                len(self.data),
-                size=batch_size,
-                replace=False,
-                p=self._probs_cache
-            )
+        """
+        Lc0-style sampling: one position per game per batch.
+        Uses age-based weighting for game selection.
+        Optimized with cached weights.
+        """
+        if len(self.data) == 0:
+            return np.array([]), np.array([]), np.array([]), []
         
-        batch = [self.data[i] for i in batch_indices]
-        states, policies, values, dtws = zip(*batch)
-        return np.array(states), np.array(policies), np.array(values), list(dtws)
+        # Cache game weights (rebuild only when iteration changes)
+        if not hasattr(self, '_cached_iteration') or self._cached_iteration != self._current_iteration:
+            self._rebuild_sample_cache()
+        
+        if len(self._cached_game_ids) == 0:
+            return np.array([]), np.array([]), np.array([]), []
+        
+        # Sample games using cached probabilities
+        selected_games = np.random.choice(
+            len(self._cached_game_ids), 
+            size=batch_size, 
+            replace=True,
+            p=self._cached_probs
+        )
+        
+        # One random position per selected game
+        batch_indices = []
+        for game_idx in selected_games:
+            indices = self._cached_indices[game_idx]
+            pos_idx = indices[np.random.randint(len(indices))]
+            batch_indices.append(pos_idx)
+        
+        # Batch gather
+        states = np.array([self.data[i][0] for i in batch_indices])
+        policies = np.array([self.data[i][1] for i in batch_indices])
+        values = np.array([self.data[i][2] for i in batch_indices])
+        
+        return states, policies, values, [None] * len(batch_indices)
+    
+    def _rebuild_sample_cache(self) -> None:
+        """Rebuild cached sampling weights."""
+        self._cached_game_ids = list(self.game_to_indices.keys())
+        self._cached_indices = [self.game_to_indices[gid] for gid in self._cached_game_ids]
+        
+        # Calculate weights
+        weights = []
+        for indices in self._cached_indices:
+            if indices:
+                _, _, _, _, iteration = self.data[indices[0]]
+                age = self._current_iteration - iteration
+                weights.append(self.decay_factor ** age)
+            else:
+                weights.append(0.0)
+        
+        weights = np.array(weights, dtype=np.float64)
+        total = weights.sum()
+        self._cached_probs = weights / total if total > 0 else np.ones(len(weights)) / len(weights)
+        self._cached_iteration = self._current_iteration
     
     def get_stats(self) -> Dict:
         """Get buffer statistics."""
-        total = len(self.data)
-        if total == 0:
+        if len(self.data) == 0:
             return {}
         
-        counter = Counter(self.categories)
-        distribution = {cat: count for cat, count in counter.items()}
-        avg_weight = sum(self.weights) / len(self.weights)
+        n_games = len(self.game_to_indices)
+        avg_positions_per_game = len(self.data) / n_games if n_games > 0 else 0
         
         return {
-            'total': total,
-            'avg_weight': avg_weight,
-            'distribution': distribution
+            'total': len(self.data),
+            'games': n_games,
+            'avg_positions_per_game': avg_positions_per_game,
+            'current_iteration': self._current_iteration
         }
     
     def __len__(self) -> int:

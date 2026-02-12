@@ -197,12 +197,13 @@ class SelfPlayWorker:
             dtw_calculator=dtw_calculator
         )
     
-    def play_games(self, num_games: int, disable_tqdm: bool = False) -> List[Tuple]:
+    def play_games(self, num_games: int, disable_tqdm: bool = False, 
+                    game_id_start: int = 0) -> List[Tuple]:
         """
         Play multiple games and return training data.
         
         Returns:
-            List of (state, policy, value, dtw) tuples
+            List of (state, policy, value, game_id) tuples
         """
         from tqdm import tqdm
         global _parallel_timing
@@ -210,6 +211,7 @@ class SelfPlayWorker:
         all_data = []
         games_completed = 0
         total_moves = 0
+        current_game_id = game_id_start
         
         start_time = time.perf_counter()
         
@@ -217,9 +219,17 @@ class SelfPlayWorker:
                     disable=disable_tqdm, ncols=100, leave=False)
         
         while games_completed < num_games:
-            # Start batch of parallel games
+            # Start batch of parallel games with unique game_ids
             batch_size = min(self.parallel_games, num_games - games_completed)
-            games = [{'board': Board(), 'history': [], 'done': False} for _ in range(batch_size)]
+            games = []
+            for _ in range(batch_size):
+                games.append({
+                    'board': Board(), 
+                    'history': [], 
+                    'done': False,
+                    'game_id': current_game_id
+                })
+                current_game_id += 1
             
             # Play until all games done
             while any(not g['done'] for g in games):
@@ -237,27 +247,39 @@ class SelfPlayWorker:
                     else:
                         mcts_games.append(g)
                 
-                # DTW search for endgame positions (skip MCTS)
-                endgame_results = []
+                # DTW search for endgame - early termination
                 for game in endgame_games:
                     board = game['board']
                     dtw_result = self.dtw_calculator.calculate_dtw(board)
                     
                     if dtw_result is not None:
                         result, dtw, best_move = dtw_result
-                        # Create policy from best_move
-                        policy = np.zeros(81, dtype=np.float32)
-                        if best_move:
-                            action = best_move[0] * 9 + best_move[1]
-                            policy[action] = 1.0
-                            endgame_results.append((game, policy, action))
+                        
+                        # Early termination: use DTW result as ground truth
+                        game['done'] = True
+                        
+                        # Convert DTW result to value
+                        if result == 1:
+                            final_value = 1.0  # current player wins
+                        elif result == -1:
+                            final_value = 0.0  # current player loses
                         else:
-                            # No best move, pick first legal
-                            legal = board.get_legal_moves()
-                            if legal:
-                                action = legal[0][0] * 9 + legal[0][1]
-                                policy[action] = 1.0
-                                endgame_results.append((game, policy, action))
+                            final_value = 0.5  # draw
+                        
+                        # Create training samples from history
+                        for step in game['history']:
+                            # Value from perspective of player at that step
+                            if step['player'] == board.current_player:
+                                value = final_value
+                            else:
+                                value = 1.0 - final_value
+                            
+                            all_data.append((
+                                step['state'],
+                                step['policy'],
+                                value,
+                                game['game_id']
+                            ))
                     else:
                         # DTW failed, fall back to MCTS
                         mcts_games.append(game)
@@ -280,56 +302,6 @@ class SelfPlayWorker:
                         add_noise=(batch_temp > 0)
                     )
                     mcts_results = list(zip(mcts_games, results))
-                
-                # Apply moves - endgame
-                for game, policy, action in endgame_results:
-                    board = game['board']
-                    
-                    # Get canonical form for training
-                    boards_arr, completed_arr, transform_idx = BoardSymmetry.get_canonical_with_transform(board)
-                    canonical_policy = BoardSymmetry.transform_policy(policy, transform_idx)
-                    
-                    # Store training data
-                    game['history'].append({
-                        'state': self._board_to_input(board),
-                        'policy': canonical_policy,
-                        'player': board.current_player
-                    })
-                    
-                    # Make move
-                    row, col = action // 9, action % 9
-                    if (row, col) in board.get_legal_moves():
-                        board.make_move(row, col)
-                    else:
-                        # Invalid move - pick random legal
-                        legal = board.get_legal_moves()
-                        if legal:
-                            board.make_move(*legal[0])
-                    
-                    # Check game end
-                    if board.winner not in (None, -1) or not board.get_legal_moves():
-                        game['done'] = True
-                        
-                        # Assign values based on game result
-                        if board.winner in (None, -1, 3):
-                            result = 0.5  # draw
-                        else:
-                            result = 1.0 if board.winner == 1 else 0.0
-                        
-                        # Create training samples
-                        for i, step in enumerate(game['history']):
-                            # Value from perspective of player at that step
-                            if step['player'] == 1:
-                                value = result
-                            else:
-                                value = 1.0 - result
-                            
-                            all_data.append((
-                                step['state'],
-                                step['policy'],
-                                value,
-                                None  # DTW placeholder
-                            ))
                 
                 # Apply moves - MCTS
                 for game, (policy, action) in mcts_results:
@@ -367,7 +339,7 @@ class SelfPlayWorker:
                             result = 1.0 if board.winner == 1 else 0.0
                         
                         # Create training samples
-                        for i, step in enumerate(game['history']):
+                        for step in game['history']:
                             # Value from perspective of player at that step
                             if step['player'] == 1:
                                 value = result
@@ -378,7 +350,7 @@ class SelfPlayWorker:
                                 step['state'],
                                 step['policy'],
                                 value,
-                                None  # DTW placeholder
+                                game['game_id']
                             ))
             
             games_completed += batch_size

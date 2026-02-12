@@ -89,15 +89,17 @@ class Trainer:
             parallel_games=parallel_games
         )
         
-        all_data = worker.play_games(num_games, disable_tqdm=disable_tqdm)
+        # Get starting game_id from replay buffer
+        game_id_start = self.replay_buffer._next_game_id
+        all_data = worker.play_games(num_games, disable_tqdm=disable_tqdm, 
+                                      game_id_start=game_id_start)
         
-        for state, policy, value, dtw in all_data:
-            self.replay_buffer.add(state, policy, value, dtw)
-            
-            if dtw is not None:
-                self.total_dtw_positions += 1
-                if dtw < float('inf'):
-                    self.total_dtw_wins += 1
+        # Update replay buffer's game_id counter
+        max_game_id = max((d[3] for d in all_data), default=game_id_start)
+        self.replay_buffer._next_game_id = max_game_id + 1
+        
+        for state, policy, value, game_id in all_data:
+            self.replay_buffer.add(state, policy, value, game_id)
         
         if verbose:
             print(f"\nTotal samples in replay buffer: {len(self.replay_buffer)}")
@@ -186,9 +188,13 @@ class Trainer:
         verbose: bool = False,
         disable_tqdm: bool = False,
         num_simulations: Optional[int] = None,
-        parallel_games: int = 1
+        parallel_games: int = 1,
+        iteration: int = 0
     ) -> Dict:
         """Single training iteration."""
+        # Set current iteration for age-based weighting
+        self.replay_buffer.set_iteration(iteration)
+        
         if verbose:
             print("=" * 60)
             print("Generating self-play data...")

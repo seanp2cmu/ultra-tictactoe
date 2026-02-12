@@ -8,14 +8,14 @@ class NetworkConfig:
 @dataclass
 class TrainingConfig:
     num_iterations: int = 400
-    num_self_play_games: int = 8192  # 고정
+    num_self_play_games: int = 8192
     num_train_epochs: int = 40
-    num_simulations: int = 800       # 고정 (Lc0 style)            
-    batch_size: int = 1024            
+    num_simulations: int = 800 
+    batch_size: int = 1024         
     lr: float = 0.002
     weight_decay: float = 1e-4
     
-    replay_buffer_size: int = 1000000  
+    replay_buffer_size: int = 2000000  
     
     save_dir: str = "./model"
     save_interval: int = 5
@@ -27,31 +27,19 @@ class GPUConfig:
     device: str = "cuda"
     num_workers: int = 12  
     pin_memory: bool = True
-    parallel_games: int = 128  # 동시 진행 게임 수 (RTX 5090: 15.7x speedup)
-    
-@dataclass
-class MCTSConfig:
-    c_puct: float = 1.0
-    temperature_start: float = 1.0
-    temperature_end: float = 0.3
+    parallel_games: int = 256
 
 @dataclass
 class DTWConfig:
     endgame_threshold: int = 15       
     hot_cache_size: int = 60000000 
-    cold_cache_size: int = 240000000
-@dataclass
-class PredictionConfig:
-    """실제 게임/예측 시 사용할 설정"""
-    num_simulations: int = 1600       
-    temperature: float = 0.1          
+    cold_cache_size: int = 240000000    
     
 @dataclass
 class Config:
     network: NetworkConfig = None
     training: TrainingConfig = None
     gpu: GPUConfig = None
-    mcts: MCTSConfig = None
     dtw: DTWConfig = None
     
     def __post_init__(self):
@@ -61,7 +49,5 @@ class Config:
             self.training = TrainingConfig()
         if self.gpu is None:
             self.gpu = GPUConfig()
-        if self.mcts is None:
-            self.mcts = MCTSConfig()
         if self.dtw is None:
             self.dtw = DTWConfig()

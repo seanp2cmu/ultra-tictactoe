@@ -102,7 +102,8 @@ def main():
             verbose=False,
             disable_tqdm=False,
             num_simulations=num_sims,
-            parallel_games=config.gpu.parallel_games
+            parallel_games=config.gpu.parallel_games,
+            iteration=iteration
         )
         
         print(f"\nIteration {iteration + 1} Results:")
@@ -116,10 +117,7 @@ def main():
         if hasattr(trainer.replay_buffer, 'get_stats'):
             buffer_stats = trainer.replay_buffer.get_stats()
             if buffer_stats:
-                print(f"  Avg Weight: {buffer_stats.get('avg_weight', 0):.2f}")
-                dist = buffer_stats.get('distribution', {})
-                if 'transition' in dist:
-                    print(f"  Transition (26-29칸): {dist['transition']}")
+                print(f"  Buffer: {buffer_stats.get('total', 0)} samples, {buffer_stats.get('games', 0)} games")
         
         if 'dtw_stats' in result:
             stats = result['dtw_stats']
