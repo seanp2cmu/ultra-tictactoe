@@ -10,6 +10,31 @@ from ai.mcts.node import Node
 from utils import BoardSymmetry
 
 
+# Timing stats for parallel self-play
+_parallel_timing = {
+    'total_time': 0.0,
+    'network_time': 0.0,
+    'mcts_overhead': 0.0,
+    'batches': 0,
+    'games': 0,
+    'moves': 0,
+}
+
+def reset_parallel_timing():
+    global _parallel_timing
+    _parallel_timing = {
+        'total_time': 0.0,
+        'network_time': 0.0,
+        'mcts_overhead': 0.0,
+        'batches': 0,
+        'games': 0,
+        'moves': 0,
+    }
+
+def get_parallel_timing():
+    return _parallel_timing.copy()
+
+
 class ParallelMCTS:
     """MCTS that can collect leaves from multiple games for batch inference."""
     
@@ -48,9 +73,13 @@ class ParallelMCTS:
             root = Node(game['board'])
             roots.append(root)
         
+        global _parallel_timing
+        
         # Initial expansion of all roots
         boards = [g['board'] for g in games]
+        t0 = time.perf_counter()
         policies, _ = self.network.predict_batch(boards)
+        _parallel_timing['network_time'] += time.perf_counter() - t0
         
         for i, root in enumerate(roots):
             policy = policies[i]
@@ -86,7 +115,9 @@ class ParallelMCTS:
                 continue
             
             # Batch inference for all leaves
+            t0 = time.perf_counter()
             policies_batch, values_batch = self.network.predict_batch(all_boards)
+            _parallel_timing['network_time'] += time.perf_counter() - t0
             
             # Expand and backup
             for i, (game_idx, node, search_path) in enumerate(all_leaves):
@@ -174,9 +205,13 @@ class ParallelSelfPlayWorker:
             List of (state, policy, value, dtw) tuples
         """
         from tqdm import tqdm
+        global _parallel_timing
         
         all_data = []
         games_completed = 0
+        total_moves = 0
+        
+        start_time = time.perf_counter()
         
         pbar = tqdm(total=num_games, desc="Parallel self-play", 
                     disable=disable_tqdm, ncols=100, leave=False)
@@ -251,10 +286,18 @@ class ParallelSelfPlayWorker:
                             ))
             
             games_completed += batch_size
+            _parallel_timing['batches'] += 1
             pbar.update(batch_size)
             pbar.set_postfix({"samples": len(all_data)})
         
         pbar.close()
+        
+        # Record final timing stats
+        _parallel_timing['total_time'] += time.perf_counter() - start_time
+        _parallel_timing['games'] += num_games
+        _parallel_timing['moves'] += len(all_data)
+        _parallel_timing['mcts_overhead'] = _parallel_timing['total_time'] - _parallel_timing['network_time']
+        
         return all_data
     
     def _board_to_input(self, board: Board) -> np.ndarray:

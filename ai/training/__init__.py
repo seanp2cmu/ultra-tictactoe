@@ -1,6 +1,5 @@
 from .replay_buffer import SelfPlayData
-from .self_play import SelfPlayWorker
-from .parallel_self_play import ParallelSelfPlayWorker
+from .parallel_self_play import ParallelSelfPlayWorker, reset_parallel_timing, get_parallel_timing
 from .trainer import Trainer
 
-__all__ = ['SelfPlayData', 'SelfPlayWorker', 'ParallelSelfPlayWorker', 'Trainer']
+__all__ = ['SelfPlayData', 'ParallelSelfPlayWorker', 'Trainer', 'reset_parallel_timing', 'get_parallel_timing']

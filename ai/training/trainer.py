@@ -5,9 +5,7 @@ import time
 from functools import wraps
 
 from .replay_buffer import SelfPlayData
-from .self_play import SelfPlayWorker, get_timing_stats, reset_timing_stats
-from .parallel_self_play import ParallelSelfPlayWorker
-from ai.mcts.agent import get_mcts_timing, reset_mcts_timing
+from .parallel_self_play import ParallelSelfPlayWorker, reset_parallel_timing, get_parallel_timing
 
 def timing(f):
     @wraps(f)
@@ -67,24 +65,6 @@ class Trainer:
         self.total_dtw_positions = 0
         self.total_dtw_wins = 0
     
-    def _play_single_game(
-        self,
-        temperature: float,
-        verbose: bool,
-        num_simulations: Optional[int] = None
-    ):
-        """Play single self-play game."""
-        sims = num_simulations if num_simulations is not None else self.num_simulations
-        
-        worker = SelfPlayWorker(
-            self.network,
-            dtw_calculator=self.dtw_calculator,
-            num_simulations=sims,
-            temperature=temperature
-        )
-        
-        return worker.play_game(verbose=verbose)
-    
     def generate_self_play_data(
         self,
         num_games: int = 10,
@@ -92,50 +72,24 @@ class Trainer:
         verbose: bool = False,
         disable_tqdm: bool = False,
         num_simulations: Optional[int] = None,
-        parallel_games: int = 1
+        parallel_games: int = 128
     ) -> int:
-        """Generate self-play data.
-        
-        Args:
-            parallel_games: Number of games to run in parallel (1 = sequential)
-        """
-        all_data = []
+        """Generate self-play data using parallel self-play."""
         sims = num_simulations if num_simulations is not None else self.num_simulations
         
         # Reset timing stats
-        reset_timing_stats()
-        reset_mcts_timing()
+        reset_parallel_timing()
         
-        if parallel_games > 1:
-            # Parallel self-play
-            worker = ParallelSelfPlayWorker(
-                network=self.network,
-                dtw_calculator=self.dtw_calculator,
-                num_simulations=sims,
-                temperature=temperature,
-                parallel_games=parallel_games
-            )
-            
-            print(f"Parallel self-play: {parallel_games} games simultaneously")
-            all_data = worker.play_games(num_games)
-            
-        else:
-            # Sequential self-play (original)
-            game_pbar = tqdm(range(num_games), desc="Self-play",
-                           leave=False, disable=disable_tqdm, ncols=100)
-            for i in game_pbar:
-                game_data = self._play_single_game(temperature, verbose, num_simulations)
-                all_data.extend(game_data)
-                
-                dtw_count = sum(1 for _, _, _, dtw in game_data if dtw is not None)
-                dtw_rate = dtw_count / len(game_data) if game_data else 0
-                avg_length = len(all_data) / (i + 1)
-                
-                game_pbar.set_postfix({
-                    "samples": len(all_data),
-                    "avg_len": f"{avg_length:.1f}",
-                    "dtw%": f"{dtw_rate:.1%}"
-                })
+        # Parallel self-play
+        worker = ParallelSelfPlayWorker(
+            network=self.network,
+            dtw_calculator=self.dtw_calculator,
+            num_simulations=sims,
+            temperature=temperature,
+            parallel_games=parallel_games
+        )
+        
+        all_data = worker.play_games(num_games, disable_tqdm=disable_tqdm)
         
         for state, policy, value, dtw in all_data:
             self.replay_buffer.add(state, policy, value, dtw)
@@ -160,40 +114,33 @@ class Trainer:
         return len(all_data)
     
     def _print_timing_stats(self):
-        """Print detailed timing breakdown."""
-        sp_stats = get_timing_stats()
-        mcts_stats = get_mcts_timing()
+        """Print detailed timing breakdown for parallel self-play."""
+        stats = get_parallel_timing()
         
         print("\n" + "="*60)
-        print("⏱️  TIMING BREAKDOWN")
+        print("⏱️  TIMING BREAKDOWN (Parallel Self-Play)")
         print("="*60)
         
-        # Self-play level
-        print("\n[Self-Play Level]")
-        if sp_stats['mcts_count'] > 0:
-            print(f"  MCTS Search: {sp_stats['mcts_search']:.2f}s ({sp_stats['mcts_count']} calls, avg {sp_stats['mcts_search']/sp_stats['mcts_count']:.3f}s)")
-        if sp_stats['dtw_endgame_count'] > 0:
-            print(f"  DTW Endgame: {sp_stats['dtw_endgame']:.2f}s ({sp_stats['dtw_endgame_count']} calls, avg {sp_stats['dtw_endgame']/sp_stats['dtw_endgame_count']:.3f}s)")
-        print(f"  Board to Input: {sp_stats['board_to_input']:.2f}s")
-        print(f"  Total Steps: {sp_stats['total_steps']}")
+        total = stats['total_time']
+        network = stats['network_time']
+        overhead = stats['mcts_overhead']
         
-        # MCTS level
-        print("\n[MCTS Level]")
-        print(f"  Network Predict (root): {mcts_stats['network_predict']:.2f}s")
-        print(f"  Network Predict Batch: {mcts_stats['network_predict_batch']:.2f}s")
-        if mcts_stats['dtw_in_mcts_count'] > 0:
-            print(f"  DTW in MCTS: {mcts_stats['dtw_in_mcts']:.2f}s ({mcts_stats['dtw_in_mcts_count']} calls)")
-        print(f"  Select: {mcts_stats['select']:.2f}s")
-        print(f"  Expand: {mcts_stats['expand']:.2f}s")
-        print(f"  Backprop: {mcts_stats['backprop']:.2f}s")
-        
-        # Slow steps
-        if sp_stats['slow_steps']:
-            print(f"\n[⚠️ SLOW STEPS (>1s)] - {len(sp_stats['slow_steps'])} found")
-            for step, section, elapsed in sp_stats['slow_steps'][:10]:  # Show max 10
-                print(f"  Step {step}: {section} = {elapsed:.2f}s")
-            if len(sp_stats['slow_steps']) > 10:
-                print(f"  ... and {len(sp_stats['slow_steps']) - 10} more")
+        if total > 0:
+            network_pct = (network / total) * 100
+            overhead_pct = (overhead / total) * 100
+            
+            print(f"\n[Summary]")
+            print(f"  Total Time: {total:.1f}s")
+            print(f"  Games: {stats['games']}, Moves: {stats['moves']}")
+            print(f"  Batches: {stats['batches']}")
+            if stats['games'] > 0:
+                print(f"  Avg Time/Game: {total / stats['games']:.2f}s")
+            
+            print(f"\n[Breakdown]")
+            print(f"  Network Inference: {network:.1f}s ({network_pct:.1f}%)")
+            print(f"  MCTS Overhead: {overhead:.1f}s ({overhead_pct:.1f}%)")
+        else:
+            print("  No timing data available")
         
         print("="*60)
     
