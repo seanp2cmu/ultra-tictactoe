@@ -8,6 +8,11 @@ extensions = [
         ["game/board_cy.pyx"],
         include_dirs=[np.get_include()],
     ),
+    Extension(
+        "ai.mcts.node_cy",
+        ["ai/mcts/node_cy.pyx"],
+        include_dirs=[np.get_include()],
+    ),
 ]
 
 setup(
