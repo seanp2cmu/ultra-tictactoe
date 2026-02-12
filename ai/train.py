@@ -89,7 +89,7 @@ def main():
         config.training.num_simulations // 4, config.training.num_simulations
     )
     get_num_games = create_games_schedule(
-        config.training.num_self_play_games // 3, config.training.num_self_play_games
+        config.training.num_self_play_games // 3, config.training.num_self_play_games,  step=config.gpu.parallel_games
     )
     
     print("=" * 80)
@@ -137,7 +137,6 @@ def main():
             print(f"  DTW Cache Hit Rate: {stats.get('hit_rate', 'N/A')}")
             print(f"  DTW Cache Size: {stats.get('total_mb', 0):.2f} MB")
             print(f"  DTW Searches: {stats.get('dtw_searches', 0):,} (Aborted: {stats.get('dtw_aborted', 0)}) Avg: {stats.get('dtw_avg_nodes', 0):.0f} nodes")
-            print(f"  Shallow Searches: {stats.get('shallow_searches', 0):,} (Aborted: {stats.get('shallow_aborted', 0)}) Avg: {stats.get('shallow_avg_nodes', 0):.0f} nodes")
             trainer.dtw_calculator.reset_search_stats()
         
         iter_elapsed = time.time() - iter_start_time
