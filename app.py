@@ -3,6 +3,36 @@ Ultra Tic-Tac-Toe AI - Gradio Interface
 AlphaZero-style engine analysis for Ultimate Tic-Tac-Toe
 """
 import os
+import subprocess
+import sys
+
+# Build Cython/C++ extensions BEFORE any imports that need them
+def build_extensions():
+    """Build Cython and C++ extensions on HF Spaces startup"""
+    if not os.environ.get('SPACE_ID'):
+        return  # Skip on local
+    
+    try:
+        print("Building Cython extensions...")
+        result = subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"], 
+                      capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✓ Cython extensions built")
+        else:
+            print(f"⚠ Cython build output: {result.stderr}")
+        
+        print("Building C++ extensions...")
+        result = subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"],
+                      cwd="cpp", capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✓ C++ extensions built")
+        else:
+            print(f"⚠ C++ build output: {result.stderr}")
+    except Exception as e:
+        print(f"⚠ Build error: {e}")
+
+build_extensions()
+
 import json
 import time
 import gradio as gr
