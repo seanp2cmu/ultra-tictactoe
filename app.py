@@ -70,6 +70,7 @@ MODEL_DIR = "model"
 HF_REPO_ID = "sean2474/ultra-tictactoe-models" 
 models = {}
 dtw_calculator = None
+baseline_test_stop_flag = False
 
 def get_best_device():
     """Get the best available device (CUDA > MPS > CPU)."""
@@ -503,9 +504,36 @@ baseline_agents = {
     'Minimax-4': MinimaxAgent(depth=4),
 }
 
-@spaces.GPU(duration=1800)
+def stop_baseline_test():
+    """Stop the running baseline test."""
+    global baseline_test_stop_flag
+    baseline_test_stop_flag = True
+    return "⏹️ Stop requested. Test will stop after current game."
+
+def reset_baseline_stop():
+    """Reset stop flag before starting new test."""
+    global baseline_test_stop_flag
+    baseline_test_stop_flag = False
+
+def get_baseline_test_duration(model_name, baseline_name, num_games, num_simulations):
+    """Calculate dynamic GPU duration based on test parameters."""
+    # Estimate ~3 seconds per game for simpler baselines, ~10 for harder ones
+    base_time_per_game = 5 if baseline_name in ['Random', 'Heuristic'] else 10
+    # More simulations = more time
+    sim_factor = int(num_simulations) / 200  # baseline is 200 sims
+    estimated_time = int(num_games) * base_time_per_game * sim_factor
+    # Add 30% buffer, cap at 1800 seconds (30 min)
+    return min(int(estimated_time * 1.3) + 60, 1800)
+
+# Store partial results for timeout recovery
+baseline_test_results = {'current': None}
+
+@spaces.GPU(duration=get_baseline_test_duration)
 def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
     """Test AlphaZero model against baseline opponent."""
+    global baseline_test_stop_flag, baseline_test_results
+    reset_baseline_stop()
+    
     num_games = int(num_games)
     num_simulations = int(num_simulations)
     
@@ -553,6 +581,19 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
         }
         
         for game_num in range(1, num_games + 1):
+            # Check stop flag
+            if baseline_test_stop_flag:
+                results['status'] = 'stopped'
+                results['summary']['completed_games'] = game_num - 1
+                if game_num > 1:
+                    results['summary']['win_rate'] = f"{results['summary']['model_wins'] / (game_num - 1) * 100:.1f}%"
+                yield json.dumps({
+                    'status': 'stopped',
+                    'message': f'⏹️ Test stopped after {game_num - 1} games',
+                    'summary': results['summary']
+                }, indent=2)
+                return
+            
             game_start_time = time.time()
             model_is_p1 = (game_num % 2 == 1)
             
@@ -614,6 +655,10 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
             )
             results['games'].append(game_record)
             
+            # Store partial results for timeout recovery
+            results['summary']['completed_games'] = game_num
+            baseline_test_results['current'] = results.copy()
+            
             win_rate = results['summary']['model_wins'] / game_num * 100
             
             progress = {
@@ -663,12 +708,44 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
         
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        yield json.dumps({
-            'error': str(e),
-            'type': type(e).__name__,
-            'traceback': traceback.format_exc()
-        }, indent=2)
+        error_type = type(e).__name__
+        
+        # Check if we have partial results to return
+        if baseline_test_results['current'] and baseline_test_results['current'].get('summary', {}).get('completed_games', 0) > 0:
+            partial = baseline_test_results['current']
+            completed = partial['summary']['completed_games']
+            if completed > 0:
+                partial['summary']['win_rate'] = f"{partial['summary']['model_wins'] / completed * 100:.1f}%"
+                partial['summary']['avg_time_per_game'] = round(partial['summary']['total_time'] / completed, 2)
+            
+            s = partial['summary']
+            table = f"""
+⚠️ GPU TIMEOUT - Returning partial results
+
+╔══════════════════════════════════════════════════════════════╗
+║              🎯 PARTIAL BASELINE TEST RESULTS                 ║
+╠══════════════════════════════════════════════════════════════╣
+║  Completed: {completed}/{num_games} games (GPU timeout)                      ║
+╠══════════════════════════════════════════════════════════════╣
+║  Model Wins           ║  {s['model_wins']:>6}  ({s.get('win_rate', 'N/A')})                      ║
+║    - As Player 1 (X)  ║  {s['model_as_p1_wins']:>6}                                ║
+║    - As Player 2 (O)  ║  {s['model_as_p2_wins']:>6}                                ║
+║  Baseline Wins        ║  {s['baseline_wins']:>6}                                ║
+║  Draws                ║  {s['draws']:>6}                                ║
+╠═══════════════════════╩══════════════════════════════════════╣
+║  Total Time: {s['total_time']:.1f}s    Avg/Game: {s.get('avg_time_per_game', 0):.2f}s                   ║
+╚══════════════════════════════════════════════════════════════╝
+
+💡 Tip: Try fewer games or lower simulations to avoid timeout.
+"""
+            yield table
+        else:
+            traceback.print_exc()
+            yield json.dumps({
+                'error': str(e),
+                'type': error_type,
+                'message': 'Test failed. Try fewer games or lower simulations.'
+            }, indent=2)
 
 # DTW Calculator 초기화 (HF 로딩 전에)
 dtw_calculator = DTWCalculator(
@@ -831,7 +908,9 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
                 label="MCTS Simulations"
             )
         
-        baseline_btn = gr.Button("🧪 Run Baseline Test", variant="primary", size="lg")
+        with gr.Row():
+            baseline_btn = gr.Button("🧪 Run Baseline Test", variant="primary", size="lg")
+            baseline_stop_btn = gr.Button("⏹️ Stop", variant="stop", size="lg")
         
         baseline_output = gr.Textbox(
             label="Results (Updates in Real-Time)",
@@ -844,6 +923,12 @@ with gr.Blocks(title="Ultra Tic-Tac-Toe AI") as demo:
             inputs=[baseline_model_dropdown, baseline_dropdown, baseline_games_slider, baseline_sims_slider],
             outputs=baseline_output,
             api_name="baseline_test"
+        )
+        
+        baseline_stop_btn.click(
+            fn=stop_baseline_test,
+            inputs=[],
+            outputs=baseline_output
         )
         
         gr.Markdown("""
