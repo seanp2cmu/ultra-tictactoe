@@ -124,7 +124,7 @@ class ParallelMCTS:
                 policy = policies_batch[i]
                 value = 2.0 * values_batch[i].item() - 1.0  # 0~1 -> -1~1
                 
-                # DTW cache lookup only (no search in MCTS - too slow)
+                # DTW check
                 if self.dtw_calculator and self.dtw_calculator.is_endgame(node.board):
                     cached = self.dtw_calculator.lookup_cache(node.board)
                     if cached is not None:
@@ -228,15 +228,102 @@ class ParallelSelfPlayWorker:
                 if not active_games:
                     break
                 
-                # MCTS for all active games
-                results = self.mcts.search_parallel(
-                    active_games,
-                    temperature=self.temperature,
-                    add_noise=True
-                )
+                # Separate endgame vs normal games
+                endgame_games = []
+                mcts_games = []
+                for g in active_games:
+                    if self.dtw_calculator and self.dtw_calculator.is_endgame(g['board']):
+                        endgame_games.append(g)
+                    else:
+                        mcts_games.append(g)
                 
-                # Apply moves
-                for game, (policy, action) in zip(active_games, results):
+                # DTW search for endgame positions (skip MCTS)
+                endgame_results = []
+                for game in endgame_games:
+                    board = game['board']
+                    dtw_result = self.dtw_calculator.calculate_dtw(board)
+                    
+                    if dtw_result is not None:
+                        result, dtw, best_move = dtw_result
+                        # Create policy from best_move
+                        policy = np.zeros(81, dtype=np.float32)
+                        if best_move:
+                            action = best_move[0] * 9 + best_move[1]
+                            policy[action] = 1.0
+                            endgame_results.append((game, policy, action))
+                        else:
+                            # No best move, pick first legal
+                            legal = board.get_legal_moves()
+                            if legal:
+                                action = legal[0][0] * 9 + legal[0][1]
+                                policy[action] = 1.0
+                                endgame_results.append((game, policy, action))
+                    else:
+                        # DTW failed, fall back to MCTS
+                        mcts_games.append(game)
+                
+                # MCTS for non-endgame games
+                mcts_results = []
+                if mcts_games:
+                    results = self.mcts.search_parallel(
+                        mcts_games,
+                        temperature=self.temperature,
+                        add_noise=True
+                    )
+                    mcts_results = list(zip(mcts_games, results))
+                
+                # Apply moves - endgame
+                for game, policy, action in endgame_results:
+                    board = game['board']
+                    
+                    # Get canonical form for training
+                    boards_arr, completed_arr, transform_idx = BoardSymmetry.get_canonical_with_transform(board)
+                    canonical_policy = BoardSymmetry.transform_policy(policy, transform_idx)
+                    
+                    # Store training data
+                    game['history'].append({
+                        'state': self._board_to_input(board),
+                        'policy': canonical_policy,
+                        'player': board.current_player
+                    })
+                    
+                    # Make move
+                    row, col = action // 9, action % 9
+                    if (row, col) in board.get_legal_moves():
+                        board.make_move(row, col)
+                    else:
+                        # Invalid move - pick random legal
+                        legal = board.get_legal_moves()
+                        if legal:
+                            board.make_move(*legal[0])
+                    
+                    # Check game end
+                    if board.winner not in (None, -1) or not board.get_legal_moves():
+                        game['done'] = True
+                        
+                        # Assign values based on game result
+                        if board.winner in (None, -1, 3):
+                            result = 0.5  # draw
+                        else:
+                            result = 1.0 if board.winner == 1 else 0.0
+                        
+                        # Create training samples
+                        for i, step in enumerate(game['history']):
+                            # Value from perspective of player at that step
+                            if step['player'] == 1:
+                                value = result
+                            else:
+                                value = 1.0 - result
+                            
+                            all_data.append((
+                                step['state'],
+                                step['policy'],
+                                value,
+                                None  # DTW placeholder
+                            ))
+                
+                # Apply moves - MCTS
+                for game, (policy, action) in mcts_results:
                     board = game['board']
                     
                     # Get canonical form for training
