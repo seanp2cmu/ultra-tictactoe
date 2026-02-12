@@ -15,9 +15,25 @@ class SelfPlayData:
         self._cache_dirty = True
     
     def _get_weight(self, state: np.ndarray) -> Tuple[float, str]:
-        """Calculate position weight using Board's phase calculation."""
-        from game import Board
-        return Board.get_phase_from_state(state)
+        """Calculate position weight from state tensor."""
+        # state shape: (7, 9, 9) - channels 0,1 are player pieces
+        # Count filled cells from channels 0 and 1
+        if state.ndim == 3:
+            filled = np.sum(state[0] > 0) + np.sum(state[1] > 0)
+        else:
+            filled = 0
+        
+        total = 81
+        progress = filled / total
+        
+        if progress < 0.2:
+            return 1.0, "opening"
+        elif progress < 0.5:
+            return 1.5, "midgame"
+        elif progress < 0.8:
+            return 2.0, "endgame"
+        else:
+            return 2.5, "late_endgame"
     
     def add(self, state: np.ndarray, policy: np.ndarray, value: float, dtw: Optional[int] = None) -> None:
         """Add training sample with automatic weighting."""
