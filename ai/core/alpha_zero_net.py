@@ -54,6 +54,13 @@ class AlphaZeroNet:
         
         self.scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
         self.predict_lock = threading.Lock()
+        
+        # torch.compile for CUDA (PyTorch 2.0+)
+        if torch.cuda.is_available() and hasattr(torch, 'compile'):
+            try:
+                self.model = torch.compile(self.model, mode='reduce-overhead')
+            except Exception:
+                pass  # compile 실패시 원본 사용
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Thread-safe single board prediction with canonical form."""
@@ -139,7 +146,12 @@ class AlphaZeroNet:
                 ]
                 batch_tensor = torch.stack(board_tensors).to(self.device)
                 
-                policy_logits, values = self.model(batch_tensor)
+                # CUDA에서 FP16 inference 사용
+                if self.device.type == 'cuda':
+                    with autocast(device_type='cuda'):
+                        policy_logits, values = self.model(batch_tensor)
+                else:
+                    policy_logits, values = self.model(batch_tensor)
                 policy_probs = F.softmax(policy_logits, dim=1).cpu().numpy()
                 
                 # Transform each policy back to original orientation

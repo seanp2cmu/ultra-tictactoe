@@ -1,8 +1,5 @@
-"""NNUE (Efficiently Updatable Neural Network) for Ultimate Tic-Tac-Toe"""
+"""NNUE (Efficiently Updatable Neural Network) for Ultimate Tic-Tac-Toe."""
 
-from .network import NNUE
-from .features import NNUEFeatureExtractor
-from .data_generator import NNUEDataGenerator
-from .trainer import NNUETrainer
+from .config import NNUEConfig
 
-__all__ = ['NNUE', 'NNUEFeatureExtractor', 'NNUEDataGenerator', 'NNUETrainer']
+__all__ = ['NNUEConfig']

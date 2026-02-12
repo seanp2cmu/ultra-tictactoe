@@ -1,7 +1,7 @@
 import os
 import time
 from tqdm import tqdm
-from config import Config
+from ai.config import Config
 from ai.training import Trainer
 from utils import (
     upload_to_hf,

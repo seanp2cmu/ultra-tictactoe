@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from torch.amp import autocast
 
 from game import Board
 
@@ -103,9 +104,15 @@ class Model(nn.Module):
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Single board prediction."""
         self.eval()
+        device = next(self.parameters()).device
         with torch.no_grad():
             board_tensor = self._board_to_tensor(board_state)
-            policy_logits, value = self.forward(board_tensor)
+            # CUDA에서 FP16 inference
+            if device.type == 'cuda':
+                with autocast(device_type='cuda'):
+                    policy_logits, value = self.forward(board_tensor)
+            else:
+                policy_logits, value = self.forward(board_tensor)
             policy_probs = F.softmax(policy_logits, dim=1)
             return policy_probs.cpu().numpy()[0], value.cpu().numpy()[0][0]
     
