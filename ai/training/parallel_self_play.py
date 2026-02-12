@@ -124,11 +124,11 @@ class ParallelMCTS:
                 policy = policies_batch[i]
                 value = 2.0 * values_batch[i].item() - 1.0  # 0~1 -> -1~1
                 
-                # DTW check
+                # DTW check - full search if endgame
                 if self.dtw_calculator and self.dtw_calculator.is_endgame(node.board):
-                    cached = self.dtw_calculator.lookup_cache(node.board)
-                    if cached is not None:
-                        result, _, _ = cached
+                    dtw_result = self.dtw_calculator.calculate_dtw(node.board)
+                    if dtw_result is not None:
+                        result, _, _ = dtw_result
                         value = float(result)
                 
                 node.expand(dict(enumerate(policy)))
