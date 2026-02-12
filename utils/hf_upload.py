@@ -18,6 +18,16 @@ HF_UPLOAD_ENABLED = os.environ.get("HF_UPLOAD", "false").lower() == "true"
 _upload_threads = []
 
 
+def _log_hf(msg: str):
+    """Log HF upload status to training.log"""
+    import datetime
+    log_path = "./model/training.log"
+    try:
+        with open(log_path, 'a') as f:
+            f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except:
+        pass
+
 def _upload_worker(local_path: str, repo_path: str):
     """Background upload worker"""
     try:
@@ -31,9 +41,9 @@ def _upload_worker(local_path: str, repo_path: str):
             repo_id=HF_REPO_ID,
             repo_type="model"
         )
-        print(f"  ✓ [HF] Uploaded: {repo_path} ({file_size_mb:.1f}MB)")
+        _log_hf(f"[HF] Uploaded: {repo_path} ({file_size_mb:.1f}MB)")
     except Exception as e:
-        print(f"  ⚠ [HF] Upload failed: {e}")
+        _log_hf(f"[HF] Upload failed: {e}")
 
 
 def upload_to_hf(local_path: str, repo_path: str = None):
@@ -47,7 +57,7 @@ def upload_to_hf(local_path: str, repo_path: str = None):
     thread = threading.Thread(target=_upload_worker, args=(local_path, repo_path), daemon=True)
     thread.start()
     _upload_threads.append(thread)
-    print(f"  ↑ [Async] Upload started: {repo_path}")
+    _log_hf(f"[HF] Upload started: {repo_path}")
 
 
 def wait_for_uploads():
