@@ -152,6 +152,16 @@ def main():
     if trainer.dtw_calculator and trainer.dtw_calculator.tt:
         dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
         trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
+        
+        # Log final stats
+        import datetime
+        stats = trainer.dtw_calculator.get_stats()
+        log_path = os.path.join(config.training.save_dir, 'training.log')
+        with open(log_path, 'a') as f:
+            f.write(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] TRAINING COMPLETE\n")
+            f.write(f"  Best Loss: {best_loss:.4f}\n")
+            if stats:
+                f.write(f"  DTW Queries: {stats.get('total_queries', 0)} | Hit Rate: {stats.get('hit_rate', 'N/A')} | Cache: {stats.get('total_mb', 0):.1f} MB\n")
 
 
 if __name__ == '__main__':
