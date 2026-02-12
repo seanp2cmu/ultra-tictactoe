@@ -207,8 +207,12 @@ class CompressedTranspositionTable:
         with open(filepath, 'wb') as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
         
-        # Silent save - log to file if needed
-        pass
+        # Log to file
+        import datetime
+        size_mb = os.path.getsize(filepath) / 1024 / 1024
+        log_path = os.path.join(os.path.dirname(filepath), 'training.log')
+        with open(log_path, 'a') as f:
+            f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] DTW Cache: {size_mb:.1f} MB | {len(self.hot)} hot + {len(self.cold)} cold\n")
     
     def load_from_file(self, filepath):
         """
