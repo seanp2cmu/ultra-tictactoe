@@ -54,13 +54,7 @@ class AlphaZeroNet:
         
         self.scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
         self.predict_lock = threading.Lock()
-        
-        # torch.compile for CUDA (PyTorch 2.0+)
-        if torch.cuda.is_available() and hasattr(torch, 'compile'):
-            try:
-                self.model = torch.compile(self.model, mode='reduce-overhead')
-            except Exception:
-                pass  # compile 실패시 원본 사용
+        self._compiled = False
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Thread-safe single board prediction with canonical form."""
@@ -258,4 +252,18 @@ class AlphaZeroNet:
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         
+        # torch.compile after loading (CUDA only)
+        self._try_compile()
+        
         return checkpoint.get('iteration', 0)
+    
+    def _try_compile(self):
+        """Apply torch.compile if available and not already compiled."""
+        if self._compiled:
+            return
+        if torch.cuda.is_available() and hasattr(torch, 'compile'):
+            try:
+                self.model = torch.compile(self.model, mode='reduce-overhead')
+                self._compiled = True
+            except Exception:
+                pass
