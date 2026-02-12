@@ -7,10 +7,10 @@ class NetworkConfig:
     
 @dataclass
 class TrainingConfig:
-    num_iterations: int = 500
-    num_self_play_games: int = 2048  
+    num_iterations: int = 400
+    num_self_play_games: int = 8192  # 고정
     num_train_epochs: int = 40
-    num_simulations: int = 1000        
+    num_simulations: int = 800       # 고정 (Lc0 style)            
     batch_size: int = 1024            
     lr: float = 0.002
     weight_decay: float = 1e-4
@@ -18,7 +18,7 @@ class TrainingConfig:
     replay_buffer_size: int = 1000000  
     
     save_dir: str = "./model"
-    save_interval: int = 5  # 5 iteration마다 저장 (자동 복구 지원)
+    save_interval: int = 5
     
     use_amp: bool = True
     

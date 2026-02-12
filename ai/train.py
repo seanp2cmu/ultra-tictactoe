@@ -5,10 +5,7 @@ from ai.config import Config
 from ai.training import Trainer
 from utils import (
     upload_to_hf,
-    get_start_iteration,
-    create_temperature_schedule,
-    create_simulation_schedule,
-    create_games_schedule
+    get_start_iteration
 )
 
 
@@ -82,15 +79,10 @@ def main():
             trainer.dtw_calculator.tt.load_from_file(dtw_cache_path)
         print()
     
-    get_temperature = create_temperature_schedule(
-        config.mcts.temperature_start, config.mcts.temperature_end
-    )
-    get_num_simulations = create_simulation_schedule(
-        config.training.num_simulations // 4, config.training.num_simulations
-    )
-    get_num_games = create_games_schedule(
-        config.training.num_self_play_games // 3, config.training.num_self_play_games,  step=config.gpu.parallel_games
-    )
+    # 고정 값 사용 (Lc0 style)
+    temp = 1.0  # 첫 8수만 적용됨 (self_play.py에서 처리)
+    num_sims = config.training.num_simulations  # 800 고정
+    num_games = config.training.num_self_play_games  # 2048 고정
     
     print("=" * 80)
     print("Starting training...")
@@ -98,11 +90,8 @@ def main():
     
     for iteration in tqdm(range(start_iteration, config.training.num_iterations), desc="Training Progress", ncols=100, initial=start_iteration, total=config.training.num_iterations):
         iter_start_time = time.time()
-        temp = get_temperature(iteration, config.training.num_iterations)
-        num_sims = get_num_simulations(iteration, config.training.num_iterations)
         
         print(f"\n{'='*80}")
-        num_games = get_num_games(iteration, config.training.num_iterations)
         print(f"Iteration {iteration + 1}/{config.training.num_iterations} (Temp: {temp:.2f}, Sims: {num_sims}, Games: {num_games})")
         print(f"{'='*80}")
         
