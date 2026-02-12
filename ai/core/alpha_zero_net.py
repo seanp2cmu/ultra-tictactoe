@@ -222,11 +222,16 @@ class AlphaZeroNet:
         """Load model, optimizer, and scheduler states. Returns iteration number."""
         checkpoint = torch.load(filepath, map_location=self.device)
         
+        # Handle compiled model state dict (strip _orig_mod. prefix)
+        state_dict = checkpoint['model_state_dict']
+        if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+            state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+            checkpoint['model_state_dict'] = state_dict
+        
         if 'num_res_blocks' in checkpoint and 'num_channels' in checkpoint:
             num_res_blocks = checkpoint['num_res_blocks']
             num_channels = checkpoint['num_channels']
         else:
-            state_dict: Dict[str, Tensor] = checkpoint['model_state_dict']
             max_block_idx = -1
             for key in state_dict.keys():
                 if key.startswith('res_blocks.'):
@@ -243,7 +248,7 @@ class AlphaZeroNet:
                 weight_decay=self.optimizer.param_groups[0]['weight_decay']
             )
         
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.load_state_dict(state_dict)
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
         if 'scheduler_state_dict' in checkpoint:
