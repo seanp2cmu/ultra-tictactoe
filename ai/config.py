@@ -8,7 +8,7 @@ class NetworkConfig:
 @dataclass
 class TrainingConfig:
     num_iterations: int = 500
-    num_self_play_games: int = 400    
+    num_self_play_games: int = 512  # 128 * 4 (parallel_games 배수)    
     num_train_epochs: int = 40
     num_simulations: int = 1000        
     batch_size: int = 1024            
