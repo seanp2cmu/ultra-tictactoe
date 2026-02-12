@@ -166,15 +166,20 @@ class ParallelSelfPlayWorker:
             dtw_calculator=dtw_calculator
         )
     
-    def play_games(self, num_games: int) -> List[Tuple]:
+    def play_games(self, num_games: int, disable_tqdm: bool = False) -> List[Tuple]:
         """
         Play multiple games and return training data.
         
         Returns:
             List of (state, policy, value, dtw) tuples
         """
+        from tqdm import tqdm
+        
         all_data = []
         games_completed = 0
+        
+        pbar = tqdm(total=num_games, desc="Parallel self-play", 
+                    disable=disable_tqdm, ncols=100, leave=False)
         
         while games_completed < num_games:
             # Start batch of parallel games
@@ -246,7 +251,10 @@ class ParallelSelfPlayWorker:
                             ))
             
             games_completed += batch_size
+            pbar.update(batch_size)
+            pbar.set_postfix({"samples": len(all_data)})
         
+        pbar.close()
         return all_data
     
     def _board_to_input(self, board: Board) -> np.ndarray:
