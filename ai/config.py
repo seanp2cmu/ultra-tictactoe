@@ -7,10 +7,10 @@ class NetworkConfig:
     
 @dataclass
 class TrainingConfig:
-    num_iterations: int = 300
-    num_self_play_games: int = 250    
+    num_iterations: int = 500
+    num_self_play_games: int = 400    
     num_train_epochs: int = 40
-    num_simulations: int = 800        
+    num_simulations: int = 1000        
     batch_size: int = 1024            
     lr: float = 0.002
     weight_decay: float = 1e-4
@@ -27,7 +27,7 @@ class GPUConfig:
     device: str = "cuda"
     num_workers: int = 12  
     pin_memory: bool = True
-    parallel_games: int = 32  # 동시 진행 게임 수 (RTX 5090: 11.7x speedup)
+    parallel_games: int = 128  # 동시 진행 게임 수 (RTX 5090: 15.7x speedup)
     
 @dataclass
 class MCTSConfig:
