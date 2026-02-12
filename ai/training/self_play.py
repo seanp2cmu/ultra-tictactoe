@@ -210,7 +210,6 @@ class SelfPlayWorker:
         
         all_data = []
         games_completed = 0
-        total_moves = 0
         current_game_id = game_id_start
         
         start_time = time.perf_counter()
