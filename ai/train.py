@@ -1,5 +1,6 @@
 import os
 import time
+import glob
 import torch._inductor.config
 torch._inductor.config.triton.cudagraph_dynamic_shape_warn_limit = None
 
@@ -8,14 +9,65 @@ from ai.config import Config
 from ai.training import Trainer
 from utils import (
     upload_to_hf,
-    get_start_iteration
 )
+
+
+def select_checkpoint(save_dir: str) -> tuple:
+    """Interactive checkpoint selection."""
+    checkpoints = []
+    
+    # Find all checkpoint files
+    best_path = os.path.join(save_dir, 'best.pt')
+    if os.path.exists(best_path):
+        checkpoints.append(('best.pt', best_path))
+    
+    # Find checkpoint_*.pt files
+    for f in sorted(glob.glob(os.path.join(save_dir, 'checkpoint_*.pt'))):
+        name = os.path.basename(f)
+        checkpoints.append((name, f))
+    
+    # Find model_*.pt files
+    for f in sorted(glob.glob(os.path.join(save_dir, 'model_*.pt'))):
+        name = os.path.basename(f)
+        checkpoints.append((name, f))
+    
+    if not checkpoints:
+        print("\n체크포인트 없음. 처음부터 시작합니다.")
+        return None, 0
+    
+    print("\n" + "=" * 50)
+    print("체크포인트 선택")
+    print("=" * 50)
+    print("  0: 처음부터 시작 (새 학습)")
+    for i, (name, path) in enumerate(checkpoints, 1):
+        size_mb = os.path.getsize(path) / 1024 / 1024
+        print(f"  {i}: {name} ({size_mb:.1f} MB)")
+    print("=" * 50)
+    
+    while True:
+        try:
+            choice = input("선택 (0-{}): ".format(len(checkpoints))).strip()
+            choice = int(choice)
+            if choice == 0:
+                print("→ 처음부터 시작")
+                return None, 0
+            elif 1 <= choice <= len(checkpoints):
+                name, path = checkpoints[choice - 1]
+                print(f"→ {name} 로드")
+                return path, 0
+            else:
+                print("잘못된 선택")
+        except ValueError:
+            print("숫자를 입력하세요")
+        except KeyboardInterrupt:
+            print("\n취소됨")
+            exit(0)
 
 
 def main():
     config = Config()
     
-    checkpoint_path, start_iteration = get_start_iteration(config.training.save_dir) 
+    checkpoint_path, start_iteration = select_checkpoint(config.training.save_dir) 
     
     if config.gpu.device == "auto":
         import torch
