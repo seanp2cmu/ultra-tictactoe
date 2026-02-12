@@ -42,16 +42,19 @@ def find_latest_checkpoint(save_dir: str) -> tuple:
 def get_start_iteration(save_dir: str) -> tuple:
     """Get checkpoint path and start iteration.
     Returns (checkpoint_path, start_iteration)
-    Prefers latest checkpoint_*.pt over best.pt
+    Prefers best.pt over checkpoint_*.pt
     """
-    checkpoint_path, start_iteration = find_latest_checkpoint(save_dir)
+    # First try best.pt
+    checkpoint_path = find_best_checkpoint(save_dir)
+    start_iteration = 0
     
-    if checkpoint_path is None:
-        checkpoint_path = find_best_checkpoint(save_dir)
-        if checkpoint_path:
-            ckpt = torch.load(checkpoint_path, map_location='cpu')
-            saved_iter = ckpt.get('iteration', None)
-            if saved_iter is not None:
-                start_iteration = saved_iter + 1
+    if checkpoint_path:
+        ckpt = torch.load(checkpoint_path, map_location='cpu')
+        saved_iter = ckpt.get('iteration', None)
+        if saved_iter is not None:
+            start_iteration = saved_iter + 1
+    else:
+        # Fallback to latest checkpoint_*.pt
+        checkpoint_path, start_iteration = find_latest_checkpoint(save_dir)
     
     return checkpoint_path, start_iteration
