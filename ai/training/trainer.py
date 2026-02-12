@@ -6,6 +6,7 @@ from functools import wraps
 
 from .replay_buffer import SelfPlayData
 from .self_play import SelfPlayWorker, get_timing_stats, reset_timing_stats
+from .parallel_self_play import ParallelSelfPlayWorker
 from ai.mcts.agent import get_mcts_timing, reset_mcts_timing
 
 def timing(f):
@@ -90,30 +91,51 @@ class Trainer:
         temperature: float = 1.0,
         verbose: bool = False,
         disable_tqdm: bool = False,
-        num_simulations: Optional[int] = None
+        num_simulations: Optional[int] = None,
+        parallel_games: int = 1
     ) -> int:
-        """Generate self-play data."""
+        """Generate self-play data.
+        
+        Args:
+            parallel_games: Number of games to run in parallel (1 = sequential)
+        """
         all_data = []
+        sims = num_simulations if num_simulations is not None else self.num_simulations
         
         # Reset timing stats
         reset_timing_stats()
         reset_mcts_timing()
         
-        game_pbar = tqdm(range(num_games), desc="Self-play",
-                       leave=False, disable=disable_tqdm, ncols=100)
-        for i in game_pbar:
-            game_data = self._play_single_game(temperature, verbose, num_simulations)
-            all_data.extend(game_data)
+        if parallel_games > 1:
+            # Parallel self-play
+            worker = ParallelSelfPlayWorker(
+                network=self.network,
+                dtw_calculator=self.dtw_calculator,
+                num_simulations=sims,
+                temperature=temperature,
+                parallel_games=parallel_games
+            )
             
-            dtw_count = sum(1 for _, _, _, dtw in game_data if dtw is not None)
-            dtw_rate = dtw_count / len(game_data) if game_data else 0
-            avg_length = len(all_data) / (i + 1)
+            print(f"Parallel self-play: {parallel_games} games simultaneously")
+            all_data = worker.play_games(num_games)
             
-            game_pbar.set_postfix({
-                "samples": len(all_data),
-                "avg_len": f"{avg_length:.1f}",
-                "dtw%": f"{dtw_rate:.1%}"
-            })
+        else:
+            # Sequential self-play (original)
+            game_pbar = tqdm(range(num_games), desc="Self-play",
+                           leave=False, disable=disable_tqdm, ncols=100)
+            for i in game_pbar:
+                game_data = self._play_single_game(temperature, verbose, num_simulations)
+                all_data.extend(game_data)
+                
+                dtw_count = sum(1 for _, _, _, dtw in game_data if dtw is not None)
+                dtw_rate = dtw_count / len(game_data) if game_data else 0
+                avg_length = len(all_data) / (i + 1)
+                
+                game_pbar.set_postfix({
+                    "samples": len(all_data),
+                    "avg_len": f"{avg_length:.1f}",
+                    "dtw%": f"{dtw_rate:.1%}"
+                })
         
         for state, policy, value, dtw in all_data:
             self.replay_buffer.add(state, policy, value, dtw)
@@ -216,7 +238,8 @@ class Trainer:
         temperature: float = 1.0,
         verbose: bool = False,
         disable_tqdm: bool = False,
-        num_simulations: Optional[int] = None
+        num_simulations: Optional[int] = None,
+        parallel_games: int = 1
     ) -> Dict:
         """Single training iteration."""
         if verbose:
@@ -230,7 +253,8 @@ class Trainer:
             temperature=temperature,
             verbose=verbose,
             disable_tqdm=disable_tqdm,
-            num_simulations=num_simulations
+            num_simulations=num_simulations,
+            parallel_games=parallel_games
         )
         
         if verbose:

@@ -49,6 +49,7 @@ def main():
     print(f"\nGPU:")
     print(f"  Device: {device}")
     print(f"  AMP: {config.training.use_amp}")
+    print(f"  Parallel Games: {config.gpu.parallel_games}")
     print("=" * 80)
     
     trainer = Trainer(
@@ -111,7 +112,8 @@ def main():
             temperature=temp,
             verbose=False,
             disable_tqdm=False,
-            num_simulations=num_sims
+            num_simulations=num_sims,
+            parallel_games=config.gpu.parallel_games
         )
         
         print(f"\nIteration {iteration + 1} Results:")

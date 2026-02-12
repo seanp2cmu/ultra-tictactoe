@@ -82,7 +82,7 @@ class SelfPlayWorker:
             network, 
             num_simulations=num_simulations, 
             temperature=temperature,
-            batch_size=32,  # GPU에서 더 효율적
+            batch_size=32, 
             dtw_calculator=self.dtw_calculator
         )
     
