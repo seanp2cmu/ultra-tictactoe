@@ -38,7 +38,7 @@ def main():
     print(f"  Channels: {config.network.num_channels}")
     print(f"\nTraining:")
     print(f"  Iterations: {config.training.num_iterations}")
-    print(f"  Games per iteration: {config.training.num_self_play_games // 3} → {config.training.num_self_play_games} (adaptive)")
+    print(f"  Games per iteration: {config.training.num_self_play_games} (adaptive)")
     print(f"  Training epochs: {config.training.num_train_epochs}")
     print(f"  MCTS simulations: 200 → {config.training.num_simulations} (adaptive)")
     print(f"  Batch size: {config.training.batch_size}")
@@ -89,7 +89,7 @@ def main():
         config.training.num_simulations // 4, config.training.num_simulations
     )
     get_num_games = create_games_schedule(
-        config.training.num_self_play_games // 3, config.training.num_self_play_games,  step=config.gpu.parallel_games
+        config.training.num_self_play_games // 4, config.training.num_self_play_games,  step=config.gpu.parallel_games
     )
     
     print("=" * 80)
