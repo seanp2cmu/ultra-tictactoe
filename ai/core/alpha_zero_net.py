@@ -55,6 +55,14 @@ class AlphaZeroNet:
         self.scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
         self.predict_lock = threading.Lock()
         self._compiled = False
+        
+        # torch.compile for faster inference (PyTorch 2.0+)
+        if torch.cuda.is_available() and hasattr(torch, 'compile'):
+            try:
+                self.model = torch.compile(self.model, mode='reduce-overhead')
+                self._compiled = True
+            except Exception:
+                pass  # Fallback to eager mode
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Thread-safe single board prediction with canonical form."""
