@@ -110,18 +110,15 @@ class Trainer:
                     cache_stats = self.dtw_calculator.get_stats()
                     print(f"DTW Cache: {cache_stats}")
         
-        # Print timing stats
-        self._print_timing_stats()
+        # Log timing stats to file
+        self._log_timing_stats()
         
         return len(all_data)
     
-    def _print_timing_stats(self):
-        """Print detailed timing breakdown for parallel self-play."""
+    def _log_timing_stats(self, log_path: str = "./model/training.log"):
+        """Log timing breakdown to file."""
+        import datetime
         stats = get_parallel_timing()
-        
-        print("\n" + "="*60)
-        print("⏱️  TIMING BREAKDOWN (Parallel Self-Play)")
-        print("="*60)
         
         total = stats['total_time']
         network = stats['network_time']
@@ -131,20 +128,10 @@ class Trainer:
             network_pct = (network / total) * 100
             overhead_pct = (overhead / total) * 100
             
-            print(f"\n[Summary]")
-            print(f"  Total Time: {total:.1f}s")
-            print(f"  Games: {stats['games']}, Moves: {stats['moves']}")
-            print(f"  Batches: {stats['batches']}")
-            if stats['games'] > 0:
-                print(f"  Avg Time/Game: {total / stats['games']:.2f}s")
-            
-            print(f"\n[Breakdown]")
-            print(f"  Network Inference: {network:.1f}s ({network_pct:.1f}%)")
-            print(f"  MCTS Overhead: {overhead:.1f}s ({overhead_pct:.1f}%)")
-        else:
-            print("  No timing data available")
-        
-        print("="*60)
+            with open(log_path, 'a') as f:
+                f.write(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] TIMING\n")
+                f.write(f"  Total: {total:.1f}s | Games: {stats['games']} | Moves: {stats['moves']}\n")
+                f.write(f"  Network: {network:.1f}s ({network_pct:.1f}%) | MCTS: {overhead:.1f}s ({overhead_pct:.1f}%)\n")
     
     def train(self, num_epochs: int = 10, verbose: bool = False, disable_tqdm: bool = False) -> Dict:
         """Train network on replay buffer."""

@@ -207,9 +207,8 @@ class CompressedTranspositionTable:
         with open(filepath, 'wb') as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
         
-        size_mb = os.path.getsize(filepath) / 1024 / 1024
-        print(f"✓ DTW cache saved: {filepath} ({size_mb:.1f} MB)")
-        print(f"  Entries: {len(self.hot)} hot + {len(self.cold)} cold")
+        # Silent save - log to file if needed
+        pass
     
     def load_from_file(self, filepath):
         """

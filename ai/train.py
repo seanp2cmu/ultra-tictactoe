@@ -87,7 +87,6 @@ def main():
     num_sims = config.training.num_simulations  # 800 고정
     num_games = config.training.num_self_play_games  # 2048 고정
     
-    print("=" * 80)
     print("Starting training...")
     print("=" * 80 + "\n")
     
@@ -148,26 +147,11 @@ def main():
             if (iteration + 1) % 10 == 0:
                 upload_to_hf(dtw_cache_path, 'dtw_cache.pkl')
     
-    print("\n" + "="*80)
-    print(f"Training completed! Best loss: {best_loss:.4f}")
-    print("="*80)
+    print(f"\n✓ Training completed! Best loss: {best_loss:.4f}")
     
     if trainer.dtw_calculator and trainer.dtw_calculator.tt:
         dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
         trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
-        print(f"✓ DTW cache saved to {dtw_cache_path}")
-        
-        stats = trainer.dtw_calculator.get_stats()
-        if stats:
-            print(f"  Final cache size: {stats.get('total_mb', 0):.1f} MB")
-            print(f"  Hit rate: {stats.get('hit_rate', 'N/A')}")
-    
-    if trainer.dtw_calculator:
-        final_stats = trainer.dtw_calculator.get_stats()
-        print("\nFinal DTW Statistics:")
-        print(f"  Total queries: {final_stats.get('total_queries', 0)}")
-        print(f"  Hit rate: {final_stats.get('hit_rate', 'N/A')}")
-        print(f"  Cache size: {final_stats.get('total_mb', 0):.2f} MB")
 
 
 if __name__ == '__main__':
