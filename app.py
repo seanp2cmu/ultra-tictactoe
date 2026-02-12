@@ -13,13 +13,19 @@ def build_extensions():
         return  # Skip on local
     
     try:
+        # Install build dependencies first
+        print("Installing build dependencies...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "Cython", "pybind11", "numpy"], 
+                      capture_output=True, check=True)
+        print("✓ Build dependencies installed")
+        
         print("Building Cython extensions...")
         result = subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"], 
                       capture_output=True, text=True)
         if result.returncode == 0:
             print("✓ Cython extensions built")
         else:
-            print(f"⚠ Cython build output: {result.stderr}")
+            print(f"⚠ Cython build error: {result.stderr}")
         
         print("Building C++ extensions...")
         result = subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"],
@@ -27,7 +33,7 @@ def build_extensions():
         if result.returncode == 0:
             print("✓ C++ extensions built")
         else:
-            print(f"⚠ C++ build output: {result.stderr}")
+            print(f"⚠ C++ build error: {result.stderr}")
     except Exception as e:
         print(f"⚠ Build error: {e}")
 
