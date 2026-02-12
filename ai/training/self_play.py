@@ -6,7 +6,7 @@ import time
 from game import Board
 from ai.core import AlphaZeroNet
 from ai.endgame import DTWCalculator
-from ai.mcts.node import Node
+from ai.mcts import Node
 from utils import BoardSymmetry
 
 
@@ -174,7 +174,7 @@ class ParallelMCTS:
         return results
 
 
-class ParallelSelfPlayWorker:
+class SelfPlayWorker:
     """Self-play worker that runs multiple games in parallel."""
     
     def __init__(

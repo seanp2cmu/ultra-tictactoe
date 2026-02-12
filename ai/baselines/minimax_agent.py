@@ -7,6 +7,13 @@ from game import Board
 import copy
 
 
+def _get_completed_2d(board):
+    """Get completed_boards as 2D list (BoardCy compatible)."""
+    if hasattr(board, 'get_completed_boards_2d'):
+        return board.get_completed_boards_2d()
+    return board.completed_boards
+
+
 class MinimaxAgent:
     """Agent using minimax search with alpha-beta pruning."""
     
@@ -61,8 +68,8 @@ class MinimaxAgent:
         """Minimax with alpha-beta pruning."""
         self.nodes_searched += 1
         
-        # Terminal or depth limit
-        if board.winner is not None:
+        # Terminal or depth limit (BoardCy uses -1 for no winner)
+        if board.winner is not None and board.winner != -1:
             if board.winner == original_player:
                 return 10000 + depth  # Win (prefer faster wins)
             elif board.winner == 3:
@@ -110,9 +117,10 @@ class MinimaxAgent:
         score = 0.0
         
         # 1. Count won local boards
+        completed = _get_completed_2d(board)
         player_boards = 0
         opponent_boards = 0
-        for row in board.completed_boards:
+        for row in completed:
             for cell in row:
                 if cell == player:
                     player_boards += 1
@@ -122,13 +130,13 @@ class MinimaxAgent:
         score += (player_boards - opponent_boards) * 100
         
         # 2. Meta board 2-in-a-row
-        score += self._count_meta_threats(board.completed_boards, player) * 50
-        score -= self._count_meta_threats(board.completed_boards, opponent) * 50
+        score += self._count_meta_threats(completed, player) * 50
+        score -= self._count_meta_threats(completed, opponent) * 50
         
         # 3. Local board control (pieces on uncompleted boards)
         for i in range(9):
             meta_row, meta_col = i // 3, i % 3
-            if board.completed_boards[meta_row][meta_col] == 0:
+            if completed[meta_row][meta_col] == 0:
                 local_board = board.get_sub_board(i)
                 
                 # Count pieces
@@ -147,9 +155,9 @@ class MinimaxAgent:
                     score -= 5
         
         # 4. Center meta board bonus
-        if board.completed_boards[1][1] == player:
+        if completed[1][1] == player:
             score += 30
-        elif board.completed_boards[1][1] == opponent:
+        elif completed[1][1] == opponent:
             score -= 30
         
         return score

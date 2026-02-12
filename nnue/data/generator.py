@@ -8,7 +8,7 @@ import numpy as np
 from game import Board
 from ai.core import AlphaZeroNet
 from ai.mcts import AlphaZeroAgent
-from ai.mcts.node import Node
+from ai.mcts import Node
 from ai.endgame import DTWCalculator
 from nnue.config import NNUEConfig
 from nnue.data.skipping import PositionFilter

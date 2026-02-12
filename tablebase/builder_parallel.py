@@ -15,8 +15,7 @@ from collections import defaultdict
 from typing import Dict, Set, Optional, List, Tuple
 from multiprocessing import Pool, cpu_count
 
-from game.board import Board
-from game import USING_CYTHON
+from game import Board
 from .solver import TablebaseSolver
 from .enumerator import PositionEnumerator
 from .tablebase import CompactTablebase

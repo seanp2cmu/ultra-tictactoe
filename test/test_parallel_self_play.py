@@ -7,7 +7,7 @@ sys.path.insert(0, '.')
 import numpy as np
 from game import Board
 from ai.core import AlphaZeroNet
-from ai.training.parallel_self_play import ParallelMCTS, ParallelSelfPlayWorker
+from ai.training.self_play import ParallelMCTS, SelfPlayWorker
 from ai.endgame import DTWCalculator
 
 
@@ -65,7 +65,7 @@ def test_parallel_worker():
     network = AlphaZeroNet(device='mps')
     dtw = DTWCalculator(use_cache=True)
     
-    worker = ParallelSelfPlayWorker(
+    worker = SelfPlayWorker(
         network=network,
         dtw_calculator=dtw,
         num_simulations=30,  # Low for testing
@@ -127,7 +127,7 @@ def test_speed_comparison():
     
     # Parallel
     print(f"Parallel: {num_games} games simultaneously, {num_sims} sims each...")
-    parallel_worker = ParallelSelfPlayWorker(
+    parallel_worker = SelfPlayWorker(
         network=network,
         dtw_calculator=dtw,
         num_simulations=num_sims,

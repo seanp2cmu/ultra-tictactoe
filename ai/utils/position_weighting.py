@@ -2,7 +2,7 @@
 포지션별 학습 가중치
 전환 구간(26-29칸)에 집중, 엔드게임 영역은 낮게
 """
-from game.board import Board
+from game import Board
 
 
 class WeightedSampleBuffer:

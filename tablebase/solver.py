@@ -83,8 +83,8 @@ class TablebaseSolver:
         Progressive solver - lookup children from previous levels.
         Optimized: constraint-based moves + undo pattern (no clone).
         """
-        # Terminal check
-        if board.winner is not None:
+        # Terminal check (BoardCy uses -1 for no winner)
+        if board.winner is not None and board.winner != -1:
             if board.winner == 3:  # Draw
                 return (0, 0, None)
             return (-1, 0, None)
@@ -120,8 +120,8 @@ class TablebaseSolver:
             target_sub_r, target_sub_c = r % 3, c % 3
             target_sub = target_sub_r * 3 + target_sub_c
             
-            # Evaluate child
-            if board.winner is not None:
+            # Evaluate child (BoardCy uses -1 for no winner)
+            if board.winner is not None and board.winner != -1:
                 child_result = -1 if board.winner != 3 else 0
                 child_dtw = 0
             elif (board.get_completed_state(target_sub) if hasattr(board, 'get_completed_state') else board.completed_boards[target_sub_r][target_sub_c]) != 0:
@@ -220,8 +220,8 @@ class TablebaseSolver:
                 self.stats['base_hits'] += 1
                 return (result, dtw)
         
-        # Not found - check if terminal
-        if board.winner is not None:
+        # Not found - check if terminal (BoardCy uses -1 for no winner)
+        if board.winner is not None and board.winner != -1:
             return (-1 if board.winner != 3 else 0, 0)
         elif not board.get_legal_moves():
             return (0, 0)
@@ -250,7 +250,7 @@ class TablebaseSolver:
                     best_dtw = dtw
         
         if best_result == -2:
-            if board.winner is not None:
+            if board.winner is not None and board.winner != -1:
                 return (-1 if board.winner != 3 else 0, 0)
             elif not board.get_legal_moves():
                 return (0, 0)

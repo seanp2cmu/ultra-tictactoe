@@ -1,10 +1,9 @@
-try:
-    from .board_cy import BoardCy as Board
-    USING_CYTHON = True
-except ImportError:
-    from .board import Board
-    USING_CYTHON = False
+# Board: Cython (트레이닝용)
+from .board_cy import BoardCy as Board
 
-from .board import Board as BoardPy
+# C++ Board + DTW (엔드게임용)
+import sys
+sys.path.insert(0, 'cpp')
+from uttt_cpp import Board as BoardCpp, DTWCalculator as DTWCalculatorCpp
 
-__all__ = ['Board', 'BoardPy', 'USING_CYTHON']
+__all__ = ['Board', 'BoardCpp', 'DTWCalculatorCpp']

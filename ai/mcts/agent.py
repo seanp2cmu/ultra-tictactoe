@@ -5,7 +5,7 @@ import time
 import numpy as np
 from game import Board
 
-from .node import Node
+from .node_cy import NodeCy as Node
 from ai.core import AlphaZeroNet
 
 # 디버깅용 타이밍

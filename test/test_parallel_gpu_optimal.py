@@ -15,7 +15,7 @@ import numpy as np
 
 from ai.core import AlphaZeroNet
 from ai.endgame import DTWCalculator
-from ai.training.parallel_self_play import ParallelSelfPlayWorker
+from ai.training.self_play import SelfPlayWorker
 from ai.training.self_play import SelfPlayWorker
 
 
@@ -45,7 +45,7 @@ def test_parallel_games(network, dtw, num_parallel, num_sims=100):
     """Test with specific number of parallel games."""
     clear_gpu_memory()
     
-    worker = ParallelSelfPlayWorker(
+    worker = SelfPlayWorker(
         network=network,
         dtw_calculator=dtw,
         num_simulations=num_sims,

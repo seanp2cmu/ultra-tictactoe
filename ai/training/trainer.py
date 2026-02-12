@@ -5,7 +5,7 @@ import time
 from functools import wraps
 
 from .replay_buffer import SelfPlayData
-from .parallel_self_play import ParallelSelfPlayWorker, reset_parallel_timing, get_parallel_timing
+from .self_play import SelfPlayWorker, reset_parallel_timing, get_parallel_timing
 
 def timing(f):
     @wraps(f)
@@ -81,7 +81,7 @@ class Trainer:
         reset_parallel_timing()
         
         # Parallel self-play
-        worker = ParallelSelfPlayWorker(
+        worker = SelfPlayWorker(
             network=self.network,
             dtw_calculator=self.dtw_calculator,
             num_simulations=sims,

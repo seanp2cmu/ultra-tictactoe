@@ -1,57 +1,43 @@
 """
-Distance to Win (DTW) Calculator
+Distance to Win (DTW) Calculator - C++ Implementation
 """
 from .transposition_table import CompressedTranspositionTable
-from game import Board
+from game import Board, BoardCpp, DTWCalculatorCpp
+
+
+def _board_to_cpp(board):
+    """Convert BoardCy to BoardCpp for C++ DTW."""
+    board_cpp = BoardCpp()
+    for r in range(9):
+        for c in range(9):
+            val = board.get_cell(r, c)
+            if val != 0:
+                board_cpp.set_cell(r, c, val)
+    board_cpp.set_completed_boards_2d(board.get_completed_boards_2d())
+    board_cpp.completed_mask = board.completed_mask
+    board_cpp.current_player = board.current_player
+    board_cpp.winner = board.winner
+    if board.last_move:
+        board_cpp.last_move = board.last_move
+    return board_cpp
 
 
 class DTWCalculator:
-    _MOVE_PRIORITY = (
-        (1, 1, 1, 1, 1, 1, 1, 1, 1),
-        (1, 0, 1, 1, 0, 1, 1, 0, 1),
-        (1, 1, 1, 1, 1, 1, 1, 1, 1),
-        (1, 1, 1, 1, 1, 1, 1, 1, 1),
-        (1, 0, 1, 1, 0, 1, 1, 0, 1),
-        (1, 1, 1, 1, 1, 1, 1, 1, 1),
-        (1, 1, 1, 1, 1, 1, 1, 1, 1),
-        (1, 0, 1, 1, 0, 1, 1, 0, 1),
-        (1, 1, 1, 1, 1, 1, 1, 1, 1),
-    )
-    
-    @staticmethod
-    def _get_move_priority(move):
-        r, c = move
-        local_r, local_c = r % 3, c % 3
-        if local_r == 1 and local_c == 1:
-            return 0
-        elif (local_r == 0 or local_r == 2) and (local_c == 0 or local_c == 2):
-            return 1
-        return 2
+    """DTW Calculator using C++ implementation."""
     
     def __init__(self, use_cache=True, hot_size=50000, cold_size=500000,
-                 endgame_threshold=15, max_nodes=100000):
-        """
-        Args:
-            use_cache: if True, use transposition table
-            hot_size: hot cache size
-            cold_size: cold cache size
-            endgame_threshold: endgame threshold (complete search)
-            max_nodes: maximum nodes to search before giving up
-        
-        Note: 
-            - ≤15 cells: complete DTW search
-            - >15 cells: MCTS only (no shallow search)
-        """
+                 endgame_threshold=15, max_nodes=10000000):
         self.use_cache = use_cache
         self.endgame_threshold = endgame_threshold
         self.max_nodes = max_nodes
-        self._node_count = 0
         
         # Statistics
         self._total_searches = 0
-        self._total_nodes = 0
-        self._aborted_searches = 0
         
+        # C++ DTW
+        self._cpp_dtw = DTWCalculatorCpp(use_cache, endgame_threshold, max_nodes)
+        
+        # Python cache for BoardCy keys
         if use_cache:
             self.tt = CompressedTranspositionTable(
                 hot_size=hot_size, 
@@ -63,7 +49,6 @@ class DTWCalculator:
     def is_endgame(self, board: Board):
         return board.count_playable_empty_cells() <= self.endgame_threshold
     
-    
     def lookup_cache(self, board: Board):
         """Cache lookup only (no search). Returns cached result or None."""
         if self.use_cache and self.tt:
@@ -72,10 +57,7 @@ class DTWCalculator:
     
     def calculate_dtw(self, board: Board, _empty_count: int = None):
         """
-        DTW calculation (Alpha-Beta Search)
-        
-        15 cells or less: complete search
-        16 cells or more: shallow search (depth limit)
+        DTW calculation using C++ Alpha-Beta Search.
         
         Returns:
             (result, dtw, best_move) or None
@@ -83,6 +65,7 @@ class DTWCalculator:
             - dtw: Distance to Win/Loss
             - best_move: (row, col) or None
         """
+        # Check Python cache first
         if self.use_cache and self.tt:
             cached = self.tt.get(board)
             if cached is not None:
@@ -92,111 +75,16 @@ class DTWCalculator:
         if empty_count > self.endgame_threshold:
             return None
         
-        self._node_count = 0  # Reset node counter
-        result, dtw, best_move = self._alpha_beta_search(board)
-        
+        # Convert to C++ Board and calculate
+        board_cpp = _board_to_cpp(board)
+        result = self._cpp_dtw.calculate_dtw(board_cpp)
         self._total_searches += 1
-        self._total_nodes += self._node_count
         
-        # If search was aborted due to node limit, return None
-        if result == -2:
-            self._aborted_searches += 1
-            return None
+        # Store in Python cache
+        if result is not None and self.use_cache and self.tt:
+            self.tt.put(board, result[0], result[1], result[2])
         
-        if self.use_cache and self.tt:
-            self.tt.put(board, result, dtw, best_move)
-        
-        return (result, dtw, best_move)
-    
-    def _alpha_beta_search(self, board: Board, depth: int = 0, alpha: int = -2, beta: int = 2):
-        """
-        Alpha-Beta Pruning Search
-
-        Complete search for 15 cells or less using alpha-beta pruning
-        Shallow search for 16 cells or more using alpha-beta pruning with depth limit
-        
-        Args:
-            board: current board
-            depth: current recursive depth (DTW calculation)
-            alpha: Alpha value (minimum guarantee for maximizing player)
-            beta: Beta value (maximum guarantee for minimizing player)
-        
-        Returns:
-            (result, dtw, best_move)
-            - result: 1 (win), -1 (loss), 0 (draw), -2 (aborted)
-            - dtw: Distance to Win/Loss
-            - best_move: (row, col) or None
-        """
-        self._node_count += 1
-        if self._node_count > self.max_nodes:
-            return (-2, float('inf'), None)  # Abort: too many nodes
-        
-        if board.winner is not None:
-            if board.winner == board.current_player:
-                return (1, 0, None)
-            elif board.winner == 3:
-                return (0, 0, None)
-            else:
-                return (-1, 0, None)
-        
-        legal_moves = board.get_legal_moves()
-        if not legal_moves:
-            return (0, 0, None)
-        
-        legal_moves = sorted(legal_moves, key=DTWCalculator._get_move_priority)
-        
-        best_move = None
-        best_result = -2
-        best_dtw = float('inf')
-        
-        for move in legal_moves:
-            next_board = board.clone()
-            next_board.make_move(move[0], move[1])
-            
-            if self.use_cache and self.tt:
-                cached = self.tt.get(next_board)
-                if cached is not None:
-                    opponent_result, opponent_dtw, _ = cached
-                else:
-                    opponent_result, opponent_dtw, _ = self._alpha_beta_search(
-                        next_board, depth + 1, -beta, -alpha
-                    )
-                    if opponent_result == -2:  # Aborted
-                        return (-2, float('inf'), None)
-                    self.tt.put(next_board, opponent_result, opponent_dtw, None)
-            else:
-                opponent_result, opponent_dtw, _ = self._alpha_beta_search(
-                    next_board, depth + 1, -beta, -alpha
-                )
-                if opponent_result == -2:  # Aborted
-                    return (-2, float('inf'), None)
-            
-            my_result = -opponent_result
-            my_dtw = opponent_dtw + 1 if opponent_dtw != float('inf') else float('inf')
-            
-            if my_result > best_result:
-                best_result = my_result
-                best_dtw = my_dtw
-                best_move = move
-                alpha = max(alpha, my_result)
-            elif my_result == best_result:
-                if my_result > 0:
-                    if my_dtw < best_dtw:
-                        best_dtw = my_dtw
-                        best_move = move
-                elif my_result < 0:
-                    if my_dtw > best_dtw:
-                        best_dtw = my_dtw
-                        best_move = move
-                else:
-                    if my_dtw < best_dtw:
-                        best_dtw = my_dtw
-                        best_move = move
-            
-            if alpha >= beta:
-                break
-        
-        return (best_result, best_dtw, best_move)
+        return result
     
     def get_best_winning_move(self, board: Board):
         """
@@ -248,14 +136,12 @@ class DTWCalculator:
         stats = {}
         if self.use_cache and self.tt:
             stats = self.tt.get_stats()
+        cpp_stats = self._cpp_dtw.get_stats()
+        stats.update(cpp_stats)
         stats['dtw_searches'] = self._total_searches
-        stats['dtw_nodes'] = self._total_nodes
-        stats['dtw_aborted'] = self._aborted_searches
-        stats['dtw_avg_nodes'] = self._total_nodes / max(1, self._total_searches)
         return stats
     
     def reset_search_stats(self):
         self._total_searches = 0
-        self._total_nodes = 0
-        self._aborted_searches = 0
+        self._cpp_dtw.reset_search_stats()
     

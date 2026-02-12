@@ -155,14 +155,22 @@ def board_from_dict(board_dict):
         for c in range(9):
             if boards_data[r][c] != 0:
                 board.set_cell(r, c, boards_data[r][c])
-    board.completed_boards = board_dict.get('completed_boards', [[0]*3 for _ in range(3)])
+    # Set completed_boards (BoardCy compatible)
+    cb_data = board_dict.get('completed_boards', [[0]*3 for _ in range(3)])
+    if hasattr(board, 'set_completed_boards_2d'):
+        board.set_completed_boards_2d(cb_data)
+    else:
+        board.completed_boards = cb_data
     # Sync completed_mask
+    completed = board.get_completed_boards_2d() if hasattr(board, 'get_completed_boards_2d') else board.completed_boards
     for sub_idx in range(9):
         sub_r, sub_c = sub_idx // 3, sub_idx % 3
-        if board.completed_boards[sub_r][sub_c] != 0:
+        if completed[sub_r][sub_c] != 0:
             board.completed_mask |= (1 << sub_idx)
     board.current_player = board_dict.get('current_player', 1)
-    board.winner = board_dict.get('winner', None)
+    # BoardCy uses -1 for no winner, Python Board uses None
+    raw_winner = board_dict.get('winner', None)
+    board.winner = -1 if raw_winner is None else raw_winner
     board.last_move = tuple(board_dict['last_move']) if board_dict.get('last_move') else None
     return board
 
@@ -382,10 +390,10 @@ def predict(model_name, board_json, num_simulations=200):
         
         board = board_from_dict(board_data)
         
-        if board.winner is not None:
+        if board.winner not in (None, -1):
             return json.dumps({
                 'error': 'Game is already over',
-                'winner': board.winner
+                'winner': int(board.winner)
             }, indent=2)
         
         agent = AlphaZeroAgent(
