@@ -91,12 +91,8 @@ def main():
     print("Starting training...")
     print("=" * 80 + "\n")
     
-    for iteration in tqdm(range(start_iteration, config.training.num_iterations), desc="Training Progress", ncols=100, initial=start_iteration, total=config.training.num_iterations):
+    for iteration in tqdm(range(start_iteration, config.training.num_iterations), desc="Training", ncols=100, initial=start_iteration, total=config.training.num_iterations, leave=True, position=0):
         iter_start_time = time.time()
-        
-        print(f"\n{'='*80}")
-        print(f"Iteration {iteration + 1}/{config.training.num_iterations} (Temp: {temp:.2f}, Sims: {num_sims}, Games: {num_games})")
-        print(f"{'='*80}")
         
         result = trainer.train_iteration(
             num_self_play_games=num_games,
@@ -109,57 +105,41 @@ def main():
             iteration=iteration
         )
         
-        print(f"\nIteration {iteration + 1} Results:")
-        print(f"  Samples: {result['num_samples']}")
-        print(f"  Total Loss: {result['avg_loss']['total_loss']:.4f}")
-        print(f"  Policy Loss: {result['avg_loss']['policy_loss']:.4f}")
-        print(f"  Value Loss: {result['avg_loss']['value_loss']:.4f}")
-        if 'learning_rate' in result:
-            print(f"  Learning Rate: {result['learning_rate']:.6f}")
+        # Compact output - single line per iteration
+        iter_elapsed = time.time() - iter_start_time
+        loss = result['avg_loss']['total_loss']
+        samples = result['num_samples']
+        buffer_stats = trainer.replay_buffer.get_stats() if hasattr(trainer.replay_buffer, 'get_stats') else {}
+        buffer_total = buffer_stats.get('total', 0)
         
-        if hasattr(trainer.replay_buffer, 'get_stats'):
-            buffer_stats = trainer.replay_buffer.get_stats()
-            if buffer_stats:
-                print(f"  Buffer: {buffer_stats.get('total', 0)} samples, {buffer_stats.get('games', 0)} games")
+        tqdm.write(f"[{iteration+1:03d}] Loss: {loss:.4f} | Samples: {samples:,} | Buffer: {buffer_total:,} | Time: {iter_elapsed:.0f}s")
         
         if 'dtw_stats' in result:
-            stats = result['dtw_stats']
-            print(f"  DTW Cache Hit Rate: {stats.get('hit_rate', 'N/A')}")
-            print(f"  DTW Cache Size: {stats.get('total_mb', 0):.2f} MB")
-            print(f"  DTW Searches: {stats.get('dtw_searches', 0):,} (Aborted: {stats.get('dtw_aborted', 0)}) Avg: {stats.get('dtw_avg_nodes', 0):.0f} nodes")
             trainer.dtw_calculator.reset_search_stats()
-        
-        iter_elapsed = time.time() - iter_start_time
-        iter_mins, iter_secs = divmod(int(iter_elapsed), 60)
-        iter_hours, iter_mins = divmod(iter_mins, 60)
-        current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"  Iteration Time: {iter_hours:02d}:{iter_mins:02d}:{iter_secs:02d}")
-        print(f"  Completed at: {current_time}")
         
         current_loss = result['avg_loss']['total_loss']
         if current_loss < best_loss:
             best_loss = current_loss
             save_path = os.path.join(config.training.save_dir, 'best.pt')
             trainer.save(save_path, iteration=iteration)
-            print(f"\n✓ New best! (loss: {best_loss:.4f})")
+            tqdm.write(f"  ✓ New best! (loss: {best_loss:.4f})")
             upload_to_hf(save_path, 'best.pt')
         
         if (iteration + 1) % 5 == 0:
             ckpt_path = os.path.join(config.training.save_dir, f'checkpoint_{iteration + 1}.pt')
             trainer.save(ckpt_path, iteration=iteration)
-            print(f"✓ Checkpoint saved: checkpoint_{iteration + 1}.pt")
+            tqdm.write(f"  ✓ Checkpoint: checkpoint_{iteration + 1}.pt")
             
             old_iter = iteration + 1 - 10
             if old_iter > 0:
                 old_path = os.path.join(config.training.save_dir, f'checkpoint_{old_iter}.pt')
                 if os.path.exists(old_path):
                     os.remove(old_path)
-                    print(f"  (Deleted old checkpoint: checkpoint_{old_iter}.pt)")
         
         if (iteration + 1) % 20 == 0:
             model_path = os.path.join(config.training.save_dir, f'model_{iteration + 1}.pt')
             trainer.save(model_path, iteration=iteration)
-            print(f"✓ Model saved: model_{iteration + 1}.pt")
+            tqdm.write(f"  ✓ Model: model_{iteration + 1}.pt → HF")
             upload_to_hf(model_path, f'model_{iteration + 1}.pt')
         
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:
