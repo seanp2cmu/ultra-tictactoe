@@ -1,5 +1,8 @@
 import os
 import time
+import torch._inductor.config
+torch._inductor.config.triton.cudagraph_dynamic_shape_warn_limit = None
+
 from tqdm import tqdm
 from ai.config import Config
 from ai.training import Trainer
