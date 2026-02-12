@@ -265,10 +265,19 @@ class SelfPlayWorker:
                 # MCTS for non-endgame games
                 mcts_results = []
                 if mcts_games:
+                    # temp=1 for first 8 moves, then temp=0
+                    game_temps = []
+                    for g in mcts_games:
+                        move_count = len(g['history'])
+                        game_temps.append(self.temperature if move_count < 8 else 0)
+                    
+                    # Use average temp for batch (all games in batch are similar stage)
+                    batch_temp = sum(game_temps) / len(game_temps) if game_temps else 0
+                    
                     results = self.mcts.search_parallel(
                         mcts_games,
-                        temperature=self.temperature,
-                        add_noise=True
+                        temperature=batch_temp,
+                        add_noise=(batch_temp > 0)
                     )
                     mcts_results = list(zip(mcts_games, results))
                 
