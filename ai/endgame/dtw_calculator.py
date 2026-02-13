@@ -16,8 +16,8 @@ def _board_to_cpp(board):
     # sub_counts: compute from bitmasks (popcount)
     sub_counts = []
     for i in range(9):
-        x_count = bin(board.x_masks[i]).count('1')
-        o_count = bin(board.o_masks[i]).count('1')
+        x_count = int(board.x_masks[i]).bit_count()
+        o_count = int(board.o_masks[i]).bit_count()
         sub_counts.append([x_count, o_count])
     board_cpp.sub_counts = sub_counts
     

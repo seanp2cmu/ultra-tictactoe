@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from game import Board
-from utils.board_encoder import BoardEncoder
-from utils._board_symmetry import _BoardSymmetry
+from utils._board_encoder_cy import BoardEncoderCy as BoardEncoder
+from utils._board_symmetry_cy import _BoardSymmetryCy as _BoardSymmetry
 
 
 def make_random_board(num_moves=None):

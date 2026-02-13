@@ -7,7 +7,7 @@ import numpy as np
 from torch.amp import autocast
 
 from game import Board
-from utils.board_encoder import BoardEncoder
+from utils import BoardEncoder
 
 
 class SEBlock(nn.Module):

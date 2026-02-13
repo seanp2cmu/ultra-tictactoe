@@ -140,14 +140,14 @@ class SelfPlayWorker:
                     })
                     
                     row, col = action // 9, action % 9
-                    if (row, col) in board.get_legal_moves():
+                    try:
                         board.make_move(row, col)
-                    else:
+                    except Exception:
                         legal = board.get_legal_moves()
                         if legal:
                             board.make_move(*legal[0])
                     
-                    if board.winner not in (None, -1) or not board.get_legal_moves():
+                    if board.is_game_over():
                         game['done'] = True
                         
                         if board.winner in (None, -1, 3):

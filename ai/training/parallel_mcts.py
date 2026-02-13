@@ -80,8 +80,9 @@ class ParallelMCTS:
         if add_noise:
             noise_batch = np.random.dirichlet([0.3] * 81, size=len(roots))
             policies = 0.75 * policies + 0.25 * noise_batch
+        policies_f32 = policies.astype(np.float32) if policies.dtype != np.float32 else policies
         for i, root in enumerate(roots):
-            root.expand(dict(enumerate(policies[i])))
+            root.expand_numpy(policies_f32[i])
         
         # Run simulations — 1 leaf per game per iteration, correct sim count
         for sim in range(self.num_simulations):
@@ -107,9 +108,10 @@ class ParallelMCTS:
             policies_batch, values_batch = self.network.predict_batch(all_boards)
             _parallel_timing['network_time'] += time.perf_counter() - t0
             
+            values_np = 2.0 * values_batch[:len(all_leaves)].ravel() - 1.0
             for i, (game_idx, node, search_path) in enumerate(all_leaves):
                 policy = policies_batch[i]
-                value = 2.0 * values_batch[i].item() - 1.0
+                value = float(values_np[i])
                 
                 if self.dtw_calculator and self.dtw_calculator.is_endgame(node.board):
                     cached = self.dtw_calculator.lookup_cache(node.board)
@@ -117,7 +119,7 @@ class ParallelMCTS:
                         result, _, _ = cached
                         value = float(result)
                 
-                node.expand(dict(enumerate(policy)))
+                node.expand_numpy(policy.astype(np.float32) if policy.dtype != np.float32 else policy)
                 
                 for path_node in reversed(search_path):
                     path_node.update(value)
@@ -126,10 +128,9 @@ class ParallelMCTS:
         # Select moves
         results = []
         for i, root in enumerate(roots):
-            visits = np.array([
-                root.children[a].visits if a in root.children else 0
-                for a in range(81)
-            ])
+            visits = np.zeros(81, dtype=np.float32)
+            for action, child in root.children.items():
+                visits[action] = child.visits
             
             if visits.sum() == 0:
                 legal = root.board.get_legal_moves()

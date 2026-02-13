@@ -74,8 +74,7 @@ class AlphaZeroAgent:
             noise = np.random.dirichlet([0.3] * 81)  # alpha=0.3 for 9x9 board (AlphaZero used 0.03 for Go)
             policy_probs = 0.75 * policy_probs + 0.25 * noise  # 25% noise weight
         
-        action_probs = dict(enumerate(policy_probs))
-        root.expand(action_probs)
+        root.expand_numpy(policy_probs.astype(np.float32))
         
         num_batches = (self.num_simulations + self.batch_size - 1) // self.batch_size
         
@@ -133,8 +132,7 @@ class AlphaZeroAgent:
                             value = float(result)  # DTW result is already -1/0/1
                     
                     t0 = time.time()
-                    action_probs = dict(enumerate(policy_probs))
-                    node.expand(action_probs)
+                    node.expand_numpy(policy_probs.astype(np.float32) if policy_probs.dtype != np.float32 else policy_probs)
                     _mcts_timing['expand'] += time.time() - t0
                 
                 t0 = time.time()

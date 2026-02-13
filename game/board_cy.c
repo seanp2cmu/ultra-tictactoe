@@ -8285,7 +8285,7 @@ static PyObject *__pyx_pf_4game_8board_cy_7BoardCy_22count_playable_empty_cells(
  *         return count
  * 
  *     cdef inline int _popcount(self, unsigned short x) noexcept nogil:             # <<<<<<<<<<<<<<
- *         """Count number of set bits."""
+ *         """Count number of set bits (Kernighan's trick)."""
  *         cdef int count = 0
 */
 
@@ -8296,19 +8296,19 @@ static CYTHON_INLINE int __pyx_f_4game_8board_cy_7BoardCy__popcount(CYTHON_UNUSE
 
   /* "game/board_cy.pyx":359
  *     cdef inline int _popcount(self, unsigned short x) noexcept nogil:
- *         """Count number of set bits."""
+ *         """Count number of set bits (Kernighan's trick)."""
  *         cdef int count = 0             # <<<<<<<<<<<<<<
  *         while x:
- *             count += x & 1
+ *             x &= x - 1
 */
   __pyx_v_count = 0;
 
   /* "game/board_cy.pyx":360
- *         """Count number of set bits."""
+ *         """Count number of set bits (Kernighan's trick)."""
  *         cdef int count = 0
  *         while x:             # <<<<<<<<<<<<<<
- *             count += x & 1
- *             x >>= 1
+ *             x &= x - 1
+ *             count += 1
 */
   while (1) {
     __pyx_t_1 = (__pyx_v_x != 0);
@@ -8317,25 +8317,25 @@ static CYTHON_INLINE int __pyx_f_4game_8board_cy_7BoardCy__popcount(CYTHON_UNUSE
     /* "game/board_cy.pyx":361
  *         cdef int count = 0
  *         while x:
- *             count += x & 1             # <<<<<<<<<<<<<<
- *             x >>= 1
+ *             x &= x - 1             # <<<<<<<<<<<<<<
+ *             count += 1
  *         return count
 */
-    __pyx_v_count = (__pyx_v_count + (__pyx_v_x & 1));
+    __pyx_v_x = (__pyx_v_x & (__pyx_v_x - 1));
 
     /* "game/board_cy.pyx":362
  *         while x:
- *             count += x & 1
- *             x >>= 1             # <<<<<<<<<<<<<<
+ *             x &= x - 1
+ *             count += 1             # <<<<<<<<<<<<<<
  *         return count
  * 
 */
-    __pyx_v_x = (__pyx_v_x >> 1);
+    __pyx_v_count = (__pyx_v_count + 1);
   }
 
   /* "game/board_cy.pyx":363
- *             count += x & 1
- *             x >>= 1
+ *             x &= x - 1
+ *             count += 1
  *         return count             # <<<<<<<<<<<<<<
  * 
  *     def swap_xo(self):
@@ -8347,7 +8347,7 @@ static CYTHON_INLINE int __pyx_f_4game_8board_cy_7BoardCy__popcount(CYTHON_UNUSE
  *         return count
  * 
  *     cdef inline int _popcount(self, unsigned short x) noexcept nogil:             # <<<<<<<<<<<<<<
- *         """Count number of set bits."""
+ *         """Count number of set bits (Kernighan's trick)."""
  *         cdef int count = 0
 */
 

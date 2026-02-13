@@ -1,14 +1,13 @@
 """
-Test: Cython BoardEncoder/BoardSymmetry vs Python reference implementation.
+Test: Cython BoardEncoder/BoardSymmetry standalone correctness.
 
 Verifies:
-1. _build_transforms() matches Python version
-2. _build_c_transforms() matches Python version
-3. get_canonical_with_transform() matches Python version
-4. to_inference_tensor_batch() matches Python version (tensor + inv_idx)
-5. to_inference_tensor() matches Python version (tensor + inverse fn)
-6. transform_policy / inverse_transform_policy match
-7. Performance benchmark: Cython vs Python
+1. _build_transforms() produces valid 8 D4 symmetry transforms
+2. _build_c_transforms() produces valid 8 D4 3x3 transforms
+3. transform_policy round-trip: transform -> inverse = identity
+4. to_inference_tensor single vs batch consistency
+5. to_inference_tensor_batch inverse transform correctness
+6. Benchmark
 """
 import sys
 import os
@@ -17,11 +16,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 import time
 from game import Board
+from utils._board_symmetry_cy import _BoardSymmetryCy as _BoardSymmetry
+from utils._board_encoder_cy import BoardEncoderCy as BoardEncoder
 
 
-def make_random_board(num_moves=None, seed=None):
-    if seed is not None:
-        np.random.seed(seed)
+def make_random_board(num_moves=None):
     b = Board()
     if num_moves is None:
         num_moves = np.random.randint(1, 30)
@@ -34,192 +33,94 @@ def make_random_board(num_moves=None, seed=None):
     return b
 
 
-def get_python_modules():
-    """Import the pure-Python reference implementations."""
-    from utils._board_symmetry import _BoardSymmetry as PySym
-    from utils.board_encoder import BoardEncoder as PyEnc
-    return PySym, PyEnc
-
-
-def get_cython_modules():
-    """Import the Cython implementations."""
-    try:
-        from utils._board_symmetry_cy import _BoardSymmetryCy as CySym
-        from utils._board_encoder_cy import BoardEncoderCy as CyEnc
-        return CySym, CyEnc
-    except ImportError as e:
-        print(f"Cython modules not built yet: {e}")
-        return None, None
-
-
 def test_transforms():
-    """Test 1: _build_transforms matches."""
-    PySym, _ = get_python_modules()
-    CySym, _ = get_cython_modules()
-    if CySym is None:
-        print("TEST 1 - SKIPPED (Cython not built)")
-        return
-
-    py_t = PySym._build_transforms()
-    cy_t = CySym._build_transforms()
-    assert len(py_t) == len(cy_t) == 8
-    for i in range(8):
-        assert np.array_equal(py_t[i], cy_t[i]), f"Transform {i} mismatch"
+    """Test 1: 8 transforms are valid permutations of 81 elements."""
+    transforms = _BoardSymmetry._build_transforms()
+    assert len(transforms) == 8
+    for i, t in enumerate(transforms):
+        assert t.shape == (81,), f"Transform {i} shape: {t.shape}"
+        assert len(set(t)) == 81, f"Transform {i} not a permutation"
+    # Identity must be first
+    assert np.array_equal(transforms[0], np.arange(81))
     print("TEST 1 - _build_transforms: PASSED")
 
 
 def test_c_transforms():
-    """Test 2: _build_c_transforms matches."""
-    PySym, _ = get_python_modules()
-    CySym, _ = get_cython_modules()
-    if CySym is None:
-        print("TEST 2 - SKIPPED (Cython not built)")
-        return
-
-    py_ct = PySym._build_c_transforms()
-    cy_ct = CySym._build_c_transforms()
-    assert len(py_ct) == len(cy_ct) == 8
-    for i in range(8):
-        assert np.array_equal(py_ct[i], cy_ct[i]), f"C-Transform {i} mismatch"
+    """Test 2: 8 c-transforms are valid permutations of 9 elements."""
+    transforms = _BoardSymmetry._build_c_transforms()
+    assert len(transforms) == 8
+    for i, t in enumerate(transforms):
+        assert t.shape == (9,), f"C-Transform {i} shape: {t.shape}"
+        assert len(set(t)) == 9, f"C-Transform {i} not a permutation"
+    assert np.array_equal(transforms[0], np.arange(9))
     print("TEST 2 - _build_c_transforms: PASSED")
 
 
-def test_canonical_with_transform():
-    """Test 3: get_canonical_with_transform matches."""
-    PySym, _ = get_python_modules()
-    CySym, _ = get_cython_modules()
-    if CySym is None:
-        print("TEST 3 - SKIPPED (Cython not built)")
-        return
-
-    np.random.seed(42)
-    n_boards = 100
-    mismatches = 0
-    for i in range(n_boards):
-        board = make_random_board()
-        py_boards, py_comp, py_idx = PySym.get_canonical_with_transform(board)
-        cy_boards, cy_comp, cy_idx = CySym.get_canonical_with_transform(board)
-
-        if not (np.array_equal(py_boards, cy_boards) and
-                np.array_equal(py_comp, cy_comp) and
-                py_idx == cy_idx):
-            mismatches += 1
-            if mismatches <= 3:
-                print(f"  Board {i}: py_idx={py_idx}, cy_idx={cy_idx}")
-
-    print(f"TEST 3 - get_canonical_with_transform: {n_boards - mismatches}/{n_boards} passed")
-    assert mismatches == 0, f"{mismatches} mismatches"
-
-
-def test_transform_policy():
-    """Test 4: transform_policy / inverse_transform_policy match."""
-    PySym, _ = get_python_modules()
-    CySym, _ = get_cython_modules()
-    if CySym is None:
-        print("TEST 4 - SKIPPED (Cython not built)")
-        return
-
+def test_policy_roundtrip():
+    """Test 3: transform_policy -> inverse = identity for all 8 transforms."""
     np.random.seed(42)
     for t_idx in range(8):
         policy = np.random.dirichlet(np.ones(81))
-        py_fwd = PySym.transform_policy(policy, t_idx)
-        cy_fwd = CySym.transform_policy(policy, t_idx)
-        assert np.allclose(py_fwd, cy_fwd, atol=1e-12), f"transform_policy mismatch t={t_idx}"
-
-        py_inv = PySym.inverse_transform_policy(policy, t_idx)
-        cy_inv = CySym.inverse_transform_policy(policy, t_idx)
-        assert np.allclose(py_inv, cy_inv, atol=1e-12), f"inverse_transform_policy mismatch t={t_idx}"
-
-    print("TEST 4 - transform_policy / inverse_transform_policy: PASSED")
+        fwd = _BoardSymmetry.transform_policy(policy, t_idx)
+        recovered = _BoardSymmetry.inverse_transform_policy(fwd, t_idx)
+        assert np.allclose(policy, recovered, atol=1e-12), \
+            f"Round-trip failed for transform {t_idx}, max_diff={np.abs(policy - recovered).max()}"
+    print("TEST 3 - Policy round-trip all 8 transforms: PASSED")
 
 
-def test_inference_tensor_single():
-    """Test 5: to_inference_tensor matches."""
-    _, PyEnc = get_python_modules()
-    _, CyEnc = get_cython_modules()
-    if CyEnc is None:
-        print("TEST 5 - SKIPPED (Cython not built)")
-        return
-
+def test_single_vs_batch():
+    """Test 4: to_inference_tensor single vs batch consistency."""
     np.random.seed(42)
-    n_boards = 50
+    boards = [make_random_board() for _ in range(50)]
+    batch_tensors, batch_inv = BoardEncoder.to_inference_tensor_batch(boards)
+
     mismatches = 0
-    for i in range(n_boards):
-        board = make_random_board()
-        py_tensor, py_inv_fn = PyEnc.to_inference_tensor(board)
-        cy_tensor, cy_inv_fn = CyEnc.to_inference_tensor(board)
-
-        if not np.array_equal(py_tensor, cy_tensor):
+    for i, board in enumerate(boards):
+        single_tensor, inv_fn = BoardEncoder.to_inference_tensor(board)
+        if not np.array_equal(single_tensor, batch_tensors[i]):
             mismatches += 1
-            if mismatches <= 3:
-                diff = np.abs(py_tensor - cy_tensor).max()
-                print(f"  Board {i}: tensor max_diff={diff:.6f}")
-            continue
 
-        # Also check inverse transform
+        # Check inverse transform
         fake_policy = np.random.dirichlet(np.ones(81))
-        py_result = py_inv_fn(fake_policy)
-        cy_result = cy_inv_fn(fake_policy)
-        if not np.allclose(py_result, cy_result, atol=1e-12):
+        single_result = inv_fn(fake_policy)
+        batch_result = fake_policy[batch_inv[i]]
+        if not np.allclose(single_result, batch_result, atol=1e-10):
             mismatches += 1
 
-    print(f"TEST 5 - to_inference_tensor: {n_boards - mismatches}/{n_boards} passed")
-    assert mismatches == 0, f"{mismatches} mismatches"
+    print(f"TEST 4 - Single vs batch: {50 - mismatches}/50 passed")
+    assert mismatches == 0
 
 
-def test_inference_tensor_batch():
-    """Test 6: to_inference_tensor_batch matches."""
-    _, PyEnc = get_python_modules()
-    _, CyEnc = get_cython_modules()
-    if CyEnc is None:
-        print("TEST 6 - SKIPPED (Cython not built)")
-        return
-
+def test_batch_inverse():
+    """Test 5: batch inverse transform produces valid policies."""
     np.random.seed(42)
     boards = [make_random_board() for _ in range(100)]
+    batch_tensors, batch_inv = BoardEncoder.to_inference_tensor_batch(boards)
 
-    py_tensors, py_inv = PyEnc.to_inference_tensor_batch(boards)
-    cy_tensors, cy_inv = CyEnc.to_inference_tensor_batch(boards)
+    assert batch_tensors.shape == (100, 7, 9, 9)
+    assert batch_inv.shape == (100, 81)
 
-    assert np.array_equal(py_tensors, cy_tensors), \
-        f"Batch tensor mismatch: max_diff={np.abs(py_tensors - cy_tensors).max()}"
-    assert np.array_equal(py_inv, cy_inv), "Batch inv_idx mismatch"
+    # Each inv row must be a permutation of 0..80
+    for i in range(100):
+        assert len(set(batch_inv[i])) == 81, f"Board {i}: inv not a permutation"
 
-    print(f"TEST 6 - to_inference_tensor_batch: PASSED (100 boards)")
+    print("TEST 5 - Batch inverse transform: PASSED")
 
 
 def test_benchmark():
-    """Test 7: Performance comparison."""
-    _, PyEnc = get_python_modules()
-    _, CyEnc = get_cython_modules()
-    if CyEnc is None:
-        print("TEST 7 - SKIPPED (Cython not built)")
-        return
-
+    """Test 6: Benchmark."""
     np.random.seed(42)
     boards = [make_random_board() for _ in range(2048)]
 
     # Warmup
-    PyEnc.to_inference_tensor_batch(boards[:10])
-    CyEnc.to_inference_tensor_batch(boards[:10])
+    BoardEncoder.to_inference_tensor_batch(boards[:10])
 
-    # Python
     t0 = time.perf_counter()
     for _ in range(3):
-        PyEnc.to_inference_tensor_batch(boards)
-    py_time = (time.perf_counter() - t0) / 3
+        BoardEncoder.to_inference_tensor_batch(boards)
+    elapsed = (time.perf_counter() - t0) / 3
 
-    # Cython
-    t0 = time.perf_counter()
-    for _ in range(3):
-        CyEnc.to_inference_tensor_batch(boards)
-    cy_time = (time.perf_counter() - t0) / 3
-
-    speedup = py_time / cy_time
-    print(f"TEST 7 - Benchmark (2048 boards):")
-    print(f"  Python: {py_time*1000:.1f}ms")
-    print(f"  Cython: {cy_time*1000:.1f}ms")
-    print(f"  Speedup: {speedup:.1f}x")
+    print(f"TEST 6 - Benchmark (2048 boards): {elapsed*1000:.1f}ms")
 
 
 if __name__ == '__main__':
@@ -227,27 +128,19 @@ if __name__ == '__main__':
     print("Cython BoardEncoder/BoardSymmetry tests")
     print("=" * 60)
 
-    CySym, CyEnc = get_cython_modules()
-    if CySym is None:
-        print("\nCython modules not available. Build first, then re-run.")
-        print("Exiting with success (tests will be run after build).")
-        sys.exit(0)
-
     test_transforms()
     print()
     test_c_transforms()
     print()
-    test_canonical_with_transform()
+    test_policy_roundtrip()
     print()
-    test_transform_policy()
+    test_single_vs_batch()
     print()
-    test_inference_tensor_single()
-    print()
-    test_inference_tensor_batch()
+    test_batch_inverse()
     print()
     test_benchmark()
 
     print()
     print("=" * 60)
-    print("ALL CYTHON TESTS PASSED")
+    print("ALL TESTS PASSED")
     print("=" * 60)

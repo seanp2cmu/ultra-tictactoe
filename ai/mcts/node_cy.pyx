@@ -49,6 +49,15 @@ cdef class NodeCy:
             self._is_terminal = 1
             return True
         
+        # Fast path for BoardCy: check completed_mask bitmask
+        if hasattr(self.board, 'completed_mask'):
+            if self.board.completed_mask == 0x1FF:  # all 9 sub-boards done
+                self._is_terminal = 1
+                return True
+            # If any sub-board is open, there are legal moves
+            self._is_terminal = 0
+            return False
+        
         if hasattr(self.board, 'get_completed_boards_2d'):
             completed = self.board.get_completed_boards_2d()
         else:
@@ -103,7 +112,7 @@ cdef class NodeCy:
         return best_action, best_child
     
     cpdef void expand(self, dict action_probs):
-        """Expand node by creating children for legal moves."""
+        """Expand node by creating children for legal moves (dict API)."""
         cdef list legal_moves = self.board.get_legal_moves()
         cdef int action
         cdef float prior
@@ -116,6 +125,22 @@ cdef class NodeCy:
                 next_board = self.board.clone()
                 next_board.make_move(move[0], move[1])
                 prior = action_probs.get(action, 1e-8)
+                self.children[action] = NodeCy(next_board, parent=self, action=action, prior_prob=prior, _clone=False)
+    
+    cpdef void expand_numpy(self, float[:] policy):
+        """Expand node using a flat numpy policy array (avoids dict creation)."""
+        cdef list legal_moves = self.board.get_legal_moves()
+        cdef int action
+        cdef float prior
+        cdef object next_board
+        cdef tuple move
+        
+        for move in legal_moves:
+            action = move[0] * 9 + move[1]
+            if action not in self.children:
+                next_board = self.board.clone()
+                next_board.make_move(move[0], move[1])
+                prior = policy[action]
                 self.children[action] = NodeCy(next_board, parent=self, action=action, prior_prob=prior, _clone=False)
     
     cpdef void update(self, float value):

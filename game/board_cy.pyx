@@ -355,11 +355,11 @@ cdef class BoardCy:
         return count
     
     cdef inline int _popcount(self, unsigned short x) noexcept nogil:
-        """Count number of set bits."""
+        """Count number of set bits (Kernighan's trick)."""
         cdef int count = 0
         while x:
-            count += x & 1
-            x >>= 1
+            x &= x - 1
+            count += 1
         return count
     
     def swap_xo(self):
