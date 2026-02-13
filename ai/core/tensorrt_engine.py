@@ -4,12 +4,35 @@ import torch
 import numpy as np
 from typing import Tuple, Optional
 
+TRT_AVAILABLE = False
+trt = None
+cuda = None
+
 try:
     import tensorrt as trt
     import pycuda.driver as cuda
     TRT_AVAILABLE = True
 except ImportError:
-    TRT_AVAILABLE = False
+    pass
+
+_cuda_initialized = False
+
+def _init_cuda():
+    """Initialize CUDA context lazily."""
+    global _cuda_initialized
+    if _cuda_initialized:
+        return True
+    try:
+        cuda.init()
+        device = cuda.Device(0)
+        ctx = device.make_context()
+        import atexit
+        atexit.register(ctx.pop)
+        _cuda_initialized = True
+        return True
+    except Exception as e:
+        print(f"[TRT] CUDA init failed: {e}")
+        return False
 
 
 class TensorRTEngine:
@@ -18,6 +41,8 @@ class TensorRTEngine:
     def __init__(self, engine_path: str = None):
         if not TRT_AVAILABLE:
             raise ImportError("TensorRT or pycuda not available")
+        if not _init_cuda():
+            raise RuntimeError("Failed to initialize CUDA context")
         
         self.logger = trt.Logger(trt.Logger.WARNING)
         self.engine = None
