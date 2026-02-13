@@ -12,7 +12,7 @@ logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 HF_REPO_ID = os.environ.get("HF_REPO_ID", "sean2474/ultra-tictactoe-models")
-HF_UPLOAD_ENABLED = os.environ.get("HF_UPLOAD", "false").lower() == "true"
+HF_UPLOAD_ENABLED = os.environ.get("HF_UPLOAD", "true").lower() == "true"
 
 
 _upload_threads = []

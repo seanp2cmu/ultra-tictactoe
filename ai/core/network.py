@@ -70,10 +70,10 @@ class Model(nn.Module):
         self.policy_bn = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(2 * 9 * 9, 81)
         
-        self.value_conv = nn.Conv2d(num_channels, 1, kernel_size=1)
-        self.value_bn = nn.BatchNorm2d(1)
-        self.value_fc1 = nn.Linear(9 * 9, 64)
-        self.value_fc2 = nn.Linear(64, 1)
+        self.value_conv = nn.Conv2d(num_channels, 4, kernel_size=1)
+        self.value_bn = nn.BatchNorm2d(4)
+        self.value_fc1 = nn.Linear(4 * 9 * 9, 256)
+        self.value_fc2 = nn.Linear(256, 1)
     
     @property
     def _device(self):
@@ -96,7 +96,7 @@ class Model(nn.Module):
         policy = self.policy_fc(policy)
         
         value = F.relu(self.value_bn(self.value_conv(x)))
-        value = value.view(-1, 9 * 9)
+        value = value.view(-1, 4 * 9 * 9)
         value = F.relu(self.value_fc1(value))
         value = torch.sigmoid(self.value_fc2(value)) 
         

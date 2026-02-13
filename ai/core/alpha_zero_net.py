@@ -224,7 +224,7 @@ class AlphaZeroNet:
                 policy_logits, value_preds = self.model(boards_tensor)
                 policy_loss = F.cross_entropy(policy_logits, policies_tensor)
                 value_loss = F.mse_loss(value_preds.squeeze(-1), values_tensor.squeeze(-1))
-                total_loss = policy_loss + value_loss
+                total_loss = policy_loss + 2.0 * value_loss
             
             self.scaler.scale(total_loss).backward()
             self.scaler.unscale_(self.optimizer)
@@ -235,7 +235,7 @@ class AlphaZeroNet:
             policy_logits, value_preds = self.model(boards_tensor)
             policy_loss = F.cross_entropy(policy_logits, policies_tensor)
             value_loss = F.mse_loss(value_preds.squeeze(-1), values_tensor.squeeze(-1))
-            total_loss = policy_loss + value_loss
+            total_loss = policy_loss + 2.0 * value_loss
             
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -313,8 +313,28 @@ class AlphaZeroNet:
                 # Remove prefix from checkpoint keys
                 state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
         
-        self.model.load_state_dict(state_dict)
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        # Partial load: skip layers with shape mismatch (e.g., value head architecture change)
+        model_state = self.model.state_dict()
+        filtered = {}
+        skipped = []
+        for k, v in state_dict.items():
+            if k in model_state and v.shape == model_state[k].shape:
+                filtered[k] = v
+            else:
+                skipped.append(k)
+        if skipped:
+            print(f"[Model] Skipped {len(skipped)} mismatched layers: {skipped}")
+        self.model.load_state_dict(filtered, strict=False)
+        if skipped:
+            # Architecture changed — recreate optimizer with fresh state for new params
+            print("[Model] Recreating optimizer due to architecture change")
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=self.optimizer.param_groups[0]['lr'],
+                weight_decay=self.optimizer.param_groups[0]['weight_decay']
+            )
+        else:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
         if 'scheduler_state_dict' in checkpoint:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])

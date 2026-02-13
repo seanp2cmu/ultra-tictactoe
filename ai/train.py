@@ -228,6 +228,8 @@ def main():
                     f.write(f"  Hot Entries: {dtw_stats.get('hot_entries', 0):,}\n")
                     f.write(f"  Cold Entries: {dtw_stats.get('cold_entries', 0):,}\n")
         
+        upload_to_hf(log_path, 'training.log')
+        
         if 'dtw_stats' in result:
             trainer.dtw_calculator.reset_search_stats()
         
@@ -241,6 +243,7 @@ def main():
         if (iteration + 1) % 5 == 0:
             ckpt_path = os.path.join(config.training.save_dir, f'checkpoint_{iteration + 1}.pt')
             trainer.save(ckpt_path, iteration=iteration)
+            upload_to_hf(ckpt_path, f'checkpoint_{iteration + 1}.pt')
             
             old_iter = iteration + 1 - 10
             if old_iter > 0:
