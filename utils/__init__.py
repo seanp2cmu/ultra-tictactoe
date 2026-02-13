@@ -1,9 +1,7 @@
 from .hf_upload import upload_to_hf, wait_for_uploads, HF_UPLOAD_ENABLED
-from .checkpoint import find_best_checkpoint, find_latest_checkpoint, get_start_iteration
-from .board_symmetry import BoardSymmetry
+from .board_encoder import BoardEncoder
 
 __all__ = [
     'upload_to_hf', 'wait_for_uploads', 'HF_UPLOAD_ENABLED',
-    'find_best_checkpoint', 'find_latest_checkpoint', 'get_start_iteration',
-    'BoardSymmetry'
+    'BoardEncoder'
 ]

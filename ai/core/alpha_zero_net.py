@@ -8,7 +8,7 @@ import threading
 from torch.amp import autocast, GradScaler
 
 from .network import Model
-from utils import BoardSymmetry
+from utils import BoardEncoder
 
 
 class AlphaZeroNet:
@@ -67,99 +67,49 @@ class AlphaZeroNet:
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Thread-safe single board prediction with canonical form."""
         with self.predict_lock:
-            from game import Board
+            # Use BoardEncoder for consistent transformation
+            canonical_tensor, inverse_transform = BoardEncoder.to_inference_tensor(board_state)
             
-            # Get canonical transform
-            boards_arr, completed_arr, transform_idx = BoardSymmetry.get_canonical_with_transform(board_state)
-            
-            # Create canonical board
-            canonical_board = Board()
-            for r in range(9):
-                for c in range(9):
-                    if boards_arr[r, c] != 0:
-                        canonical_board.set_cell(r, c, int(boards_arr[r, c]))
-            # Handle both Cython BoardCy and Python Board
-            if hasattr(canonical_board, 'set_completed_boards_2d'):
-                # Cython Board - use setter method
-                canonical_board.set_completed_boards_2d(completed_arr.tolist())
-            else:
-                # Python Board - direct assignment
-                canonical_board.completed_boards = completed_arr.tolist()
-            canonical_board.current_player = board_state.current_player
-            
-            # Transform last_move
-            if board_state.last_move is not None and transform_idx != 0:
-                transforms = BoardSymmetry._build_transforms()
-                old_idx = board_state.last_move[0] * 9 + board_state.last_move[1]
-                new_idx = np.where(transforms[transform_idx] == old_idx)[0]
-                if len(new_idx) > 0:
-                    canonical_board.last_move = (new_idx[0] // 9, new_idx[0] % 9)
-            else:
-                canonical_board.last_move = board_state.last_move
-            
-            # Predict on canonical board
-            policy, value = self.model.predict(canonical_board)
+            self.model.eval()
+            with torch.no_grad():
+                tensor = torch.from_numpy(canonical_tensor).unsqueeze(0).to(self.device)
+                
+                if self.device.type == 'cuda':
+                    with autocast(device_type='cuda'):
+                        policy_logits, value = self.model(tensor)
+                else:
+                    policy_logits, value = self.model(tensor)
+                
+                policy = F.softmax(policy_logits, dim=1).cpu().numpy()[0]
+                value = value.cpu().numpy()[0, 0]
             
             # Transform policy back to original orientation
-            original_policy = BoardSymmetry.inverse_transform_policy(policy, transform_idx)
-            return original_policy, value
+            original_policy = inverse_transform(policy)
+            return original_policy, float(value)
     
     def predict_batch(self, board_states) -> Tuple[np.ndarray, np.ndarray]:
         """Thread-safe batch prediction with canonical form."""
         with self.predict_lock:
-            from game import Board
             self.model.eval()
             
-            # Process each board to canonical form
-            canonical_boards = []
-            transform_indices = []
-            
-            for board_state in board_states:
-                boards_arr, completed_arr, transform_idx = BoardSymmetry.get_canonical_with_transform(board_state)
-                transform_indices.append(transform_idx)
-                
-                canonical_board = Board()
-                for r in range(9):
-                    for c in range(9):
-                        if boards_arr[r, c] != 0:
-                            canonical_board.set_cell(r, c, int(boards_arr[r, c]))
-                # Handle both Cython BoardCy and Python Board
-                if hasattr(canonical_board, 'set_completed_boards_2d'):
-                    canonical_board.set_completed_boards_2d(completed_arr.tolist())
-                else:
-                    canonical_board.completed_boards = completed_arr.tolist()
-                canonical_board.current_player = board_state.current_player
-                
-                if board_state.last_move is not None and transform_idx != 0:
-                    transforms = BoardSymmetry._build_transforms()
-                    old_idx = board_state.last_move[0] * 9 + board_state.last_move[1]
-                    new_idx = np.where(transforms[transform_idx] == old_idx)[0]
-                    if len(new_idx) > 0:
-                        canonical_board.last_move = (new_idx[0] // 9, new_idx[0] % 9)
-                else:
-                    canonical_board.last_move = board_state.last_move
-                
-                canonical_boards.append(canonical_board)
+            # Use BoardEncoder for consistent transformation
+            batch_tensor, inverse_fns = BoardEncoder.to_inference_tensor_batch(board_states)
             
             with torch.no_grad():
-                board_tensors = [
-                    self.model._board_to_tensor(board).squeeze(0)
-                    for board in canonical_boards
-                ]
-                batch_tensor = torch.stack(board_tensors).to(self.device)
+                tensor = torch.from_numpy(batch_tensor).to(self.device)
                 
-                # CUDA에서 FP16 inference 사용
                 if self.device.type == 'cuda':
                     with autocast(device_type='cuda'):
-                        policy_logits, values = self.model(batch_tensor)
+                        policy_logits, values = self.model(tensor)
                 else:
-                    policy_logits, values = self.model(batch_tensor)
+                    policy_logits, values = self.model(tensor)
+                
                 policy_probs = F.softmax(policy_logits, dim=1).cpu().numpy()
                 
                 # Transform each policy back to original orientation
                 original_policies = []
                 for i, policy in enumerate(policy_probs):
-                    original_policy = BoardSymmetry.inverse_transform_policy(policy, transform_indices[i])
+                    original_policy = inverse_fns[i](policy)
                     original_policies.append(original_policy)
                 
                 return np.array(original_policies), values.cpu().numpy()

@@ -4,7 +4,7 @@ Compressed Transposition Table for DTW caching
 from collections import OrderedDict
 from game import Board
 
-from utils import BoardSymmetry
+from utils import BoardEncoder
 
 class CompressedTranspositionTable:
     def __init__(self, hot_size=50000, cold_size=500000):
@@ -19,8 +19,6 @@ class CompressedTranspositionTable:
         self.cold = {}
         self.cold_size = cold_size
         
-        self.symmetry = BoardSymmetry()
-        
         self.stats = {
             "hot_hits": 0,
             "cold_hits": 0,
@@ -30,7 +28,7 @@ class CompressedTranspositionTable:
         }
     
     def get_hash(self, board: Board):
-        return self.symmetry.get_canonical_hash(board)
+        return BoardEncoder.get_canonical_hash(board)
     
     def compress_entry(self, result, dtw, best_move):
         """

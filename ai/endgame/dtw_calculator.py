@@ -6,13 +6,21 @@ from game import Board, BoardCpp, DTWCalculatorCpp
 
 
 def _board_to_cpp(board):
-    """Convert BoardCy to BoardCpp for C++ DTW."""
+    """Convert BoardCy to BoardCpp for C++ DTW (direct bitmask copy)."""
     board_cpp = BoardCpp()
-    for r in range(9):
-        for c in range(9):
-            val = board.get_cell(r, c)
-            if val != 0:
-                board_cpp.set_cell(r, c, val)
+    
+    # Direct bitmask copy (O(9) instead of O(81))
+    board_cpp.x_masks = list(board.x_masks)
+    board_cpp.o_masks = list(board.o_masks)
+    
+    # sub_counts: compute from bitmasks (popcount)
+    sub_counts = []
+    for i in range(9):
+        x_count = bin(board.x_masks[i]).count('1')
+        o_count = bin(board.o_masks[i]).count('1')
+        sub_counts.append([x_count, o_count])
+    board_cpp.sub_counts = sub_counts
+    
     board_cpp.set_completed_boards_2d(board.get_completed_boards_2d())
     board_cpp.completed_mask = board.completed_mask
     board_cpp.current_player = board.current_player

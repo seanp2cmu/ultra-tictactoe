@@ -7,6 +7,7 @@ import numpy as np
 from torch.amp import autocast
 
 from game import Board
+from utils.board_encoder import BoardEncoder
 
 
 class SEBlock(nn.Module):
@@ -102,12 +103,14 @@ class Model(nn.Module):
         return policy, value
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
-        """Single board prediction."""
+        """Single board prediction using BoardEncoder."""
         self.eval()
         device = next(self.parameters()).device
         with torch.no_grad():
-            board_tensor = self._board_to_tensor(board_state)
-            # CUDA에서 FP16 inference
+            # Use BoardEncoder for consistent tensor conversion
+            tensor = BoardEncoder.board_to_tensor(board_state)
+            board_tensor = torch.from_numpy(tensor).unsqueeze(0).to(device)
+            
             if device.type == 'cuda':
                 with autocast(device_type='cuda'):
                     policy_logits, value = self.forward(board_tensor)
@@ -116,55 +119,3 @@ class Model(nn.Module):
             policy_probs = F.softmax(policy_logits, dim=1)
             return policy_probs.cpu().numpy()[0], value.cpu().numpy()[0][0]
     
-    def _board_to_tensor(self, board_state: Board) -> torch.Tensor:
-        """Convert board to 7-channel tensor input.
-        
-        MUST match training encoding in self_play.py:
-        - Channel 0: current player pieces
-        - Channel 1: opponent pieces
-        - Channel 2: empty cells
-        - Channel 3: completed boards (current player won)
-        - Channel 4: completed boards (opponent won)
-        - Channel 5: legal moves
-        - Channel 6: last move
-        """
-        tensor = np.zeros((7, 9, 9), dtype=np.float32)
-        boards = np.array(board_state.to_array(), dtype=np.float32)
-        
-        current_player = board_state.current_player if hasattr(board_state, 'current_player') else 1
-        opponent_player = 3 - current_player
-        
-        # Channel 0: current player pieces
-        tensor[0] = (boards == current_player).astype(np.float32)
-        # Channel 1: opponent pieces
-        tensor[1] = (boards == opponent_player).astype(np.float32)
-        # Channel 2: empty cells
-        tensor[2] = (boards == 0).astype(np.float32)
-        
-        # Channel 3-4: completed boards
-        if hasattr(board_state, 'get_completed_boards_2d'):
-            completed = board_state.get_completed_boards_2d()
-        elif hasattr(board_state, 'completed_boards'):
-            completed = board_state.completed_boards
-        else:
-            completed = [[0]*3 for _ in range(3)]
-        
-        for br in range(3):
-            for bc in range(3):
-                status = completed[br][bc]
-                sr, sc = br * 3, bc * 3
-                if status == current_player:
-                    tensor[3, sr:sr+3, sc:sc+3] = 1.0
-                elif status == opponent_player:
-                    tensor[4, sr:sr+3, sc:sc+3] = 1.0
-        
-        # Channel 5: legal moves
-        if hasattr(board_state, 'get_legal_moves'):
-            for r, c in board_state.get_legal_moves():
-                tensor[5, r, c] = 1.0
-        
-        # Channel 6: last move
-        if hasattr(board_state, 'last_move') and board_state.last_move is not None:
-            tensor[6, board_state.last_move[0], board_state.last_move[1]] = 1.0
-        
-        return torch.from_numpy(tensor).unsqueeze(0).to(self._device)

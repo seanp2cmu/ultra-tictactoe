@@ -16,7 +16,7 @@ pinned: false
 
 A high-performance AI engine that combines deep reinforcement learning (AlphaZero-style) with perfect endgame play using Distance-To-Win (DTW) alpha-beta search.
 
-## 🎯 Features
+## Features
 
 - **AlphaZero-style Training**: Self-play reinforcement learning with MCTS
 - **DTW Endgame Solver**: Perfect play in endgame positions (≤15 empty cells)
@@ -25,7 +25,7 @@ A high-performance AI engine that combines deep reinforcement learning (AlphaZer
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 ultra-tictactoe/
