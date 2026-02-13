@@ -20,15 +20,13 @@ _parallel_timing = {
 }
 
 def reset_parallel_timing():
-    global _parallel_timing
-    _parallel_timing = {
-        'total_time': 0.0,
-        'network_time': 0.0,
-        'mcts_overhead': 0.0,
-        'batches': 0,
-        'games': 0,
-        'moves': 0,
-    }
+    """Reset timing stats (clear in-place to preserve references)."""
+    _parallel_timing['total_time'] = 0.0
+    _parallel_timing['network_time'] = 0.0
+    _parallel_timing['mcts_overhead'] = 0.0
+    _parallel_timing['batches'] = 0
+    _parallel_timing['games'] = 0
+    _parallel_timing['moves'] = 0
 
 def get_parallel_timing():
     return _parallel_timing.copy()

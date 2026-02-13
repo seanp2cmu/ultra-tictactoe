@@ -88,7 +88,7 @@ ultra-tictactoe/
 
 ---
 
-## 🧠 Model Architecture
+## Model Architecture
 
 ### Neural Network (AlphaZero-style ResNet)
 
@@ -134,7 +134,7 @@ Value Head:
 
 ---
 
-## ⚡ Optimization Strategy
+## Optimization Strategy
 
 ### 1. Cython Extensions (`*.pyx`)
 
@@ -183,7 +183,7 @@ Value Head:
 
 ---
 
-## 🎓 Training Methodology
+## Training Methodology
 
 ### AlphaZero Algorithm
 
@@ -225,7 +225,7 @@ L_value  = MSE(v_predicted, z_game_result)
 
 ---
 
-## 📊 Data Collection (Self-Play)
+## Data Collection (Self-Play)
 
 ### Parallel Self-Play
 
@@ -275,7 +275,7 @@ batch = sample_one_per_game(buffer, batch_size, weights)
 
 ---
 
-## 🎮 DTW Endgame Solver
+## DTW Endgame Solver
 
 ### Distance-To-Win (DTW)
 
@@ -326,7 +326,7 @@ Cache is persisted to `dtw_cache.pkl` and uploaded to HuggingFace.
 
 ---
 
-## 🚀 Running the Project
+## Running the Project
 
 ### Local Development
 
@@ -357,7 +357,7 @@ The app automatically builds Cython/C++ extensions on startup via `packages.txt`
 
 ---
 
-## 📈 Evaluation
+## Evaluation
 
 ### Baseline Tests
 
@@ -376,7 +376,7 @@ The app automatically builds Cython/C++ extensions on startup via `packages.txt`
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 Edit `ai/config.py` to adjust:
 
@@ -397,7 +397,7 @@ class DTWConfig:
 
 ---
 
-## 📚 References
+## References
 
 - [AlphaZero Paper](https://arxiv.org/abs/1712.01815) - Mastering Chess and Shogi
 - [Lc0](https://lczero.org/) - Leela Chess Zero
@@ -405,6 +405,6 @@ class DTWConfig:
 
 ---
 
-## 📄 License
+## License
 
 MIT License
