@@ -155,6 +155,28 @@ class AlphaZeroAgent:
                 if best_move and dtw < float('inf'):
                     return best_move[0] * 9 + best_move[1]
         
+        # Special case: 0 simulations = use raw policy only
+        if self.num_simulations == 0:
+            policy_probs, _ = self.network.predict(board)
+            legal_moves = board.get_legal_moves()
+            if not legal_moves:
+                return 0
+            # Mask illegal moves
+            legal_mask = np.zeros(81)
+            for r, c in legal_moves:
+                legal_mask[r * 9 + c] = 1
+            policy_probs = policy_probs * legal_mask
+            if policy_probs.sum() > 0:
+                policy_probs = policy_probs / policy_probs.sum()
+            else:
+                # Uniform over legal moves
+                policy_probs = legal_mask / legal_mask.sum()
+            
+            if temperature == 0:
+                return int(np.argmax(policy_probs))
+            else:
+                return int(np.random.choice(81, p=policy_probs))
+        
         root = self.search(board)
         
         action_visits = [(action, child.visits) for action, child in root.children.items()]

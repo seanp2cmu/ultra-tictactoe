@@ -140,20 +140,30 @@ class ParallelMCTS:
         
         # Select moves for each game
         results = []
-        for root in roots:
+        for i, root in enumerate(roots):
             visits = np.array([
                 root.children[a].visits if a in root.children else 0
                 for a in range(81)
             ])
             
             if visits.sum() == 0:
-                # No visits - use uniform over legal moves
+                # No visits - use policy priors from initial expansion
                 legal = root.board.get_legal_moves()
                 policy = np.zeros(81)
-                for r, c in legal:
-                    policy[r * 9 + c] = 1.0 / len(legal)
-                action = legal[np.random.randint(len(legal))]
-                action = action[0] * 9 + action[1]
+                # Use the prior probabilities from children
+                for action, child in root.children.items():
+                    policy[action] = child.prior
+                if policy.sum() > 0:
+                    policy = policy / policy.sum()
+                else:
+                    # Fallback to uniform
+                    for r, c in legal:
+                        policy[r * 9 + c] = 1.0 / len(legal)
+                
+                if temperature == 0:
+                    action = int(np.argmax(policy))
+                else:
+                    action = int(np.random.choice(81, p=policy))
             elif temperature == 0:
                 action = int(np.argmax(visits))
                 policy = np.zeros(81)
