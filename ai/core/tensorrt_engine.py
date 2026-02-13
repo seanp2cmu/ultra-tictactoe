@@ -7,7 +7,6 @@ from typing import Tuple, Optional
 try:
     import tensorrt as trt
     import pycuda.driver as cuda
-    import pycuda.autoinit
     TRT_AVAILABLE = True
 except ImportError:
     TRT_AVAILABLE = False
@@ -45,25 +44,32 @@ class TensorRTEngine:
         fp16: bool = True
     ) -> bool:
         """Build TensorRT engine from PyTorch model."""
-        # Export to ONNX
-        model.eval()
+        # Get the raw model if it's compiled
+        raw_model = model
+        if hasattr(model, '_orig_mod'):
+            raw_model = model._orig_mod
+        
+        # Export to ONNX using legacy exporter
+        raw_model.eval()
         dummy_input = torch.randn(1, 3, 9, 9).cuda()
         
-        torch.onnx.export(
-            model,
-            dummy_input,
-            onnx_path,
-            export_params=True,
-            opset_version=17,
-            do_constant_folding=True,
-            input_names=['input'],
-            output_names=['policy', 'value'],
-            dynamic_axes={
-                'input': {0: 'batch_size'},
-                'policy': {0: 'batch_size'},
-                'value': {0: 'batch_size'}
-            }
-        )
+        with torch.no_grad():
+            torch.onnx.export(
+                raw_model,
+                dummy_input,
+                onnx_path,
+                export_params=True,
+                opset_version=13,
+                do_constant_folding=True,
+                input_names=['input'],
+                output_names=['policy', 'value'],
+                dynamic_axes={
+                    'input': {0: 'batch_size'},
+                    'policy': {0: 'batch_size'},
+                    'value': {0: 'batch_size'}
+                },
+                dynamo=False
+            )
         print(f"[TRT] Exported ONNX to {onnx_path}")
         
         # Build TensorRT engine
