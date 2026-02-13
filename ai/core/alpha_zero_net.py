@@ -57,11 +57,9 @@ class AlphaZeroNet:
         self._compiled = False
         self.trt_engine = None
         
-        # Try TensorRT first, then torch.compile
-        if torch.cuda.is_available():
-            self._try_tensorrt()
-            if self.trt_engine is None and hasattr(torch, 'compile'):
-                self._try_compile()
+        # Use torch.compile (Native TensorRT disabled due to context conflicts)
+        if torch.cuda.is_available() and hasattr(torch, 'compile'):
+            self._try_compile()
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Thread-safe single board prediction with canonical form."""
@@ -241,11 +239,9 @@ class AlphaZeroNet:
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         
-        # Rebuild TensorRT engine with new weights
-        if torch.cuda.is_available():
-            self._try_tensorrt(force_rebuild=True)
-            if self.trt_engine is None and not self._compiled:
-                self._try_compile()
+        # torch.compile after loading (if not already compiled)
+        if torch.cuda.is_available() and not self._compiled:
+            self._try_compile()
         
         return checkpoint.get('iteration', 0)
     
