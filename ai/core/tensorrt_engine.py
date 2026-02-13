@@ -23,13 +23,16 @@ class TensorRTEngine:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA not available")
         
-        # Force PyTorch to initialize CUDA first
+        # Force PyTorch to fully initialize CUDA context
         torch.cuda.init()
+        torch.cuda.set_device(0)
+        _ = torch.cuda.current_device()
+        torch.cuda.synchronize()
         
         self.logger = trt.Logger(trt.Logger.WARNING)
         self.engine = None
         self.context = None
-        self.stream = torch.cuda.Stream()
+        self.stream = torch.cuda.current_stream()
         
         # Bindings
         self.d_input = None
