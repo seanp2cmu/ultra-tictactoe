@@ -29,6 +29,8 @@ torch
 torch_tensorrt
 tensorrt
 pycuda
+onnx
+onnxscript
 torchsummaryX==1.1.0
 tqdm==4.67.1
 typer-slim==0.21.1
