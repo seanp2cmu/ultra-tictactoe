@@ -166,3 +166,96 @@ cdef class NodeCy:
         if self.parent is not None:
             (<NodeCy>self.parent).update_recursive(-value)
         self.update(value)
+
+
+# ── Batch MCTS operations (called from ParallelMCTS) ──
+
+cpdef tuple select_leaf_vl(NodeCy root, float c_puct):
+    """Select one leaf from root, applying virtual loss along the path.
+    
+    Returns (leaf_node, search_path) where search_path is a list of NodeCy.
+    Virtual loss is applied to all nodes on the path.
+    """
+    cdef NodeCy node = root
+    cdef list search_path = [root]
+    cdef int action
+    
+    while node.is_expanded() and not node.is_terminal():
+        action, node = node.select_child(c_puct)
+        search_path.append(node)
+    
+    # Apply virtual loss to entire path (direct field access, no method call)
+    cdef NodeCy n
+    for n in search_path:
+        n.virtual_loss += 1
+    
+    return node, search_path
+
+
+def select_multi_leaves_cy(list roots, list indices, int leaves_per_game, float c_puct):
+    """Select multiple leaves per game using virtual loss for diversity.
+    
+    Returns (leaves, boards) where:
+      leaves = list of (game_idx, node, search_path)
+      boards = list of board objects for inference
+    """
+    cdef list leaves = []
+    cdef list boards = []
+    cdef int idx, j
+    cdef NodeCy root, node, n
+    cdef list search_path
+    
+    for idx in indices:
+        root = <NodeCy>roots[idx]
+        for j in range(leaves_per_game):
+            node, search_path = select_leaf_vl(root, c_puct)
+            if not node.is_terminal() and not node.is_expanded():
+                leaves.append((idx, node, search_path))
+                boards.append(node.board)
+            else:
+                # Terminal or already expanded — revert virtual loss
+                for n in search_path:
+                    n.virtual_loss -= 1
+    
+    return leaves, boards
+
+
+def expand_backprop_batch_cy(list leaves, float[:,:] policies, float[:] values_scaled):
+    """Expand leaf nodes, backpropagate values, and revert virtual losses.
+    
+    Args:
+        leaves: list of (game_idx, node, search_path) tuples
+        policies: (N, 81) float32 array of policy outputs
+        values_scaled: (N,) float32 array of pre-scaled values (2*v - 1)
+    """
+    cdef int i, j, path_len
+    cdef int game_idx
+    cdef NodeCy node, path_node
+    cdef float value
+    cdef list search_path
+    
+    for i in range(len(leaves)):
+        game_idx, node, search_path = leaves[i]
+        
+        # Expand with policy
+        node.expand_numpy(policies[i])
+        
+        # Revert virtual loss + backprop (reversed path)
+        value = values_scaled[i]
+        path_len = len(search_path)
+        for j in range(path_len - 1, -1, -1):
+            path_node = <NodeCy>search_path[j]
+            path_node.virtual_loss -= 1
+            path_node.visits += 1
+            path_node.value_sum += value
+            value = -value
+
+
+def revert_vl_batch_cy(list leaves):
+    """Revert virtual losses for all leaves without expand/backprop."""
+    cdef NodeCy n
+    cdef list search_path
+    
+    for _, _, search_path in leaves:
+        for n in search_path:
+            n.virtual_loss -= 1

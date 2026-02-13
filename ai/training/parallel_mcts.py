@@ -11,6 +11,7 @@ from game import Board
 from ai.core import AlphaZeroNet
 from ai.endgame import DTWCalculator
 from ai.mcts import Node
+from ai.mcts.node_cy import select_multi_leaves_cy, expand_backprop_batch_cy, revert_vl_batch_cy
 
 
 # Timing stats for parallel self-play
@@ -54,59 +55,29 @@ class ParallelMCTS:
         self.c_puct = c_puct
         self.dtw_calculator = dtw_calculator
     
-    # ── Helper methods ──
-    
-    def _select_leaf(self, root):
-        """Select one leaf from a single root, applying virtual loss along the path."""
-        node = root
-        search_path = [node]
-        while node.is_expanded() and not node.is_terminal():
-            _, node = node.select_child(self.c_puct)
-            search_path.append(node)
-        # Apply virtual loss to all nodes on path (discourages re-selection)
-        for n in search_path:
-            n.add_virtual_loss(1)
-        return node, search_path
+    # ── Helper methods (delegated to Cython for speed) ──
     
     def _select_multi_leaves(self, roots, indices, leaves_per_game):
-        """Select multiple leaves per game using virtual loss for diversity."""
-        leaves = []
-        boards = []
-        for idx in indices:
-            root = roots[idx]
-            for _ in range(leaves_per_game):
-                node, search_path = self._select_leaf(root)
-                if not node.is_terminal() and not node.is_expanded():
-                    leaves.append((idx, node, search_path))
-                    boards.append(node.board)
-                else:
-                    # Terminal or already expanded — revert virtual loss
-                    for n in search_path:
-                        n.revert_virtual_loss(1)
-        return leaves, boards
+        """Select multiple leaves per game using virtual loss (Cython)."""
+        return select_multi_leaves_cy(roots, indices, leaves_per_game, self.c_puct)
     
     @staticmethod
     def _expand_backprop(leaves, policies, values):
-        """Expand leaf nodes, backpropagate values, and revert virtual losses."""
-        values_np = 2.0 * values[:len(leaves)].ravel() - 1.0
-        for i, (game_idx, node, search_path) in enumerate(leaves):
-            policy = policies[i]
-            value = float(values_np[i])
-            node.expand_numpy(
-                policy.astype(np.float32) if policy.dtype != np.float32 else policy
-            )
-            # Revert virtual loss and apply real backup
-            for path_node in reversed(search_path):
-                path_node.revert_virtual_loss(1)
-                path_node.update(value)
-                value = -value
+        """Expand leaf nodes, backprop values, revert virtual losses (Cython)."""
+        n = len(leaves)
+        if n == 0:
+            return
+        values_scaled = np.ascontiguousarray(
+            (2.0 * values[:n].ravel() - 1.0), dtype=np.float32
+        )
+        policies_f32 = np.ascontiguousarray(policies[:n], dtype=np.float32)
+        expand_backprop_batch_cy(leaves, policies_f32, values_scaled)
     
     @staticmethod
     def _revert_virtual_losses(leaves):
-        """Revert virtual losses without expand/backprop (for cleanup)."""
-        for _, node, search_path in leaves:
-            for n in search_path:
-                n.revert_virtual_loss(1)
+        """Revert virtual losses without expand/backprop (Cython)."""
+        if leaves:
+            revert_vl_batch_cy(leaves)
     
     def _expand_roots(self, roots, games, add_noise):
         """Initial expansion of all root nodes (synchronous)."""
