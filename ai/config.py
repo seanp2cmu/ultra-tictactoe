@@ -27,7 +27,7 @@ class GPUConfig:
     device: str = "cuda"
     num_workers: int = 12  
     pin_memory: bool = True
-    parallel_games: int = 512  # RTX 5090 34GB can handle more
+    parallel_games: int = 1024
 
 @dataclass
 class DTWConfig:
