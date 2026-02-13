@@ -36,7 +36,7 @@ def get_best_device():
 
 
 def ensure_model_on_gpu(model_name: str):
-    """Move model to best available GPU (CUDA or MPS) or keep on CPU."""
+    """Move model to best available GPU and initialize TRT if available."""
     if model_name not in models:
         return None
     network = models[model_name]
@@ -44,4 +44,9 @@ def ensure_model_on_gpu(model_name: str):
     if device.type != 'cpu':
         network.device = device
         network.model = network.model.to(device)
+        # Try TensorRT if on CUDA and not already initialized
+        if device.type == 'cuda' and network.trt_engine is None:
+            network._try_tensorrt()
+            if network.trt_engine is None and not network._compiled:
+                network._try_compile()
     return network

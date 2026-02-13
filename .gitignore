@@ -32,6 +32,9 @@ Thumbs.db
 *.pkl
 *.pt
 *.ckpt
+*.onnx
+*.trt
+*.log
 
 # Training outputs
 logs/

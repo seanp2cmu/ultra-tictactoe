@@ -166,6 +166,9 @@ class Trainer:
         
         current_lr = self.network.step_scheduler()
         
+        # Sync TRT engine with updated weights for next iteration's self-play
+        self.network.sync_trt_weights()
+        
         result = {
             'num_samples': num_samples,
             'avg_loss': avg_loss,

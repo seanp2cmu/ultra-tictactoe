@@ -8,7 +8,7 @@ from torch.amp import autocast, GradScaler
 
 from .network import Model
 from utils import BoardEncoder
-from .tensorrt_engine import get_tensorrt_engine, TRT_AVAILABLE
+from .tensorrt_engine import get_tensorrt_process_client, export_onnx, TRT_AVAILABLE
 
 
 class AlphaZeroNet:
@@ -57,8 +57,8 @@ class AlphaZeroNet:
         self._compiled = False
         self.trt_engine = None
         
-        # Try TensorRT first, then torch.compile
-        if torch.cuda.is_available():
+        # Try TensorRT first, then torch.compile (only when actually on CUDA)
+        if self.device.type == 'cuda':
             self._try_tensorrt()
             if self.trt_engine is None and hasattr(torch, 'compile'):
                 self._try_compile()
@@ -241,8 +241,8 @@ class AlphaZeroNet:
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         
-        # Rebuild TensorRT engine with new weights
-        if torch.cuda.is_available():
+        # Rebuild TensorRT engine with new weights (only if already on CUDA)
+        if self.device.type == 'cuda':
             self._try_tensorrt(force_rebuild=True)
             if self.trt_engine is None and not self._compiled:
                 self._try_compile()
@@ -250,23 +250,69 @@ class AlphaZeroNet:
         return checkpoint.get('iteration', 0)
     
     def _try_tensorrt(self, force_rebuild: bool = False):
-        """Try to use Native TensorRT engine."""
+        """Try to use TensorRT via a dedicated server process."""
         if not TRT_AVAILABLE:
             return
         
         try:
-            self.trt_engine = get_tensorrt_engine(
+            # If we already have a live server, just rebuild the engine in-place
+            if force_rebuild and self.trt_engine is not None and self.trt_engine.is_ready():
+                if export_onnx(self.model):
+                    if self.trt_engine.rebuild("./model/model.onnx", "./model/model.trt"):
+                        print("[Model] TensorRT engine rebuilt (separate process)")
+                        return
+                # Rebuild failed – shut down and retry fresh
+                self.trt_engine.shutdown()
+                self.trt_engine = None
+            
+            # Fresh start (or retry after failed rebuild)
+            if self.trt_engine is not None:
+                self.trt_engine.shutdown()
+            
+            self.trt_engine = get_tensorrt_process_client(
                 model=self.model,
                 engine_path="./model/model.trt",
                 onnx_path="./model/model.onnx",
                 max_batch_size=4096,
-                force_rebuild=force_rebuild
+                force_rebuild=force_rebuild,
             )
             if self.trt_engine is not None:
-                print("[Model] Using Native TensorRT engine")
+                print("[Model] Using TensorRT (separate process)")
         except Exception as e:
-            print(f"[Model] Native TensorRT failed: {e}")
+            print(f"[Model] TensorRT process failed: {e}")
+            if self.trt_engine is not None:
+                self.trt_engine.shutdown()
             self.trt_engine = None
+    
+    def sync_trt_weights(self):
+        """Rebuild TRT engine after training to sync with updated PyTorch weights.
+        
+        Only acts if a TRT server process is already running.
+        Returns True if rebuild succeeded, False otherwise.
+        """
+        if self.trt_engine is None or not self.trt_engine.is_ready():
+            return False
+        try:
+            if export_onnx(self.model):
+                if self.trt_engine.rebuild("./model/model.onnx", "./model/model.trt"):
+                    return True
+            # Rebuild failed — fall back to PyTorch
+            print("[Model] TRT weight sync failed, falling back to PyTorch")
+            self.trt_engine.shutdown()
+            self.trt_engine = None
+        except Exception as e:
+            print(f"[Model] TRT weight sync error: {e}")
+            self.shutdown_trt()
+        return False
+    
+    def shutdown_trt(self):
+        """Clean up the TensorRT server process."""
+        if self.trt_engine is not None:
+            self.trt_engine.shutdown()
+            self.trt_engine = None
+    
+    def __del__(self):
+        self.shutdown_trt()
     
     def _try_compile(self):
         """Apply torch.compile as fallback."""

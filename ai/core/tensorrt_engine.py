@@ -1,8 +1,14 @@
-"""Native TensorRT engine for fast inference using torch CUDA streams."""
+"""TensorRT inference server in a separate process.
+
+Avoids CUDA context conflicts with PyTorch by running TensorRT in a
+dedicated spawned process.  Communication uses SharedMemory (zero-copy
+numpy arrays) + multiprocessing Queues for signalling.
+"""
 import os
-import torch
 import numpy as np
 from typing import Tuple, Optional
+from multiprocessing import get_context
+from multiprocessing.shared_memory import SharedMemory
 
 TRT_AVAILABLE = False
 trt = None
@@ -13,198 +19,410 @@ try:
 except ImportError:
     pass
 
+# 'spawn' gives the child a fresh CUDA context (no inherited PyTorch state)
+_mp = get_context('spawn')
 
-class TensorRTEngine:
-    """TensorRT engine wrapper using PyTorch CUDA memory management."""
-    
-    def __init__(self, engine_path: str = None):
-        if not TRT_AVAILABLE:
-            raise ImportError("TensorRT not available")
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA not available")
-        
-        # Force PyTorch to fully initialize CUDA context
-        torch.cuda.init()
-        torch.cuda.set_device(0)
-        _ = torch.cuda.current_device()
-        torch.cuda.synchronize()
-        
-        self.logger = trt.Logger(trt.Logger.WARNING)
-        self.engine = None
-        self.context = None
-        self.stream = torch.cuda.current_stream()
-        
-        # Bindings
-        self.d_input = None
-        self.d_policy = None
-        self.d_value = None
-        self.h_policy = None
-        self.h_value = None
-        self.batch_size = 0
-        
-        if engine_path and os.path.exists(engine_path):
-            self.load_engine(engine_path)
-    
-    def build_engine(
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Server process  (NO PyTorch – owns its own CUDA context)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _trt_server_loop(
+    req_q, resp_q,
+    shm_in_name, shm_pol_name, shm_val_name,
+    max_batch, engine_path, onnx_path, fp16,
+):
+    """Main loop of the TensorRT inference server (runs in child process)."""
+    import ctypes
+    import tensorrt as _trt
+
+    # ── tiny CUDA runtime wrapper via ctypes (no PyTorch needed) ──
+    _rt = None
+    for lib in ('libcudart.so', 'libcudart.so.12', 'libcudart.so.11.0'):
+        try:
+            _rt = ctypes.CDLL(lib)
+            break
+        except OSError:
+            continue
+    if _rt is None:
+        resp_q.put(('ready', False))
+        return
+
+    HTOD, DTOH = 1, 2
+
+    def _ck(ret, tag=''):
+        if ret != 0:
+            raise RuntimeError(f'CUDA {tag} error {ret}')
+
+    def cu_malloc(n):
+        p = ctypes.c_void_p()
+        _ck(_rt.cudaMalloc(ctypes.byref(p), ctypes.c_size_t(n)), 'malloc')
+        return p
+
+    def cu_free(p):
+        if p:
+            _rt.cudaFree(p)
+
+    def cu_h2d(d, h_ptr, n):
+        _ck(_rt.cudaMemcpy(d, h_ptr, ctypes.c_size_t(n), ctypes.c_int(HTOD)), 'h2d')
+
+    def cu_d2h(h_ptr, d, n):
+        _ck(_rt.cudaMemcpy(h_ptr, d, ctypes.c_size_t(n), ctypes.c_int(DTOH)), 'd2h')
+
+    _ck(_rt.cudaSetDevice(ctypes.c_int(0)), 'setdev')
+    stream = ctypes.c_void_p()
+    _ck(_rt.cudaStreamCreate(ctypes.byref(stream)), 'stream')
+
+    # ── open shared-memory numpy views ──
+    shm_in  = SharedMemory(name=shm_in_name,  create=False)
+    shm_pol = SharedMemory(name=shm_pol_name, create=False)
+    shm_val = SharedMemory(name=shm_val_name, create=False)
+
+    buf_in  = np.ndarray((max_batch, 7, 9, 9), dtype=np.float32, buffer=shm_in.buf)
+    buf_pol = np.ndarray((max_batch, 81),       dtype=np.float32, buffer=shm_pol.buf)
+    buf_val = np.ndarray((max_batch, 1),        dtype=np.float32, buffer=shm_val.buf)
+
+    # Stable host pointers for cudaMemcpy (point into shared memory)
+    h_in  = ctypes.c_void_p(buf_in.ctypes.data)
+    h_pol = ctypes.c_void_p(buf_pol.ctypes.data)
+    h_val = ctypes.c_void_p(buf_val.ctypes.data)
+
+    # ── TensorRT state ──
+    logger  = _trt.Logger(_trt.Logger.WARNING)
+    engine  = None
+    context = None
+    d_in = d_pol = d_val = None
+    alloc_bs = 0
+
+    def _build_from_onnx(ox, ep, mbs, f16):
+        nonlocal engine, context
+        if not os.path.exists(ox):
+            print(f'[TRT-Srv] ONNX not found: {ox}')
+            return False
+        builder = _trt.Builder(logger)
+        net = builder.create_network(
+            1 << int(_trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+        )
+        parser = _trt.OnnxParser(net, logger)
+        with open(ox, 'rb') as f:
+            if not parser.parse(f.read()):
+                for i in range(parser.num_errors):
+                    print(f'[TRT-Srv] parse err: {parser.get_error(i)}')
+                return False
+        cfg = builder.create_builder_config()
+        cfg.set_memory_pool_limit(_trt.MemoryPoolType.WORKSPACE, 1 << 32)
+        if f16 and builder.platform_has_fast_fp16:
+            cfg.set_flag(_trt.BuilderFlag.FP16)
+            print('[TRT-Srv] FP16 enabled')
+        prof = builder.create_optimization_profile()
+        prof.set_shape(
+            'input', (1, 7, 9, 9), (mbs // 2, 7, 9, 9), (mbs, 7, 9, 9)
+        )
+        cfg.add_optimization_profile(prof)
+        print(f'[TRT-Srv] Building engine (max_batch={mbs}) ...')
+        blob = builder.build_serialized_network(net, cfg)
+        if blob is None:
+            print('[TRT-Srv] build failed')
+            return False
+        os.makedirs(os.path.dirname(ep) or '.', exist_ok=True)
+        with open(ep, 'wb') as f:
+            f.write(blob)
+        print(f'[TRT-Srv] saved {ep}')
+        rt = _trt.Runtime(logger)
+        engine = rt.deserialize_cuda_engine(blob)
+        context = engine.create_execution_context()
+        return True
+
+    def _load_engine(ep):
+        nonlocal engine, context
+        if not os.path.exists(ep):
+            return False
+        rt = _trt.Runtime(logger)
+        with open(ep, 'rb') as f:
+            engine = rt.deserialize_cuda_engine(f.read())
+        if engine is None:
+            return False
+        context = engine.create_execution_context()
+        print(f'[TRT-Srv] loaded {ep}')
+        return True
+
+    def _ensure_dev(bs):
+        nonlocal d_in, d_pol, d_val, alloc_bs
+        if bs <= alloc_bs:
+            return
+        cu_free(d_in)
+        cu_free(d_pol)
+        cu_free(d_val)
+        alloc_bs = max(bs, max_batch)
+        d_in  = cu_malloc(alloc_bs * 7 * 9 * 9 * 4)
+        d_pol = cu_malloc(alloc_bs * 81 * 4)
+        d_val = cu_malloc(alloc_bs * 1  * 4)
+
+    # ── initial load / build ──
+    ok = _load_engine(engine_path) if os.path.exists(engine_path) else False
+    if not ok and os.path.exists(onnx_path):
+        ok = _build_from_onnx(onnx_path, engine_path, max_batch, fp16)
+    if ok:
+        _ensure_dev(max_batch)
+    resp_q.put(('ready', ok))
+
+    # ── event loop ──
+    while True:
+        try:
+            msg = req_q.get()
+        except Exception:
+            break
+
+        cmd = msg[0]
+
+        if cmd == 'shutdown':
+            break
+
+        elif cmd == 'infer':
+            bs = msg[1]
+            if engine is None:
+                resp_q.put(('error', 'no engine'))
+                continue
+            try:
+                _ensure_dev(bs)
+                ib = bs * 7 * 9 * 9 * 4
+                pb = bs * 81 * 4
+                vb = bs * 1  * 4
+
+                cu_h2d(d_in, h_in, ib)
+
+                context.set_input_shape('input', (bs, 7, 9, 9))
+                context.set_tensor_address('input',  d_in.value)
+                context.set_tensor_address('policy', d_pol.value)
+                context.set_tensor_address('value',  d_val.value)
+                context.execute_async_v3(stream.value)
+                _rt.cudaStreamSynchronize(stream)
+
+                cu_d2h(h_pol, d_pol, pb)
+                cu_d2h(h_val, d_val, vb)
+
+                resp_q.put(('done',))
+            except Exception as e:
+                resp_q.put(('error', str(e)))
+
+        elif cmd == 'rebuild':
+            _, ox, ep, mbs, f16 = msg
+            context = None
+            engine = None
+            try:
+                ok = _build_from_onnx(ox, ep, mbs, f16)
+                if ok:
+                    _ensure_dev(mbs)
+                resp_q.put(('rebuilt', ok))
+            except Exception as e:
+                resp_q.put(('error', str(e)))
+
+    # ── cleanup ──
+    cu_free(d_in)
+    cu_free(d_pol)
+    cu_free(d_val)
+    _rt.cudaStreamDestroy(stream)
+    shm_in.close()
+    shm_pol.close()
+    shm_val.close()
+    print('[TRT-Srv] shutdown')
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Client  (runs in the main PyTorch process)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TensorRTProcessClient:
+    """Communicates with a dedicated TensorRT server process via SharedMemory."""
+
+    def __init__(self, max_batch_size: int = 4096):
+        self.max_batch_size = max_batch_size
+        self._ready = False
+        self._proc = None
+        self._req_q = None
+        self._resp_q = None
+        self._shms: list = []
+        self._input_buf = None
+        self._policy_buf = None
+        self._value_buf = None
+
+    # ── lifecycle ──
+
+    def start(
         self,
-        model: torch.nn.Module,
-        onnx_path: str = "./model/model.onnx",
-        engine_path: str = "./model/model.trt",
-        max_batch_size: int = 4096,
-        fp16: bool = True
+        engine_path: str = './model/model.trt',
+        onnx_path: str = './model/model.onnx',
+        fp16: bool = True,
     ) -> bool:
-        """Build TensorRT engine from PyTorch model."""
-        # Get the raw model if it's compiled
-        raw_model = model
-        if hasattr(model, '_orig_mod'):
-            raw_model = model._orig_mod
-        
-        # Export to ONNX using legacy exporter
-        raw_model.eval()
-        dummy_input = torch.randn(1, 7, 9, 9).cuda()
-        
+        """Start the TensorRT server process."""
+        if self._proc is not None and self._proc.is_alive():
+            return self._ready
+
+        pid = os.getpid()
+        names = [f'trt_in_{pid}', f'trt_pol_{pid}', f'trt_val_{pid}']
+        sizes = [
+            self.max_batch_size * 7 * 9 * 9 * 4,
+            self.max_batch_size * 81 * 4,
+            self.max_batch_size * 1  * 4,
+        ]
+
+        # Clean any stale shared memory from previous runs
+        for n in names:
+            try:
+                s = SharedMemory(name=n, create=False)
+                s.close()
+                s.unlink()
+            except FileNotFoundError:
+                pass
+
+        shms = [SharedMemory(name=n, create=True, size=sz)
+                for n, sz in zip(names, sizes)]
+        self._shms = shms
+
+        self._input_buf  = np.ndarray(
+            (self.max_batch_size, 7, 9, 9), np.float32, buffer=shms[0].buf)
+        self._policy_buf = np.ndarray(
+            (self.max_batch_size, 81),       np.float32, buffer=shms[1].buf)
+        self._value_buf  = np.ndarray(
+            (self.max_batch_size, 1),        np.float32, buffer=shms[2].buf)
+
+        self._req_q  = _mp.Queue()
+        self._resp_q = _mp.Queue()
+
+        self._proc = _mp.Process(
+            target=_trt_server_loop,
+            args=(
+                self._req_q, self._resp_q,
+                names[0], names[1], names[2],
+                self.max_batch_size, engine_path, onnx_path, fp16,
+            ),
+            daemon=True,
+        )
+        self._proc.start()
+
+        # Wait for server initialisation (may build engine – up to 10 min)
+        status, ok = self._resp_q.get(timeout=600)
+        self._ready = (status == 'ready' and ok)
+        print(f'[TRT-Client] server {"ready" if self._ready else "FAILED"}')
+        return self._ready
+
+    def shutdown(self):
+        """Stop the server process and release shared memory."""
+        if self._proc is not None and self._proc.is_alive():
+            try:
+                self._req_q.put(('shutdown',))
+                self._proc.join(timeout=5)
+            except Exception:
+                self._proc.kill()
+        for s in self._shms:
+            try:
+                s.close()
+                s.unlink()
+            except Exception:
+                pass
+        self._shms.clear()
+        self._proc = None
+        self._ready = False
+
+    def __del__(self):
+        self.shutdown()
+
+    # ── inference ──
+
+    def infer(self, input_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Run inference via the server process (zero-copy shared memory)."""
+        bs = input_array.shape[0]
+        self._input_buf[:bs] = input_array          # write into shared memory
+        self._req_q.put(('infer', bs))
+        resp = self._resp_q.get(timeout=30)
+        if resp[0] == 'error':
+            raise RuntimeError(f'TRT infer: {resp[1]}')
+        return self._policy_buf[:bs].copy(), self._value_buf[:bs].copy()
+
+    def rebuild(
+        self,
+        onnx_path: str,
+        engine_path: str,
+        max_batch_size: int = 4096,
+        fp16: bool = True,
+    ) -> bool:
+        """Rebuild TensorRT engine (ONNX must already be re-exported)."""
+        if not self.is_ready():
+            return False
+        self._req_q.put(('rebuild', onnx_path, engine_path,
+                         max_batch_size, fp16))
+        resp = self._resp_q.get(timeout=600)
+        if resp[0] == 'error':
+            print(f'[TRT-Client] rebuild error: {resp[1]}')
+            self._ready = False
+            return False
+        self._ready = resp[1]
+        return self._ready
+
+    def is_ready(self) -> bool:
+        """Check if the server is alive and engine is loaded."""
+        return (self._ready
+                and self._proc is not None
+                and self._proc.is_alive())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers  (run in the main PyTorch process)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def export_onnx(model, onnx_path: str = './model/model.onnx') -> bool:
+    """Export PyTorch model to ONNX (must run in the PyTorch process)."""
+    import torch
+
+    raw = model._orig_mod if hasattr(model, '_orig_mod') else model
+    raw.eval()
+    dummy = torch.randn(1, 7, 9, 9).cuda()
+    try:
         with torch.no_grad():
             torch.onnx.export(
-                raw_model,
-                dummy_input,
-                onnx_path,
+                raw, dummy, onnx_path,
                 export_params=True,
                 opset_version=13,
                 do_constant_folding=True,
                 input_names=['input'],
                 output_names=['policy', 'value'],
                 dynamic_axes={
-                    'input': {0: 'batch_size'},
+                    'input':  {0: 'batch_size'},
                     'policy': {0: 'batch_size'},
-                    'value': {0: 'batch_size'}
+                    'value':  {0: 'batch_size'},
                 },
-                dynamo=False
+                dynamo=False,
             )
-        print(f"[TRT] Exported ONNX to {onnx_path}")
-        
-        # Build TensorRT engine
-        builder = trt.Builder(self.logger)
-        network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
-        parser = trt.OnnxParser(network, self.logger)
-        
-        with open(onnx_path, 'rb') as f:
-            if not parser.parse(f.read()):
-                for i in range(parser.num_errors):
-                    print(f"[TRT] ONNX parse error: {parser.get_error(i)}")
-                return False
-        
-        config = builder.create_builder_config()
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 32)  # 1GB
-        
-        if fp16 and builder.platform_has_fast_fp16:
-            config.set_flag(trt.BuilderFlag.FP16)
-            print("[TRT] FP16 enabled")
-        
-        # Optimization profile for dynamic batch
-        profile = builder.create_optimization_profile()
-        profile.set_shape('input', (1, 7, 9, 9), (max_batch_size // 2, 7, 9, 9), (max_batch_size, 7, 9, 9))
-        config.add_optimization_profile(profile)
-        
-        print(f"[TRT] Building engine (max_batch={max_batch_size})... This may take a few minutes.")
-        serialized_engine = builder.build_serialized_network(network, config)
-        
-        if serialized_engine is None:
-            print("[TRT] Engine build failed")
-            return False
-        
-        # Save engine
-        os.makedirs(os.path.dirname(engine_path), exist_ok=True)
-        with open(engine_path, 'wb') as f:
-            f.write(serialized_engine)
-        print(f"[TRT] Engine saved to {engine_path}")
-        
-        # Load the built engine
-        runtime = trt.Runtime(self.logger)
-        self.engine = runtime.deserialize_cuda_engine(serialized_engine)
-        self.context = self.engine.create_execution_context()
-        
+        print(f'[TRT] ONNX exported → {onnx_path}')
         return True
-    
-    def load_engine(self, engine_path: str) -> bool:
-        """Load TensorRT engine from file."""
-        if not os.path.exists(engine_path):
-            return False
-        
-        runtime = trt.Runtime(self.logger)
-        with open(engine_path, 'rb') as f:
-            self.engine = runtime.deserialize_cuda_engine(f.read())
-        
-        if self.engine is None:
-            return False
-        
-        self.context = self.engine.create_execution_context()
-        print(f"[TRT] Engine loaded from {engine_path}")
-        return True
-    
-    def _allocate_buffers(self, batch_size: int):
-        """Allocate GPU buffers using PyTorch."""
-        if batch_size == self.batch_size:
-            return
-        
-        self.batch_size = batch_size
-        
-        # Use PyTorch tensors for GPU memory (automatically managed)
-        self.d_input = torch.empty((batch_size, 7, 9, 9), dtype=torch.float32, device='cuda')
-        self.d_policy = torch.empty((batch_size, 81), dtype=torch.float32, device='cuda')
-        self.d_value = torch.empty((batch_size, 1), dtype=torch.float32, device='cuda')
-        
-        # Set input shape for dynamic batch
-        self.context.set_input_shape('input', (batch_size, 7, 9, 9))
-    
-    def infer(self, input_tensor: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Run inference on batch using PyTorch CUDA."""
-        batch_size = input_tensor.shape[0]
-        self._allocate_buffers(batch_size)
-        
-        with torch.cuda.stream(self.stream):
-            # Copy input to GPU using PyTorch
-            self.d_input.copy_(torch.from_numpy(input_tensor))
-            
-            # Set tensor addresses
-            self.context.set_tensor_address('input', self.d_input.data_ptr())
-            self.context.set_tensor_address('policy', self.d_policy.data_ptr())
-            self.context.set_tensor_address('value', self.d_value.data_ptr())
-            
-            # Execute
-            self.context.execute_async_v3(self.stream.cuda_stream)
-        
-        # Synchronize and copy back
-        self.stream.synchronize()
-        
-        return self.d_policy.cpu().numpy(), self.d_value.cpu().numpy()
-    
-    def is_ready(self) -> bool:
-        """Check if engine is loaded and ready."""
-        return self.engine is not None and self.context is not None
+    except Exception as e:
+        print(f'[TRT] ONNX export failed: {e}')
+        return False
 
 
-def get_tensorrt_engine(
-    model: torch.nn.Module = None,
-    engine_path: str = "./model/model.trt",
-    onnx_path: str = "./model/model.onnx",
+def get_tensorrt_process_client(
+    model=None,
+    engine_path: str = './model/model.trt',
+    onnx_path: str = './model/model.onnx',
     max_batch_size: int = 4096,
-    force_rebuild: bool = False
-) -> Optional[TensorRTEngine]:
-    """Get or build TensorRT engine."""
+    force_rebuild: bool = False,
+) -> Optional[TensorRTProcessClient]:
+    """Get a TensorRT inference client backed by a dedicated server process."""
     if not TRT_AVAILABLE:
-        print("[TRT] TensorRT not available, using PyTorch")
+        print('[TRT] TensorRT not available')
         return None
-    
-    engine = TensorRTEngine()
-    
-    # Try to load existing engine
-    if not force_rebuild and os.path.exists(engine_path):
-        if engine.load_engine(engine_path):
-            return engine
-    
-    # Build new engine if model provided
-    if model is not None:
-        if engine.build_engine(model, onnx_path, engine_path, max_batch_size):
-            return engine
-    
+
+    # Export ONNX if model provided and needed
+    if model is not None and (force_rebuild or not os.path.exists(onnx_path)):
+        if not export_onnx(model, onnx_path):
+            return None
+
+    # Delete stale engine so server rebuilds from fresh ONNX
+    if force_rebuild and os.path.exists(engine_path):
+        os.remove(engine_path)
+
+    client = TensorRTProcessClient(max_batch_size)
+    if client.start(engine_path=engine_path, onnx_path=onnx_path):
+        return client
+    client.shutdown()
     return None
