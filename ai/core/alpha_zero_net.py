@@ -8,6 +8,7 @@ from torch.amp import autocast, GradScaler
 
 from .network import Model
 from utils import BoardEncoder
+from .tensorrt_engine import get_tensorrt_engine, TRT_AVAILABLE
 
 
 class AlphaZeroNet:
@@ -54,10 +55,13 @@ class AlphaZeroNet:
         self.scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
         self.predict_lock = threading.Lock()
         self._compiled = False
+        self.trt_engine = None
         
-        # torch.compile for faster inference (PyTorch 2.0+)
-        if torch.cuda.is_available() and hasattr(torch, 'compile'):
-            self._try_compile()
+        # Try TensorRT first, then torch.compile
+        if torch.cuda.is_available():
+            self._try_tensorrt()
+            if self.trt_engine is None and hasattr(torch, 'compile'):
+                self._try_compile()
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Thread-safe single board prediction with canonical form."""
@@ -85,29 +89,39 @@ class AlphaZeroNet:
     def predict_batch(self, board_states) -> Tuple[np.ndarray, np.ndarray]:
         """Thread-safe batch prediction with canonical form."""
         with self.predict_lock:
-            self.model.eval()
-            
             # Use BoardEncoder for consistent transformation
             batch_tensor, inverse_fns = BoardEncoder.to_inference_tensor_batch(board_states)
             
-            with torch.no_grad():
-                tensor = torch.from_numpy(batch_tensor).to(self.device)
-                
-                if self.device.type == 'cuda':
-                    with autocast(device_type='cuda'):
+            # Use TensorRT if available
+            if self.trt_engine is not None and self.trt_engine.is_ready():
+                policy_logits, values = self.trt_engine.infer(batch_tensor)
+                policy_probs = self._softmax_numpy(policy_logits)
+            else:
+                self.model.eval()
+                with torch.no_grad():
+                    tensor = torch.from_numpy(batch_tensor).to(self.device)
+                    
+                    if self.device.type == 'cuda':
+                        with autocast(device_type='cuda'):
+                            policy_logits, values = self.model(tensor)
+                    else:
                         policy_logits, values = self.model(tensor)
-                else:
-                    policy_logits, values = self.model(tensor)
-                
-                policy_probs = F.softmax(policy_logits, dim=1).cpu().numpy()
-                
-                # Transform each policy back to original orientation
-                original_policies = []
-                for i, policy in enumerate(policy_probs):
-                    original_policy = inverse_fns[i](policy)
-                    original_policies.append(original_policy)
-                
-                return np.array(original_policies), values.cpu().numpy()
+                    
+                    policy_probs = F.softmax(policy_logits, dim=1).cpu().numpy()
+                    values = values.cpu().numpy()
+            
+            # Transform each policy back to original orientation
+            original_policies = []
+            for i, policy in enumerate(policy_probs):
+                original_policy = inverse_fns[i](policy)
+                original_policies.append(original_policy)
+            
+            return np.array(original_policies), values
+    
+    def _softmax_numpy(self, x: np.ndarray) -> np.ndarray:
+        """Numpy softmax for TensorRT output."""
+        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
+        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
     
     def train_step(
         self,
@@ -227,31 +241,41 @@ class AlphaZeroNet:
         if self.scaler is not None and 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         
-        # torch.compile after loading (CUDA only) - only if not already compiled
-        if not self._compiled:
-            self._try_compile()
+        # Rebuild TensorRT engine with new weights
+        if torch.cuda.is_available():
+            self._try_tensorrt(force_rebuild=True)
+            if self.trt_engine is None and not self._compiled:
+                self._try_compile()
         
         return checkpoint.get('iteration', 0)
     
+    def _try_tensorrt(self, force_rebuild: bool = False):
+        """Try to use Native TensorRT engine."""
+        if not TRT_AVAILABLE:
+            return
+        
+        try:
+            self.trt_engine = get_tensorrt_engine(
+                model=self.model,
+                engine_path="./model/model.trt",
+                onnx_path="./model/model.onnx",
+                max_batch_size=4096,
+                force_rebuild=force_rebuild
+            )
+            if self.trt_engine is not None:
+                print("[Model] Using Native TensorRT engine")
+        except Exception as e:
+            print(f"[Model] Native TensorRT failed: {e}")
+            self.trt_engine = None
+    
     def _try_compile(self):
-        """Apply torch.compile with TensorRT backend if available."""
+        """Apply torch.compile as fallback."""
         if self._compiled:
             return
         if not torch.cuda.is_available() or not hasattr(torch, 'compile'):
             return
         
-        # Try TensorRT backend first (fastest)
-        try:
-            import torch_tensorrt
-            self.model = torch.compile(self.model, backend='torch_tensorrt')
-            self._compiled = True
-            self._compile_backend = 'tensorrt'
-            print("[Model] Compiled with TensorRT backend")
-            return
-        except (ImportError, Exception) as e:
-            print(f"[Model] TensorRT failed: {e}, trying inductor...")
-        
-        # Fallback to inductor with reduce-overhead mode
+        # Use inductor with reduce-overhead mode
         try:
             self.model = torch.compile(self.model, mode='reduce-overhead')
             self._compiled = True

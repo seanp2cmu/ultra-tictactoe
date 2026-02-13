@@ -27,7 +27,7 @@ class GPUConfig:
     device: str = "cuda"
     num_workers: int = 12  
     pin_memory: bool = True
-    parallel_games: int = 1024
+    parallel_games: int = 2048
 
 @dataclass
 class DTWConfig:
