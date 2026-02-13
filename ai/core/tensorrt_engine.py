@@ -58,7 +58,7 @@ class TensorRTEngine:
         
         # Export to ONNX using legacy exporter
         raw_model.eval()
-        dummy_input = torch.randn(1, 3, 9, 9).cuda()
+        dummy_input = torch.randn(1, 7, 9, 9).cuda()
         
         with torch.no_grad():
             torch.onnx.export(
@@ -91,7 +91,7 @@ class TensorRTEngine:
                 return False
         
         config = builder.create_builder_config()
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 32)  # 1GB
         
         if fp16 and builder.platform_has_fast_fp16:
             config.set_flag(trt.BuilderFlag.FP16)
@@ -99,7 +99,7 @@ class TensorRTEngine:
         
         # Optimization profile for dynamic batch
         profile = builder.create_optimization_profile()
-        profile.set_shape('input', (1, 3, 9, 9), (max_batch_size // 2, 3, 9, 9), (max_batch_size, 3, 9, 9))
+        profile.set_shape('input', (1, 7, 9, 9), (max_batch_size // 2, 7, 9, 9), (max_batch_size, 7, 9, 9))
         config.add_optimization_profile(profile)
         
         print(f"[TRT] Building engine (max_batch={max_batch_size})... This may take a few minutes.")
@@ -146,12 +146,12 @@ class TensorRTEngine:
         self.batch_size = batch_size
         
         # Use PyTorch tensors for GPU memory (automatically managed)
-        self.d_input = torch.empty((batch_size, 3, 9, 9), dtype=torch.float32, device='cuda')
+        self.d_input = torch.empty((batch_size, 7, 9, 9), dtype=torch.float32, device='cuda')
         self.d_policy = torch.empty((batch_size, 81), dtype=torch.float32, device='cuda')
         self.d_value = torch.empty((batch_size, 1), dtype=torch.float32, device='cuda')
         
         # Set input shape for dynamic batch
-        self.context.set_input_shape('input', (batch_size, 3, 9, 9))
+        self.context.set_input_shape('input', (batch_size, 7, 9, 9))
     
     def infer(self, input_tensor: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Run inference on batch using PyTorch CUDA."""
