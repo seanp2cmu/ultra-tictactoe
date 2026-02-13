@@ -50,14 +50,26 @@ class DTWCalculator:
         return board.count_playable_empty_cells() <= self.endgame_threshold
     
     def lookup_cache(self, board: Board):
-        """Cache lookup only (no search). Returns cached result or None."""
+        """Cache lookup only (no search). Returns cached result or None.
+        
+        NOTE: best_move is set to None because Python cache uses canonical hash
+        but best_move coordinates are orientation-dependent.
+        """
         if self.use_cache and self.tt:
-            return self.tt.get(board)
+            cached = self.tt.get(board)
+            if cached is not None:
+                result, dtw, _ = cached  # Ignore cached best_move
+                return (result, dtw, None)
         return None
     
-    def calculate_dtw(self, board: Board, _empty_count: int = None):
+    def calculate_dtw(self, board: Board, _empty_count: int = None, need_best_move: bool = True):
         """
         DTW calculation using C++ Alpha-Beta Search.
+        
+        Args:
+            board: Board to analyze
+            _empty_count: Optional pre-computed empty cell count
+            need_best_move: If True, always compute fresh to get correct best_move coords
         
         Returns:
             (result, dtw, best_move) or None
@@ -65,11 +77,13 @@ class DTWCalculator:
             - dtw: Distance to Win/Loss
             - best_move: (row, col) or None
         """
-        # Check Python cache first
-        if self.use_cache and self.tt:
+        # Check Python cache first (but only if we don't need best_move)
+        # Python cache uses canonical hash, so best_move coords may be wrong
+        if self.use_cache and self.tt and not need_best_move:
             cached = self.tt.get(board)
             if cached is not None:
-                return cached
+                result, dtw, _ = cached
+                return (result, dtw, None)
         
         empty_count = _empty_count if _empty_count is not None else board.count_playable_empty_cells()
         if empty_count > self.endgame_threshold:

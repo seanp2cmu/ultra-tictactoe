@@ -259,10 +259,11 @@ class SelfPlayWorker:
                 # DTW search for endgame - early termination
                 for game in endgame_games:
                     board = game['board']
-                    dtw_result = self.dtw_calculator.calculate_dtw(board)
+                    # Don't need best_move here, just result/value
+                    dtw_result = self.dtw_calculator.calculate_dtw(board, need_best_move=False)
                     
                     if dtw_result is not None:
-                        result, dtw, best_move = dtw_result
+                        result, dtw, _ = dtw_result  # best_move not used
                         
                         # Early termination: use DTW result as ground truth
                         game['done'] = True
