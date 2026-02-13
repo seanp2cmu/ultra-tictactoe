@@ -245,13 +245,18 @@ class AlphaZeroNet:
             import torch_tensorrt
             self.model = torch.compile(self.model, backend='torch_tensorrt')
             self._compiled = True
+            self._compile_backend = 'tensorrt'
+            print("[Model] Compiled with TensorRT backend")
             return
-        except (ImportError, Exception):
-            pass
+        except (ImportError, Exception) as e:
+            print(f"[Model] TensorRT failed: {e}, trying inductor...")
         
         # Fallback to inductor with reduce-overhead mode
         try:
             self.model = torch.compile(self.model, mode='reduce-overhead')
             self._compiled = True
+            self._compile_backend = 'inductor'
+            print("[Model] Compiled with inductor (reduce-overhead)")
         except Exception:
-            pass  # Fallback to eager mode
+            self._compile_backend = 'eager'
+            print("[Model] Using eager mode (no compilation)")
