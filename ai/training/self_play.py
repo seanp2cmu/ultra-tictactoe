@@ -316,13 +316,36 @@ class SelfPlayWorker:
                 for game, (policy, action) in mcts_results:
                     board = game['board']
                     
-                    # Get canonical form for training
+                    # Get canonical form - BOTH state and policy must be in same orientation
+                    # Inference uses canonical form, so training must too
                     boards_arr, completed_arr, transform_idx = BoardSymmetry.get_canonical_with_transform(board)
                     canonical_policy = BoardSymmetry.transform_policy(policy, transform_idx)
                     
-                    # Store training data
+                    # Create canonical board for tensor encoding
+                    canonical_board = Board()
+                    for r in range(9):
+                        for c in range(9):
+                            if boards_arr[r, c] != 0:
+                                canonical_board.set_cell(r, c, int(boards_arr[r, c]))
+                    if hasattr(canonical_board, 'set_completed_boards_2d'):
+                        canonical_board.set_completed_boards_2d(completed_arr.tolist())
+                    else:
+                        canonical_board.completed_boards = completed_arr.tolist()
+                    canonical_board.current_player = board.current_player
+                    
+                    # Transform last_move to canonical
+                    if board.last_move is not None and transform_idx != 0:
+                        transforms = BoardSymmetry._build_transforms()
+                        old_idx = board.last_move[0] * 9 + board.last_move[1]
+                        new_idx = np.where(transforms[transform_idx] == old_idx)[0]
+                        if len(new_idx) > 0:
+                            canonical_board.last_move = (new_idx[0] // 9, new_idx[0] % 9)
+                    else:
+                        canonical_board.last_move = board.last_move
+                    
+                    # Store training data - BOTH in canonical form
                     game['history'].append({
-                        'state': self._board_to_input(board),
+                        'state': self._board_to_input(canonical_board),
                         'policy': canonical_policy,
                         'player': board.current_player
                     })
