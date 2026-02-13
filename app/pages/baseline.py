@@ -301,7 +301,7 @@ def create_baseline_tab(available_models):
             label="Number of Games (alternating first player)"
         )
         baseline_sims_slider = gr.Slider(
-            minimum=50,
+            minimum=0,
             maximum=800,
             value=200,
             step=50,

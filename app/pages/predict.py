@@ -106,7 +106,7 @@ def create_predict_tab(available_models):
             value=available_models[0] if available_models else None
         )
         num_sims_slider = gr.Slider(
-            minimum=50,
+            minimum=0,
             maximum=1000,
             value=200,
             step=50,
