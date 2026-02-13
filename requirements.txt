@@ -28,7 +28,6 @@ sympy==1.14.0
 torch
 torch_tensorrt
 tensorrt
-pycuda
 onnx
 onnxscript
 torchsummaryX==1.1.0
