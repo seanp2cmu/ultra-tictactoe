@@ -1,4 +1,8 @@
-"""Parallel MCTS for batch inference across multiple games."""
+"""Parallel MCTS for batch inference across multiple games.
+
+Supports double-buffered pipeline: overlaps GPU inference with CPU MCTS work
+by splitting games into 2 groups and alternating inference/expansion.
+"""
 from typing import List, Tuple, Optional, Dict
 import numpy as np
 import time
@@ -33,7 +37,10 @@ def get_parallel_timing():
 
 
 class ParallelMCTS:
-    """MCTS that can collect leaves from multiple games for batch inference."""
+    """MCTS that collects leaves from multiple games for batch inference.
+    
+    Uses double-buffered pipeline to overlap GPU inference with CPU MCTS work.
+    """
     
     def __init__(
         self,
@@ -47,31 +54,63 @@ class ParallelMCTS:
         self.c_puct = c_puct
         self.dtw_calculator = dtw_calculator
     
-    def search_parallel(
-        self,
-        games: List[Dict],
-        temperature: float = 1.0,
-        add_noise: bool = True
-    ) -> List[Tuple[np.ndarray, int]]:
-        """
-        Run MCTS on multiple games in parallel, sharing GPU inference.
-        
-        Args:
-            games: List of game dicts with 'board' key
-            temperature: Temperature for move selection
-            add_noise: Add Dirichlet noise at root
-            
-        Returns:
-            List of (policy, action) for each game
-        """
-        roots = []
-        for game in games:
-            root = Node(game['board'])
-            roots.append(root)
-        
+    # ── Helper methods ──
+    
+    def _select_leaf(self, root):
+        """Select one leaf from a single root, applying virtual loss along the path."""
+        node = root
+        search_path = [node]
+        while node.is_expanded() and not node.is_terminal():
+            _, node = node.select_child(self.c_puct)
+            search_path.append(node)
+        # Apply virtual loss to all nodes on path (discourages re-selection)
+        for n in search_path:
+            n.add_virtual_loss(1)
+        return node, search_path
+    
+    def _select_multi_leaves(self, roots, indices, leaves_per_game):
+        """Select multiple leaves per game using virtual loss for diversity."""
+        leaves = []
+        boards = []
+        for idx in indices:
+            root = roots[idx]
+            for _ in range(leaves_per_game):
+                node, search_path = self._select_leaf(root)
+                if not node.is_terminal() and not node.is_expanded():
+                    leaves.append((idx, node, search_path))
+                    boards.append(node.board)
+                else:
+                    # Terminal or already expanded — revert virtual loss
+                    for n in search_path:
+                        n.revert_virtual_loss(1)
+        return leaves, boards
+    
+    @staticmethod
+    def _expand_backprop(leaves, policies, values):
+        """Expand leaf nodes, backpropagate values, and revert virtual losses."""
+        values_np = 2.0 * values[:len(leaves)].ravel() - 1.0
+        for i, (game_idx, node, search_path) in enumerate(leaves):
+            policy = policies[i]
+            value = float(values_np[i])
+            node.expand_numpy(
+                policy.astype(np.float32) if policy.dtype != np.float32 else policy
+            )
+            # Revert virtual loss and apply real backup
+            for path_node in reversed(search_path):
+                path_node.revert_virtual_loss(1)
+                path_node.update(value)
+                value = -value
+    
+    @staticmethod
+    def _revert_virtual_losses(leaves):
+        """Revert virtual losses without expand/backprop (for cleanup)."""
+        for _, node, search_path in leaves:
+            for n in search_path:
+                n.revert_virtual_loss(1)
+    
+    def _expand_roots(self, roots, games, add_noise):
+        """Initial expansion of all root nodes (synchronous)."""
         global _parallel_timing
-        
-        # Initial expansion of all roots
         boards = [g['board'] for g in games]
         t0 = time.perf_counter()
         policies, _ = self.network.predict_batch(boards)
@@ -83,51 +122,12 @@ class ParallelMCTS:
         policies_f32 = policies.astype(np.float32) if policies.dtype != np.float32 else policies
         for i, root in enumerate(roots):
             root.expand_numpy(policies_f32[i])
-        
-        # Run simulations — 1 leaf per game per iteration, correct sim count
-        for sim in range(self.num_simulations):
-            all_leaves = []
-            all_boards = []
-            
-            for game_idx, root in enumerate(roots):
-                node = root
-                search_path = [node]
-                
-                while node.is_expanded() and not node.is_terminal():
-                    _, node = node.select_child(self.c_puct)
-                    search_path.append(node)
-                
-                if not node.is_terminal() and not node.is_expanded():
-                    all_leaves.append((game_idx, node, search_path))
-                    all_boards.append(node.board)
-            
-            if not all_boards:
-                break
-            
-            t0 = time.perf_counter()
-            policies_batch, values_batch = self.network.predict_batch(all_boards)
-            _parallel_timing['network_time'] += time.perf_counter() - t0
-            
-            values_np = 2.0 * values_batch[:len(all_leaves)].ravel() - 1.0
-            for i, (game_idx, node, search_path) in enumerate(all_leaves):
-                policy = policies_batch[i]
-                value = float(values_np[i])
-                
-                if self.dtw_calculator and self.dtw_calculator.is_endgame(node.board):
-                    cached = self.dtw_calculator.lookup_cache(node.board)
-                    if cached is not None:
-                        result, _, _ = cached
-                        value = float(result)
-                
-                node.expand_numpy(policy.astype(np.float32) if policy.dtype != np.float32 else policy)
-                
-                for path_node in reversed(search_path):
-                    path_node.update(value)
-                    value = -value
-        
-        # Select moves
+    
+    @staticmethod
+    def _select_moves(roots, temperature):
+        """Select moves based on visit counts."""
         results = []
-        for i, root in enumerate(roots):
+        for root in roots:
             visits = np.zeros(81, dtype=np.float32)
             for action, child in root.children.items():
                 visits[action] = child.visits
@@ -147,14 +147,19 @@ class ParallelMCTS:
                     action = int(np.argmax(policy))
                 else:
                     action = int(np.random.choice(81, p=policy))
-            elif temperature == 0:
+            elif temperature < 0.01:
                 action = int(np.argmax(visits))
                 policy = np.zeros(81)
                 policy[action] = 1.0
             else:
-                visits_temp = visits ** (1.0 / temperature)
+                # Use log-space to avoid overflow for large visits or small temperature
+                with np.errstate(divide='ignore'):
+                    log_visits = np.where(visits > 0, np.log(visits), -1e9)
+                log_temp = log_visits / temperature
+                log_temp -= log_temp.max()  # numerical stability
+                visits_temp = np.exp(log_temp)
                 total = visits_temp.sum()
-                if total == 0:
+                if total == 0 or not np.isfinite(total):
                     policy = np.ones(81) / 81
                 else:
                     policy = visits_temp / total
@@ -162,5 +167,144 @@ class ParallelMCTS:
                 action = np.random.choice(81, p=policy)
             
             results.append((policy, action))
-        
         return results
+    
+    # ── Main search methods ──
+    
+    def search_parallel(
+        self,
+        games: List[Dict],
+        temperature: float = 1.0,
+        add_noise: bool = True
+    ) -> List[Tuple[np.ndarray, int]]:
+        """
+        Virtual-loss multi-leaf MCTS with double-buffered pipeline.
+        
+        Instead of 1 leaf per game per simulation (many small batches),
+        selects multiple leaves per game using virtual loss, batching them
+        into a few large inference calls for much better GPU utilization.
+        
+        With leaves_per_game=K and N games:
+          Old: num_sims × 2 inference calls of ~N/2 boards each
+          New: ceil(num_sims/K) × 2 calls of ~N*K/2 boards each → K× fewer calls
+        
+        Uses async submit/collect for GPU/CPU overlap.
+        """
+        if not games:
+            return []
+        
+        roots = [Node(game['board']) for game in games]
+        global _parallel_timing
+        
+        # Initial expansion (synchronous — no prior results to overlap)
+        self._expand_roots(roots, games, add_noise)
+        
+        # Determine leaves_per_game: maximize batch size to minimize inference rounds
+        # Constrained by TRT max_batch_size (group_size * leaves_per_game <= max_bs)
+        n_games = len(roots)
+        group_size = (n_games + 1) // 2  # ceil(n/2)
+        max_bs = int(self.network._trt_max_bs) if hasattr(self.network, '_trt_max_bs') and self.network._trt_max_bs != float('inf') else 8192
+        max_leaves = max(1, max_bs // max(1, group_size))
+        leaves_per_game = max(1, min(self.num_simulations, max_leaves))
+        num_rounds = max(1, (self.num_simulations + leaves_per_game - 1) // leaves_per_game)
+        # Recompute to distribute evenly
+        leaves_per_game = max(1, self.num_simulations // num_rounds)
+        leftover = self.num_simulations - leaves_per_game * num_rounds
+        
+        # Split into 2 groups for double buffering
+        mid = n_games // 2
+        groups = [list(range(0, mid)), list(range(mid, n_games))]
+        
+        # Pipeline loop with multi-leaf selection
+        pending_leaves = None
+        pending_handle = None
+        pending_submit_time = 0.0
+        
+        for rnd in range(num_rounds):
+            # Extra leaf on first rounds to absorb leftover
+            k = leaves_per_game + (1 if rnd < leftover else 0)
+            
+            for g in range(2):
+                if not groups[g]:
+                    continue
+                
+                # 1. Select K leaves per game (virtual loss prevents duplicates)
+                leaves, leaf_boards = self._select_multi_leaves(roots, groups[g], k)
+                
+                # 2. Submit inference (non-blocking)
+                t0 = time.perf_counter()
+                if leaf_boards:
+                    handle = self.network.predict_batch_submit(leaf_boards)
+                else:
+                    handle = None
+                submit_elapsed = time.perf_counter() - t0
+                
+                # 3. While GPU works: expand+backprop previous batch (CPU overlaps GPU)
+                if pending_handle is not None:
+                    t_collect = time.perf_counter()
+                    policies, values = self.network.predict_batch_collect(pending_handle)
+                    _parallel_timing['network_time'] += (time.perf_counter() - t_collect) + pending_submit_time
+                    self._expand_backprop(pending_leaves, policies, values)
+                    pending_handle = None
+                    pending_leaves = None
+                
+                # 4. Store current handle for next phase
+                if handle is not None:
+                    pending_leaves = leaves
+                    pending_handle = handle
+                    pending_submit_time = submit_elapsed
+                elif leaves:
+                    # No boards to infer (all terminal) — revert virtual losses
+                    self._revert_virtual_losses(leaves)
+        
+        # Process final pending results
+        if pending_handle is not None:
+            t0 = time.perf_counter()
+            policies, values = self.network.predict_batch_collect(pending_handle)
+            _parallel_timing['network_time'] += (time.perf_counter() - t0) + pending_submit_time
+            self._expand_backprop(pending_leaves, policies, values)
+        
+        return self._select_moves(roots, temperature)
+    
+    def search_parallel_sync(
+        self,
+        games: List[Dict],
+        temperature: float = 1.0,
+        add_noise: bool = True
+    ) -> List[Tuple[np.ndarray, int]]:
+        """
+        Synchronous MCTS with virtual loss multi-leaf batching (no pipeline).
+        Kept for benchmarking comparison against the async pipeline version.
+        """
+        if not games:
+            return []
+        
+        roots = [Node(game['board']) for game in games]
+        global _parallel_timing
+        
+        self._expand_roots(roots, games, add_noise)
+        
+        all_indices = list(range(len(roots)))
+        n_games = len(roots)
+        max_bs = int(self.network._trt_max_bs) if hasattr(self.network, '_trt_max_bs') and self.network._trt_max_bs != float('inf') else 8192
+        max_leaves = max(1, max_bs // max(1, n_games))
+        leaves_per_game = max(1, min(self.num_simulations, max_leaves))
+        num_rounds = max(1, (self.num_simulations + leaves_per_game - 1) // leaves_per_game)
+        leaves_per_game = max(1, self.num_simulations // num_rounds)
+        leftover = self.num_simulations - leaves_per_game * num_rounds
+        
+        for rnd in range(num_rounds):
+            k = leaves_per_game + (1 if rnd < leftover else 0)
+            leaves, leaf_boards = self._select_multi_leaves(roots, all_indices, k)
+            
+            if not leaf_boards:
+                self._revert_virtual_losses(leaves)
+                break
+            
+            t0 = time.perf_counter()
+            policies_batch, values_batch = self.network.predict_batch(leaf_boards)
+            _parallel_timing['network_time'] += time.perf_counter() - t0
+            
+            self._expand_backprop(leaves, policies_batch, values_batch)
+        
+        return self._select_moves(roots, temperature)

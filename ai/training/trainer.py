@@ -82,8 +82,14 @@ class Trainer:
         max_game_id = max((d[3] for d in all_data), default=game_id_start)
         self.replay_buffer._next_game_id = max_game_id + 1
         
-        for state, policy, value, game_id in all_data:
-            self.replay_buffer.add(state, policy, value, game_id)
+        # Batch insert into replay buffer (avoids per-sample Python overhead)
+        if all_data:
+            import numpy as np
+            states = np.array([d[0] for d in all_data])
+            policies = np.array([d[1] for d in all_data])
+            values = np.array([d[2] for d in all_data], dtype=np.float32)
+            game_ids_arr = np.array([d[3] for d in all_data], dtype=np.int64)
+            self.replay_buffer.add_batch(states, policies, values, game_ids_arr)
         
         if verbose:
             print(f"\nTotal samples in replay buffer: {len(self.replay_buffer)}")

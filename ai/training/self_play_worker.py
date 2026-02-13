@@ -33,10 +33,50 @@ class SelfPlayWorker:
             dtw_calculator=dtw_calculator
         )
     
+    def _new_game(self, game_id):
+        """Create a fresh game dict."""
+        return {
+            'board': Board(),
+            'history': [],
+            'done': False,
+            'game_id': game_id,
+        }
+    
+    def _finalize_game(self, game, all_data):
+        """Collect training data from a finished game."""
+        board = game['board']
+        if board.winner in (None, -1, 3):
+            result = 0.5
+        else:
+            result = 1.0 if board.winner == 1 else 0.0
+        
+        game_id = game['game_id']
+        for step in game['history']:
+            value = result if step['player'] == 1 else 1.0 - result
+            all_data.append((step['state'], step['policy'], value, game_id))
+    
+    def _finalize_game_dtw(self, game, dtw_result_code, all_data):
+        """Collect training data from a game resolved by DTW."""
+        board = game['board']
+        if dtw_result_code == 1:
+            final_value = 1.0
+        elif dtw_result_code == -1:
+            final_value = 0.0
+        else:
+            final_value = 0.5
+        
+        game_id = game['game_id']
+        for step in game['history']:
+            value = final_value if step['player'] == board.current_player else 1.0 - final_value
+            all_data.append((step['state'], step['policy'], value, game_id))
+    
     def play_games(self, num_games: int, disable_tqdm: bool = False, 
                     game_id_start: int = 0) -> List[Tuple]:
         """
-        Play multiple games and return training data.
+        Play multiple games with continuous batching.
+        
+        Finished games are immediately replaced with new ones to keep the
+        batch at full capacity, maximizing GPU utilization throughout.
         
         Returns:
             List of (state, policy, value, game_id) tuples
@@ -46,6 +86,7 @@ class SelfPlayWorker:
         
         all_data = []
         games_completed = 0
+        games_started = 0
         current_game_id = game_id_start
         
         start_time = time.perf_counter()
@@ -53,86 +94,57 @@ class SelfPlayWorker:
         pbar = tqdm(total=num_games, desc="Self-play", 
                     disable=disable_tqdm, ncols=100, leave=False, position=1)
         
-        while games_completed < num_games:
-            batch_size = min(self.parallel_games, num_games - games_completed)
-            games = []
-            for _ in range(batch_size):
-                games.append({
-                    'board': Board(), 
-                    'history': [], 
-                    'done': False,
-                    'game_id': current_game_id
-                })
-                current_game_id += 1
+        # Initialize game pool at full capacity
+        pool_size = min(self.parallel_games, num_games)
+        pool = []
+        for _ in range(pool_size):
+            pool.append(self._new_game(current_game_id))
+            current_game_id += 1
+            games_started += 1
+        
+        # Main loop: each iteration does one MCTS move for all active games
+        while pool:
+            # Separate endgame vs MCTS games
+            endgame_games = []
+            mcts_games = []
+            for g in pool:
+                if self.dtw_calculator and self.dtw_calculator.is_endgame(g['board']):
+                    endgame_games.append(g)
+                else:
+                    mcts_games.append(g)
             
-            while any(not g['done'] for g in games):
-                active_games = [g for g in games if not g['done']]
+            # DTW search for endgame positions
+            finished_indices = set()
+            for game in endgame_games:
+                dtw_result = self.dtw_calculator.calculate_dtw(game['board'], need_best_move=False)
+                if dtw_result is not None:
+                    result_code, _, _ = dtw_result
+                    game['done'] = True
+                    self._finalize_game_dtw(game, result_code, all_data)
+                    finished_indices.add(id(game))
+                else:
+                    mcts_games.append(game)
+            
+            # MCTS for non-endgame games
+            if mcts_games:
+                game_temps = []
+                for g in mcts_games:
+                    move_count = len(g['history'])
+                    game_temps.append(self.temperature if move_count < 8 else 0)
                 
-                if not active_games:
-                    break
+                batch_temp = sum(game_temps) / len(game_temps) if game_temps else 0
                 
-                endgame_games = []
-                mcts_games = []
-                for g in active_games:
-                    if self.dtw_calculator and self.dtw_calculator.is_endgame(g['board']):
-                        endgame_games.append(g)
-                    else:
-                        mcts_games.append(g)
-                
-                # DTW search for endgame
-                for game in endgame_games:
-                    board = game['board']
-                    dtw_result = self.dtw_calculator.calculate_dtw(board, need_best_move=False)
-                    
-                    if dtw_result is not None:
-                        result, dtw, _ = dtw_result
-                        game['done'] = True
-                        
-                        if result == 1:
-                            final_value = 1.0
-                        elif result == -1:
-                            final_value = 0.0
-                        else:
-                            final_value = 0.5
-                        
-                        for step in game['history']:
-                            if step['player'] == board.current_player:
-                                value = final_value
-                            else:
-                                value = 1.0 - final_value
-                            
-                            all_data.append((
-                                step['state'],
-                                step['policy'],
-                                value,
-                                game['game_id']
-                            ))
-                    else:
-                        mcts_games.append(game)
-                
-                # MCTS for non-endgame games
-                mcts_results = []
-                if mcts_games:
-                    game_temps = []
-                    for g in mcts_games:
-                        move_count = len(g['history'])
-                        game_temps.append(self.temperature if move_count < 8 else 0)
-                    
-                    batch_temp = sum(game_temps) / len(game_temps) if game_temps else 0
-                    
-                    results = self.mcts.search_parallel(
-                        mcts_games,
-                        temperature=batch_temp,
-                        add_noise=(batch_temp > 0)
-                    )
-                    mcts_results = list(zip(mcts_games, results))
+                results = self.mcts.search_parallel(
+                    mcts_games,
+                    temperature=batch_temp,
+                    add_noise=(batch_temp > 0)
+                )
                 
                 # Apply moves
-                for game, (policy, action) in mcts_results:
+                for game, (policy, action) in zip(mcts_games, results):
                     board = game['board']
                     
                     canonical_tensor, canonical_policy = BoardEncoder.to_training_tensor(board, policy)
-                    
                     game['history'].append({
                         'state': canonical_tensor,
                         'policy': canonical_policy,
@@ -149,29 +161,27 @@ class SelfPlayWorker:
                     
                     if board.is_game_over():
                         game['done'] = True
-                        
-                        if board.winner in (None, -1, 3):
-                            result = 0.5
-                        else:
-                            result = 1.0 if board.winner == 1 else 0.0
-                        
-                        for step in game['history']:
-                            if step['player'] == 1:
-                                value = result
-                            else:
-                                value = 1.0 - result
-                            
-                            all_data.append((
-                                step['state'],
-                                step['policy'],
-                                value,
-                                game['game_id']
-                            ))
+                        self._finalize_game(game, all_data)
+                        finished_indices.add(id(game))
             
-            games_completed += batch_size
-            _parallel_timing['batches'] += 1
-            pbar.update(batch_size)
-            pbar.set_postfix({"samples": len(all_data)})
+            # Replace finished games with new ones (continuous batching)
+            if finished_indices:
+                new_pool = []
+                newly_completed = 0
+                for g in pool:
+                    if id(g) in finished_indices:
+                        newly_completed += 1
+                        # Replace with new game if we still need more
+                        if games_started < num_games:
+                            new_pool.append(self._new_game(current_game_id))
+                            current_game_id += 1
+                            games_started += 1
+                    else:
+                        new_pool.append(g)
+                pool = new_pool
+                games_completed += newly_completed
+                pbar.update(newly_completed)
+                pbar.set_postfix({"samples": len(all_data), "active": len(pool)})
         
         pbar.close()
         

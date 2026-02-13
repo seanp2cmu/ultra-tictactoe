@@ -23,6 +23,7 @@ cdef class NodeCy:
     cdef public int visits
     cdef public float value_sum
     cdef public int _is_terminal  # -1: unknown, 0: false, 1: true
+    cdef public int virtual_loss
     
     def __init__(self, board, parent=None, int action=-1, float prior_prob=0.0, bint _clone=True):
         self.board = board.clone() if _clone else board
@@ -33,6 +34,7 @@ cdef class NodeCy:
         self.visits = 0
         self.value_sum = 0.0
         self._is_terminal = -1
+        self.virtual_loss = 0
     
     cpdef bint is_expanded(self):
         return len(self.children) > 0
@@ -76,9 +78,10 @@ cdef class NodeCy:
         return True
     
     cpdef float value(self):
-        if self.visits == 0:
+        cdef int total = self.visits + self.virtual_loss
+        if total == 0:
             return 0.0
-        return self.value_sum / self.visits
+        return (self.value_sum - <float>self.virtual_loss) / <float>total
     
     cpdef tuple select_child(self, float c_puct=1.0):
         """Select child with highest UCB score."""
@@ -90,18 +93,20 @@ cdef class NodeCy:
         cdef int action
         cdef NodeCy child
         
-        sqrt_visits = sqrt(<float>self.visits)
+        sqrt_visits = sqrt(<float>(self.visits + self.virtual_loss))
         exploration_factor = c_puct * sqrt_visits
         
         parent_value = self.value() if self.visits > 0 else 0.0
         fpu = -parent_value
         
+        cdef int child_total
         for action, child in self.children.items():
-            if child.visits > 0:
-                q_value = child.value_sum / child.visits
+            child_total = child.visits + child.virtual_loss
+            if child_total > 0:
+                q_value = (child.value_sum - <float>child.virtual_loss) / <float>child_total
             else:
                 q_value = fpu
-            u_value = exploration_factor * child.prior_prob / (1 + child.visits)
+            u_value = exploration_factor * child.prior_prob / (1 + child_total)
             score = q_value + u_value
             
             if score > best_score:
@@ -142,6 +147,14 @@ cdef class NodeCy:
                 next_board.make_move(move[0], move[1])
                 prior = policy[action]
                 self.children[action] = NodeCy(next_board, parent=self, action=action, prior_prob=prior, _clone=False)
+    
+    cpdef void add_virtual_loss(self, int n=1):
+        """Add virtual loss to discourage re-selection."""
+        self.virtual_loss += n
+    
+    cpdef void revert_virtual_loss(self, int n=1):
+        """Remove virtual loss after real backup."""
+        self.virtual_loss -= n
     
     cpdef void update(self, float value):
         """Update visit count and value sum."""

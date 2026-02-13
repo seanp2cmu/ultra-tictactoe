@@ -2,15 +2,15 @@ from dataclasses import dataclass
 
 @dataclass
 class NetworkConfig:
-    num_res_blocks: int = 30
+    num_res_blocks: int = 15
     num_channels: int = 256
     
 @dataclass
 class TrainingConfig:
-    num_iterations: int = 400
+    num_iterations: int = 100
     num_self_play_games: int = 8192
     num_train_epochs: int = 40
-    num_simulations: int = 100
+    num_simulations: int = 20
     batch_size: int = 1024         
     lr: float = 0.002
     weight_decay: float = 1e-4

@@ -86,35 +86,117 @@ class AlphaZeroNet:
             original_policy = inverse_transform(policy)
             return original_policy, float(value)
     
+    @property
+    def _trt_max_bs(self):
+        """Max batch size for TRT engine, or inf if not using TRT."""
+        if self.trt_engine is not None and self.trt_engine.is_ready():
+            return self.trt_engine.max_batch_size
+        return float('inf')
+    
+    def _infer_raw(self, batch_tensor: np.ndarray):
+        """Run raw inference on encoded tensor. Returns (policy_logits_or_probs, values)."""
+        if self.trt_engine is not None and self.trt_engine.is_ready():
+            policy_logits, values = self.trt_engine.infer(batch_tensor)
+            return self._softmax_numpy(policy_logits), values
+        else:
+            self.model.eval()
+            with torch.no_grad():
+                tensor = torch.from_numpy(batch_tensor).to(self.device)
+                if self.device.type == 'cuda':
+                    with autocast(device_type='cuda'):
+                        policy_logits, values = self.model(tensor)
+                else:
+                    policy_logits, values = self.model(tensor)
+                return F.softmax(policy_logits, dim=1).cpu().numpy(), values.cpu().numpy()
+    
+    def _infer_chunked(self, batch_tensor: np.ndarray):
+        """Inference with automatic chunking for large batches."""
+        max_bs = self._trt_max_bs
+        n = batch_tensor.shape[0]
+        if max_bs == float('inf') or n <= max_bs:
+            return self._infer_raw(batch_tensor)
+        # Chunk and concatenate
+        all_policies = []
+        all_values = []
+        max_bs = int(max_bs)
+        for start in range(0, n, max_bs):
+            chunk = batch_tensor[start:start + max_bs]
+            p, v = self._infer_raw(chunk)
+            all_policies.append(p)
+            all_values.append(v)
+        return np.concatenate(all_policies, axis=0), np.concatenate(all_values, axis=0)
+    
     def predict_batch(self, board_states) -> Tuple[np.ndarray, np.ndarray]:
         """Thread-safe batch prediction with canonical form."""
         with self.predict_lock:
-            # Use BoardEncoder for consistent transformation
             batch_tensor, inverse_fns = BoardEncoder.to_inference_tensor_batch(board_states)
-            
-            # Use TensorRT if available
-            if self.trt_engine is not None and self.trt_engine.is_ready():
-                policy_logits, values = self.trt_engine.infer(batch_tensor)
-                policy_probs = self._softmax_numpy(policy_logits)
-            else:
-                self.model.eval()
-                with torch.no_grad():
-                    tensor = torch.from_numpy(batch_tensor).to(self.device)
-                    
-                    if self.device.type == 'cuda':
-                        with autocast(device_type='cuda'):
-                            policy_logits, values = self.model(tensor)
-                    else:
-                        policy_logits, values = self.model(tensor)
-                    
-                    policy_probs = F.softmax(policy_logits, dim=1).cpu().numpy()
-                    values = values.cpu().numpy()
+            policy_probs, values = self._infer_chunked(batch_tensor)
             
             # Batch inverse transform: inv_idx is (N, 81) index array
             row_idx = np.arange(len(policy_probs))[:, None]
             original_policies = policy_probs[row_idx, inverse_fns]
-            
             return original_policies, values
+    
+    def predict_batch_submit(self, board_states):
+        """Encode boards and submit inference (non-blocking for TRT/CUDA).
+        
+        Automatically chunks large batches that exceed TRT max_batch_size.
+        Returns a handle dict to pass to predict_batch_collect().
+        Single-threaded use only (no predict_lock).
+        """
+        batch_tensor, inverse_fns = BoardEncoder.to_inference_tensor_batch(board_states)
+        
+        if self.trt_engine is not None and self.trt_engine.is_ready():
+            max_bs = self.trt_engine.max_batch_size
+            n = batch_tensor.shape[0]
+            if n <= max_bs:
+                bs = self.trt_engine.infer_async(batch_tensor)
+                return {'type': 'trt', 'bs': bs, 'inv': inverse_fns}
+            else:
+                # Chunk: submit first chunk async, run rest synchronously later
+                return {'type': 'trt_chunked', 'tensor': batch_tensor,
+                        'max_bs': max_bs, 'inv': inverse_fns}
+        else:
+            self.model.eval()
+            with torch.no_grad():
+                tensor = torch.from_numpy(batch_tensor).to(self.device)
+                if self.device.type == 'cuda':
+                    with autocast(device_type='cuda'):
+                        policy_logits, values = self.model(tensor)
+                else:
+                    policy_logits, values = self.model(tensor)
+                return {'type': 'torch', 'logits': policy_logits,
+                        'values': values, 'inv': inverse_fns}
+    
+    def predict_batch_collect(self, handle) -> Tuple[np.ndarray, np.ndarray]:
+        """Collect inference results. Blocks until GPU is done.
+        
+        Call after predict_batch_submit() and any overlapping CPU work.
+        """
+        inv = handle['inv']
+        
+        if handle['type'] == 'trt':
+            policy_logits, values = self.trt_engine.infer_wait(handle['bs'])
+            policy_probs = self._softmax_numpy(policy_logits)
+        elif handle['type'] == 'trt_chunked':
+            # Process large batch in chunks through TRT
+            tensor = handle['tensor']
+            max_bs = handle['max_bs']
+            all_p, all_v = [], []
+            for start in range(0, tensor.shape[0], max_bs):
+                chunk = tensor[start:start + max_bs]
+                p_logits, v = self.trt_engine.infer(chunk)
+                all_p.append(self._softmax_numpy(p_logits))
+                all_v.append(v)
+            policy_probs = np.concatenate(all_p, axis=0)
+            values = np.concatenate(all_v, axis=0)
+        else:
+            policy_probs = F.softmax(handle['logits'], dim=1).cpu().numpy()
+            values = handle['values'].cpu().numpy()
+        
+        row_idx = np.arange(len(policy_probs))[:, None]
+        original_policies = policy_probs[row_idx, inv]
+        return original_policies, values
     
     def _softmax_numpy(self, x: np.ndarray) -> np.ndarray:
         """Numpy softmax for TensorRT output."""
@@ -130,11 +212,12 @@ class AlphaZeroNet:
         """Single training step with gradient clipping."""
         self.model.train()
         
-        boards_tensor = torch.FloatTensor(boards).to(self.device)
-        policies_tensor = torch.FloatTensor(policies).to(self.device)
-        values_tensor = torch.FloatTensor(values).to(self.device)
+        # from_numpy is zero-copy; non_blocking overlaps H2D with compute
+        boards_tensor = torch.from_numpy(boards).to(self.device, non_blocking=True)
+        policies_tensor = torch.from_numpy(policies).to(self.device, non_blocking=True)
+        values_tensor = torch.from_numpy(values).to(self.device, non_blocking=True)
         
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         
         if self.scaler is not None:
             with autocast(device_type='cuda'):
@@ -271,7 +354,7 @@ class AlphaZeroNet:
                 model=self.model,
                 engine_path="./model/model.trt",
                 onnx_path="./model/model.onnx",
-                max_batch_size=4096,
+                max_batch_size=8192,
                 force_rebuild=force_rebuild,
             )
             if self.trt_engine is not None:

@@ -331,9 +331,18 @@ class TensorRTProcessClient:
 
     def infer(self, input_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Run inference via the server process (zero-copy shared memory)."""
+        bs = self.infer_async(input_array)
+        return self.infer_wait(bs)
+
+    def infer_async(self, input_array: np.ndarray) -> int:
+        """Submit inference request (non-blocking). Returns batch size for wait()."""
         bs = input_array.shape[0]
-        self._input_buf[:bs] = input_array          # write into shared memory
+        self._input_buf[:bs] = input_array
         self._req_q.put(('infer', bs))
+        return bs
+
+    def infer_wait(self, bs: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Wait for inference result. Call after infer_async()."""
         resp = self._resp_q.get(timeout=30)
         if resp[0] == 'error':
             raise RuntimeError(f'TRT infer: {resp[1]}')

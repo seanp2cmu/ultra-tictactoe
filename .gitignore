@@ -56,3 +56,5 @@ htmlcov/
 # Package artifacts
 *.tar.gz
 *.zip
+
+tests/

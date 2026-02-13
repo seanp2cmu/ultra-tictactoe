@@ -166,4 +166,6 @@ class DTWCalculator:
     def reset_search_stats(self):
         self._total_searches = 0
         self._cpp_dtw.reset_search_stats()
+        if self.use_cache and self.tt:
+            self.tt.stats = {k: 0 for k in self.tt.stats}
     

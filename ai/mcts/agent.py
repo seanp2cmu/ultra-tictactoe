@@ -125,12 +125,6 @@ class AlphaZeroAgent:
                     value = 2.0 * net_value - 1.0  # 0~1 -> -1~1
                     leaf_idx += 1
                     
-                    if self.dtw_calculator.is_endgame(node.board):
-                        cached = self.dtw_calculator.lookup_cache(node.board)
-                        if cached is not None:
-                            result, _, _ = cached
-                            value = float(result)  # DTW result is already -1/0/1
-                    
                     t0 = time.time()
                     node.expand_numpy(policy_probs.astype(np.float32) if policy_probs.dtype != np.float32 else policy_probs)
                     _mcts_timing['expand'] += time.time() - t0
