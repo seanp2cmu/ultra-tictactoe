@@ -13,6 +13,16 @@ extensions = [
         ["ai/mcts/node_cy.pyx"],
         include_dirs=[np.get_include()],
     ),
+    Extension(
+        "utils._board_symmetry_cy",
+        ["utils/_board_symmetry_cy.pyx"],
+        include_dirs=[np.get_include()],
+    ),
+    Extension(
+        "utils._board_encoder_cy",
+        ["utils/_board_encoder_cy.pyx"],
+        include_dirs=[np.get_include()],
+    ),
 ]
 
 setup(

@@ -5,7 +5,7 @@
     "distutils": {
         "depends": [],
         "include_dirs": [
-            "/opt/anaconda3/lib/python3.12/site-packages/numpy/core/include"
+            "/usr/local/lib/python3.12/dist-packages/numpy/_core/include"
         ],
         "name": "game.board_cy",
         "sources": [

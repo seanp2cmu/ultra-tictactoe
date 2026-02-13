@@ -113,13 +113,13 @@ def _trt_server_loop(
         cfg.set_memory_pool_limit(_trt.MemoryPoolType.WORKSPACE, 1 << 32)
         if f16 and builder.platform_has_fast_fp16:
             cfg.set_flag(_trt.BuilderFlag.FP16)
-            print('[TRT-Srv] FP16 enabled')
+            # print('[TRT-Srv] FP16 enabled')
         prof = builder.create_optimization_profile()
         prof.set_shape(
             'input', (1, 7, 9, 9), (mbs // 2, 7, 9, 9), (mbs, 7, 9, 9)
         )
         cfg.add_optimization_profile(prof)
-        print(f'[TRT-Srv] Building engine (max_batch={mbs}) ...')
+        # print(f'[TRT-Srv] Building engine (max_batch={mbs}) ...')
         blob = builder.build_serialized_network(net, cfg)
         if blob is None:
             print('[TRT-Srv] build failed')
@@ -127,7 +127,7 @@ def _trt_server_loop(
         os.makedirs(os.path.dirname(ep) or '.', exist_ok=True)
         with open(ep, 'wb') as f:
             f.write(blob)
-        print(f'[TRT-Srv] saved {ep}')
+        # print(f'[TRT-Srv] saved {ep}')
         rt = _trt.Runtime(logger)
         engine = rt.deserialize_cuda_engine(blob)
         context = engine.create_execution_context()
@@ -393,7 +393,7 @@ def export_onnx(model, onnx_path: str = './model/model.onnx') -> bool:
                 },
                 dynamo=False,
             )
-        print(f'[TRT] ONNX exported → {onnx_path}')
+        # print(f'[TRT] ONNX exported → {onnx_path}')
         return True
     except Exception as e:
         print(f'[TRT] ONNX export failed: {e}')

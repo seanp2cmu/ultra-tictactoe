@@ -139,11 +139,13 @@ Value Head:
 ### 1. Cython Extensions (`*.pyx`)
 
 **`game/board_cy.pyx`** - Game board logic
+
 - Bitboard representation for sub-board states
 - Fast move validation and application
 - ~10x faster than pure Python
 
 **`ai/mcts/node_cy.pyx`** - MCTS node operations
+
 - Efficient child node management
 - Optimized UCB calculation
 - ~5x faster tree operations
@@ -153,10 +155,12 @@ Value Head:
 ### 2. C++ Extensions (pybind11)
 
 **`cpp/board.cpp`** - C++ board implementation
+
 - Used for DTW search (fastest path)
 - Minimal Python overhead
 
 **`cpp/dtw.cpp`** - Alpha-beta search
+
 - Perfect endgame evaluation
 - Transposition table integration
 - ~20x faster than Python minimax
@@ -187,12 +191,10 @@ Value Head:
 
 ### AlphaZero Algorithm
 
-```
 For each iteration:
     1. Self-Play: Generate 8,192 games using MCTS + current network
     2. Training: Update network on replay buffer samples
     3. Evaluation: (implicit via self-play improvement)
-```
 
 ### Training Configuration
 
@@ -251,6 +253,7 @@ for batch in parallel_games:
 ### DTW Integration (Endgame)
 
 When ≤15 empty cells remain:
+
 1. **DTW Calculator** computes exact game-theoretic value
 2. If **decisive** (win/loss for either player):
    - Skip remaining MCTS
@@ -280,6 +283,7 @@ batch = sample_one_per_game(buffer, batch_size, weights)
 ### Distance-To-Win (DTW)
 
 DTW measures how many moves until a forced win/loss:
+
 - **DTW = +N**: Current player wins in N moves
 - **DTW = -N**: Current player loses in N moves  
 - **DTW = 0**: Draw with perfect play

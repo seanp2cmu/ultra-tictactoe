@@ -77,37 +77,31 @@ class ParallelMCTS:
         policies, _ = self.network.predict_batch(boards)
         _parallel_timing['network_time'] += time.perf_counter() - t0
         
+        if add_noise:
+            noise_batch = np.random.dirichlet([0.3] * 81, size=len(roots))
+            policies = 0.75 * policies + 0.25 * noise_batch
         for i, root in enumerate(roots):
-            policy = policies[i]
-            if add_noise:
-                noise = np.random.dirichlet([0.3] * 81)
-                policy = 0.75 * policy + 0.25 * noise
-            root.expand(dict(enumerate(policy)))
+            root.expand(dict(enumerate(policies[i])))
         
-        # Run simulations
-        sims_per_batch = max(1, self.num_simulations // 10)
-        
-        for _ in range(0, self.num_simulations, sims_per_batch):
-            batch_size = min(sims_per_batch, self.num_simulations)
-            
+        # Run simulations — 1 leaf per game per iteration, correct sim count
+        for sim in range(self.num_simulations):
             all_leaves = []
             all_boards = []
             
             for game_idx, root in enumerate(roots):
-                for _ in range(batch_size // len(games) + 1):
-                    node = root
-                    search_path = [node]
-                    
-                    while node.is_expanded() and not node.is_terminal():
-                        _, node = node.select_child(self.c_puct)
-                        search_path.append(node)
-                    
-                    if not node.is_terminal() and not node.is_expanded():
-                        all_leaves.append((game_idx, node, search_path))
-                        all_boards.append(node.board)
+                node = root
+                search_path = [node]
+                
+                while node.is_expanded() and not node.is_terminal():
+                    _, node = node.select_child(self.c_puct)
+                    search_path.append(node)
+                
+                if not node.is_terminal() and not node.is_expanded():
+                    all_leaves.append((game_idx, node, search_path))
+                    all_boards.append(node.board)
             
             if not all_boards:
-                continue
+                break
             
             t0 = time.perf_counter()
             policies_batch, values_batch = self.network.predict_batch(all_boards)

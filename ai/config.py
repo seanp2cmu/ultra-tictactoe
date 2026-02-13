@@ -10,7 +10,7 @@ class TrainingConfig:
     num_iterations: int = 400
     num_self_play_games: int = 8192
     num_train_epochs: int = 40
-    num_simulations: int = 800 
+    num_simulations: int = 100
     batch_size: int = 1024         
     lr: float = 0.002
     weight_decay: float = 1e-4

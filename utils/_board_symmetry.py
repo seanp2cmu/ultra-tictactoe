@@ -10,6 +10,26 @@ class _BoardSymmetry:
     """Board symmetry transformation and normalization (internal use only)"""
     
     _TRANSFORMS = None
+    _C_TRANSFORMS = None  # 3x3 completed board transforms
+    
+    @staticmethod
+    def _build_c_transforms():
+        """Build transform index maps for 3x3 completed board."""
+        if _BoardSymmetry._C_TRANSFORMS is not None:
+            return _BoardSymmetry._C_TRANSFORMS
+        cidx = np.arange(9).reshape(3, 3)
+        ct = [
+            cidx.flatten(),
+            np.fliplr(cidx).flatten(),
+            np.flipud(cidx).flatten(),
+            np.rot90(cidx, 2).flatten(),
+            np.rot90(cidx, -1).flatten(),
+            np.rot90(cidx, 1).flatten(),
+            cidx.T.flatten(),
+            np.rot90(cidx.T, 2).flatten(),
+        ]
+        _BoardSymmetry._C_TRANSFORMS = ct
+        return ct
     
     @staticmethod
     def _build_transforms():
@@ -117,3 +137,9 @@ class _BoardSymmetry:
         transforms = _BoardSymmetry._build_transforms()
         transform_map = transforms[transform_idx]
         return policy[transform_map]
+
+# Use Cython version if available
+try:
+    from ._board_symmetry_cy import _BoardSymmetryCy as _BoardSymmetry
+except ImportError:
+    pass

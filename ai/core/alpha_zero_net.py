@@ -110,13 +110,11 @@ class AlphaZeroNet:
                     policy_probs = F.softmax(policy_logits, dim=1).cpu().numpy()
                     values = values.cpu().numpy()
             
-            # Transform each policy back to original orientation
-            original_policies = []
-            for i, policy in enumerate(policy_probs):
-                original_policy = inverse_fns[i](policy)
-                original_policies.append(original_policy)
+            # Batch inverse transform: inv_idx is (N, 81) index array
+            row_idx = np.arange(len(policy_probs))[:, None]
+            original_policies = policy_probs[row_idx, inverse_fns]
             
-            return np.array(original_policies), values
+            return original_policies, values
     
     def _softmax_numpy(self, x: np.ndarray) -> np.ndarray:
         """Numpy softmax for TensorRT output."""
