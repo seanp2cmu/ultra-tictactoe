@@ -1,8 +1,14 @@
 import os
 import time
 import glob
+import torch
 import torch._inductor.config
+
+# NVIDIA PyTorch optimizations
 torch._inductor.config.triton.cudagraph_dynamic_shape_warn_limit = None
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True  # 입력 크기 고정 시 최적 알고리즘 선택
+    torch.set_float32_matmul_precision('high')  # TensorCore 활용
 
 from tqdm import tqdm
 from ai.config import Config
@@ -172,10 +178,27 @@ def main():
         lr = result.get('learning_rate', 0)
         
         import datetime
+        from ai.training.self_play import get_parallel_timing
+        timing_stats = get_parallel_timing()
+        
         with open(log_path, 'a') as f:
             f.write(f"\n{'='*60}\n")
             f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ITERATION {iteration+1}/{config.training.num_iterations}\n")
             f.write(f"{'='*60}\n")
+            
+            # Timing breakdown (moved inside iteration block)
+            total_t = timing_stats['total_time']
+            if total_t > 0:
+                network_t = timing_stats['network_time']
+                overhead_t = timing_stats['mcts_overhead']
+                games_t = timing_stats.get('games', 0)
+                moves_t = timing_stats.get('moves', 0)
+                f.write(f"[Timing]\n")
+                f.write(f"  Total: {total_t:.1f}s | Network: {network_t:.1f}s ({network_t/total_t*100:.1f}%) | Overhead: {overhead_t:.1f}s ({overhead_t/total_t*100:.1f}%)\n")
+                if moves_t > 0:
+                    f.write(f"  Avg Time/Move: {total_t/moves_t*1000:.2f}ms\n")
+                f.write(f"\n")
+            
             f.write(f"[Self-Play]\n")
             f.write(f"  Games: {num_games} | Simulations: {num_sims} | Temperature: {temp}\n")
             f.write(f"  Samples Generated: {samples:,}\n")

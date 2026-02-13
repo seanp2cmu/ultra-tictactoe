@@ -1,6 +1,5 @@
 """Self-play worker for generating training data."""
 from typing import List, Tuple, Optional
-import numpy as np
 import time
 
 from game import Board

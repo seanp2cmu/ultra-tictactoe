@@ -1,7 +1,6 @@
 """AlphaZero network wrapper with training capabilities."""
-from typing import Dict, Tuple, Optional
+from typing import Tuple, Optional
 import torch
-from torch import Tensor
 import torch.nn.functional as F
 import numpy as np
 import threading
@@ -58,11 +57,7 @@ class AlphaZeroNet:
         
         # torch.compile for faster inference (PyTorch 2.0+)
         if torch.cuda.is_available() and hasattr(torch, 'compile'):
-            try:
-                self.model = torch.compile(self.model, mode='reduce-overhead')
-                self._compiled = True
-            except Exception:
-                pass  # Fallback to eager mode
+            self._try_compile()
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Thread-safe single board prediction with canonical form."""
@@ -239,12 +234,24 @@ class AlphaZeroNet:
         return checkpoint.get('iteration', 0)
     
     def _try_compile(self):
-        """Apply torch.compile if available and not already compiled."""
+        """Apply torch.compile with TensorRT backend if available."""
         if self._compiled:
             return
-        if torch.cuda.is_available() and hasattr(torch, 'compile'):
-            try:
-                self.model = torch.compile(self.model, mode='reduce-overhead')
-                self._compiled = True
-            except Exception:
-                pass
+        if not torch.cuda.is_available() or not hasattr(torch, 'compile'):
+            return
+        
+        # Try TensorRT backend first (fastest)
+        try:
+            import torch_tensorrt
+            self.model = torch.compile(self.model, backend='torch_tensorrt')
+            self._compiled = True
+            return
+        except (ImportError, Exception):
+            pass
+        
+        # Fallback to inductor with reduce-overhead mode
+        try:
+            self.model = torch.compile(self.model, mode='reduce-overhead')
+            self._compiled = True
+        except Exception:
+            pass  # Fallback to eager mode

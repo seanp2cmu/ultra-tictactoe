@@ -1,5 +1,5 @@
 """AlphaZero MCTS agent with DTW endgame support."""
-from typing import List, Tuple, Dict, Optional
+from typing import List, Dict, Optional
 import random
 import time
 import numpy as np

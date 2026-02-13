@@ -1,20 +1,10 @@
 """Main trainer class for AlphaZero with DTW."""
 from typing import Dict, Optional
 from tqdm import tqdm
-import time
-from functools import wraps
 
 from .replay_buffer import SelfPlayData
-from .self_play import SelfPlayWorker, reset_parallel_timing, get_parallel_timing
+from .self_play import SelfPlayWorker, reset_parallel_timing
 
-def timing(f):
-    @wraps(f)
-    def wrap(*args, **kwargs):
-        ts = time.time()
-        result = f(*args, **kwargs)
-        te = time.time()
-        return result, te-ts
-    return wrap
 
 class Trainer:
     """AlphaZero trainer with DTW endgame support."""
@@ -50,10 +40,7 @@ class Trainer:
         self.num_simulations = num_simulations
         self.replay_buffer = SelfPlayData(max_size=replay_buffer_size)
         
-        self.hot_cache_size = hot_cache_size
-        self.cold_cache_size = cold_cache_size
-        
-        # DTW always enabled (symmetry always used)
+        # DTW always enabled
         from ..endgame import DTWCalculator
         self.dtw_calculator = DTWCalculator(
             use_cache=True,
@@ -61,9 +48,6 @@ class Trainer:
             cold_size=cold_cache_size,
             endgame_threshold=endgame_threshold
         )
-        
-        self.total_dtw_positions = 0
-        self.total_dtw_wins = 0
     
     def generate_self_play_data(
         self,
@@ -103,44 +87,11 @@ class Trainer:
         
         if verbose:
             print(f"\nTotal samples in replay buffer: {len(self.replay_buffer)}")
-            if self.total_dtw_positions > 0:
-                win_rate = self.total_dtw_wins / self.total_dtw_positions
-                print(f"DTW positions: {self.total_dtw_positions}, Win rate: {win_rate:.2%}")
-                if self.dtw_calculator:
-                    cache_stats = self.dtw_calculator.get_stats()
-                    print(f"DTW Cache: {cache_stats}")
-        
-        # Log timing stats to file
-        self._log_timing_stats()
+            if self.dtw_calculator:
+                cache_stats = self.dtw_calculator.get_stats()
+                print(f"DTW Cache: {cache_stats}")
         
         return len(all_data)
-    
-    def _log_timing_stats(self, log_path: str = "./model/training.log"):
-        """Log timing breakdown to file."""
-        import datetime
-        stats = get_parallel_timing()
-        
-        total = stats['total_time']
-        network = stats['network_time']
-        overhead = stats['mcts_overhead']
-        
-        if total > 0:
-            network_pct = (network / total) * 100
-            overhead_pct = (overhead / total) * 100
-            games = stats.get('games', 0)
-            moves = stats.get('moves', 0)
-            batches = stats.get('batches', 0)
-            
-            with open(log_path, 'a') as f:
-                f.write(f"\n[Timing Breakdown]\n")
-                f.write(f"  Total Time: {total:.1f}s\n")
-                f.write(f"  Games: {games:,} | Total Moves: {moves:,} | Batches: {batches:,}\n")
-                if games > 0:
-                    f.write(f"  Avg Time/Game: {total/games:.2f}s | Avg Moves/Game: {moves/games:.1f}\n")
-                f.write(f"  Network Inference: {network:.1f}s ({network_pct:.1f}%)\n")
-                f.write(f"  MCTS Overhead: {overhead:.1f}s ({overhead_pct:.1f}%)\n")
-                if moves > 0:
-                    f.write(f"  Avg Time/Move: {total/moves*1000:.2f}ms\n")
     
     def train(self, num_epochs: int = 10, verbose: bool = False, disable_tqdm: bool = False) -> Dict:
         """Train network on replay buffer."""

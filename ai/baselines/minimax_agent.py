@@ -2,9 +2,8 @@
 Minimax Agent with Alpha-Beta Pruning.
 Depth-limited search with heuristic evaluation.
 """
-from typing import List, Tuple, Optional
+from typing import List
 from game import Board
-import copy
 
 
 def _get_completed_2d(board):
