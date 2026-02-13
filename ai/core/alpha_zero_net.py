@@ -339,7 +339,8 @@ class AlphaZeroNet:
             # If we already have a live server, just rebuild the engine in-place
             if force_rebuild and self.trt_engine is not None and self.trt_engine.is_ready():
                 if export_onnx(self.model):
-                    if self.trt_engine.rebuild("./model/model.onnx", "./model/model.trt"):
+                    if self.trt_engine.rebuild("./model/model.onnx", "./model/model.trt",
+                                               max_batch_size=self.trt_engine.max_batch_size):
                         print("[Model] TensorRT engine rebuilt (separate process)")
                         return
                 # Rebuild failed – shut down and retry fresh
@@ -375,7 +376,8 @@ class AlphaZeroNet:
             return False
         try:
             if export_onnx(self.model):
-                if self.trt_engine.rebuild("./model/model.onnx", "./model/model.trt"):
+                if self.trt_engine.rebuild("./model/model.onnx", "./model/model.trt",
+                                           max_batch_size=self.trt_engine.max_batch_size):
                     return True
             # Rebuild failed — fall back to PyTorch
             print("[Model] TRT weight sync failed, falling back to PyTorch")

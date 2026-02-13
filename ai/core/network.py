@@ -100,7 +100,7 @@ class Model(nn.Module):
         value = F.relu(self.value_fc1(value))
         value = torch.sigmoid(self.value_fc2(value)) 
         
-        return policy, value
+        return policy.clone(), value.clone()
     
     def predict(self, board_state) -> Tuple[np.ndarray, float]:
         """Single board prediction using BoardEncoder."""
