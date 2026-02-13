@@ -117,59 +117,54 @@ class Model(nn.Module):
             return policy_probs.cpu().numpy()[0], value.cpu().numpy()[0][0]
     
     def _board_to_tensor(self, board_state: Board) -> torch.Tensor:
-        """Convert board to 7-channel tensor input."""
-        tensor = np.zeros((7, 9, 9), dtype=np.float32)
+        """Convert board to 7-channel tensor input.
         
-        if isinstance(board_state, np.ndarray):
-            boards = board_state.copy()
-        else:
-            boards = np.array(board_state.to_array(), dtype=np.float32)
+        MUST match training encoding in self_play.py:
+        - Channel 0: current player pieces
+        - Channel 1: opponent pieces
+        - Channel 2: empty cells
+        - Channel 3: completed boards (current player won)
+        - Channel 4: completed boards (opponent won)
+        - Channel 5: legal moves
+        - Channel 6: last move
+        """
+        tensor = np.zeros((7, 9, 9), dtype=np.float32)
+        boards = np.array(board_state.to_array(), dtype=np.float32)
         
         current_player = board_state.current_player if hasattr(board_state, 'current_player') else 1
         opponent_player = 3 - current_player
         
-        if hasattr(board_state, 'completed_boards'):
-            # Handle both Cython BoardCy and Python Board
-            if hasattr(board_state, 'get_completed_boards_2d'):
-                completed = board_state.get_completed_boards_2d()
-            else:
-                completed = board_state.completed_boards
-            for br in range(3):
-                for bc in range(3):
-                    status = completed[br][bc]
-                    if status != 0:
-                        sr, sc = br * 3, bc * 3
-                        boards[sr:sr+3, sc:sc+3] = 0
-                        if status == current_player:
-                            tensor[2, sr:sr+3, sc:sc+3] = 1.0
-                        elif status == opponent_player:
-                            tensor[3, sr:sr+3, sc:sc+3] = 1.0
-                        else:
-                            tensor[4, sr:sr+3, sc:sc+3] = 1.0
+        # Channel 0: current player pieces
+        tensor[0] = (boards == current_player).astype(np.float32)
+        # Channel 1: opponent pieces
+        tensor[1] = (boards == opponent_player).astype(np.float32)
+        # Channel 2: empty cells
+        tensor[2] = (boards == 0).astype(np.float32)
         
-        tensor[0] = (boards == current_player)
-        tensor[1] = (boards == opponent_player)
-        
-        if hasattr(board_state, 'last_move') and board_state.last_move is not None:
-            last_r, last_c = board_state.last_move
-            tensor[5, last_r, last_c] = 1.0
-            
-            target_br, target_bc = last_r % 3, last_c % 3
-            if hasattr(board_state, 'completed_boards'):
-                # Use already-retrieved completed variable
-                if completed[target_br][target_bc] == 0:
-                    sr, sc = target_br * 3, target_bc * 3
-                    tensor[6, sr:sr+3, sc:sc+3] = 1.0
-                else:
-                    for br in range(3):
-                        for bc in range(3):
-                            if completed[br][bc] == 0:
-                                sr, sc = br * 3, bc * 3
-                                tensor[6, sr:sr+3, sc:sc+3] = 1.0
-            else:
-                sr, sc = target_br * 3, target_bc * 3
-                tensor[6, sr:sr+3, sc:sc+3] = 1.0
+        # Channel 3-4: completed boards
+        if hasattr(board_state, 'get_completed_boards_2d'):
+            completed = board_state.get_completed_boards_2d()
+        elif hasattr(board_state, 'completed_boards'):
+            completed = board_state.completed_boards
         else:
-            tensor[6] = 1.0
+            completed = [[0]*3 for _ in range(3)]
+        
+        for br in range(3):
+            for bc in range(3):
+                status = completed[br][bc]
+                sr, sc = br * 3, bc * 3
+                if status == current_player:
+                    tensor[3, sr:sr+3, sc:sc+3] = 1.0
+                elif status == opponent_player:
+                    tensor[4, sr:sr+3, sc:sc+3] = 1.0
+        
+        # Channel 5: legal moves
+        if hasattr(board_state, 'get_legal_moves'):
+            for r, c in board_state.get_legal_moves():
+                tensor[5, r, c] = 1.0
+        
+        # Channel 6: last move
+        if hasattr(board_state, 'last_move') and board_state.last_move is not None:
+            tensor[6, board_state.last_move[0], board_state.last_move[1]] = 1.0
         
         return torch.from_numpy(tensor).unsqueeze(0).to(self._device)
