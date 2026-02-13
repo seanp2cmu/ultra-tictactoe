@@ -152,7 +152,7 @@ class ParallelMCTS:
                 policy = np.zeros(81)
                 # Use the prior probabilities from children
                 for action, child in root.children.items():
-                    policy[action] = child.prior
+                    policy[action] = child.prior_prob
                 if policy.sum() > 0:
                     policy = policy / policy.sum()
                 else:
