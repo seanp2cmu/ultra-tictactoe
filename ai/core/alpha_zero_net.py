@@ -404,12 +404,13 @@ class AlphaZeroNet:
         if not torch.cuda.is_available() or not hasattr(torch, 'compile'):
             return
         
-        # Use inductor with max-autotune (avoid CUDAGraphs which cause tensor overwrite errors)
+        # Use inductor default mode (no CUDAGraphs — reduce-overhead and max-autotune
+        # both use CUDAGraphs which cause tensor overwrite errors with batch inference)
         try:
-            self.model = torch.compile(self.model, mode='max-autotune')
+            self.model = torch.compile(self.model)
             self._compiled = True
             self._compile_backend = 'inductor'
-            print("[Model] Compiled with inductor (max-autotune)")
+            print("[Model] Compiled with inductor (default)")
         except Exception:
             self._compile_backend = 'eager'
             print("[Model] Using eager mode (no compilation)")
