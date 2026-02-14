@@ -67,9 +67,9 @@ def predict(model_name, board_json, num_simulations=200):
         
         pv = get_principal_variation(root, depth=10)
         
-        # Value is now 0~1 (loss=0, draw=0.5, win=1)
+        # Value is tanh range: -1 (loss) to +1 (win), 0 = draw
         evaluation = float(value)
-        eval_percentage = evaluation * 100
+        eval_percentage = (evaluation + 1.0) * 50  # map [-1,1] to [0,100]
         
         result = {
             'model': model_name,

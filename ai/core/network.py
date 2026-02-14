@@ -98,7 +98,7 @@ class Model(nn.Module):
         value = F.relu(self.value_bn(self.value_conv(x)))
         value = value.view(-1, 4 * 9 * 9)
         value = F.relu(self.value_fc1(value))
-        value = torch.sigmoid(self.value_fc2(value)) 
+        value = torch.tanh(self.value_fc2(value))
         
         return policy.clone(), value.clone()
     

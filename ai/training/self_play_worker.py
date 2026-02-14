@@ -46,13 +46,13 @@ class SelfPlayWorker:
         """Collect training data from a finished game."""
         board = game['board']
         if board.winner in (None, -1, 3):
-            result = 0.5
+            result = 0.0  # draw
         else:
-            result = 1.0 if board.winner == 1 else 0.0
+            result = 1.0 if board.winner == 1 else -1.0
         
         game_id = game['game_id']
         for step in game['history']:
-            value = result if step['player'] == 1 else 1.0 - result
+            value = result if step['player'] == 1 else -result
             all_data.append((step['state'], step['policy'], value, game_id))
     
     def _finalize_game_dtw(self, game, dtw_result_code, all_data):
@@ -61,13 +61,13 @@ class SelfPlayWorker:
         if dtw_result_code == 1:
             final_value = 1.0
         elif dtw_result_code == -1:
-            final_value = 0.0
+            final_value = -1.0
         else:
-            final_value = 0.5
+            final_value = 0.0  # draw
         
         game_id = game['game_id']
         for step in game['history']:
-            value = final_value if step['player'] == board.current_player else 1.0 - final_value
+            value = final_value if step['player'] == board.current_player else -final_value
             all_data.append((step['state'], step['policy'], value, game_id))
     
     def play_games(self, num_games: int, disable_tqdm: bool = False, 

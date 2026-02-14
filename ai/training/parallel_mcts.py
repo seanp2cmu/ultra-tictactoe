@@ -68,7 +68,7 @@ class ParallelMCTS:
         if n == 0:
             return
         values_scaled = np.ascontiguousarray(
-            (2.0 * values[:n].ravel() - 1.0), dtype=np.float32
+            values[:n].ravel(), dtype=np.float32
         )
         policies_f32 = np.ascontiguousarray(policies[:n], dtype=np.float32)
         expand_backprop_batch_cy(leaves, policies_f32, values_scaled)

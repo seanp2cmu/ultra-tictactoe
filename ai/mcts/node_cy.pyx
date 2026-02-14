@@ -103,7 +103,9 @@ cdef class NodeCy:
         for action, child in self.children.items():
             child_total = child.visits + child.virtual_loss
             if child_total > 0:
-                q_value = (child.value_sum - <float>child.virtual_loss) / <float>child_total
+                # Negate: child stores value from child's (opponent's) perspective
+                # Parent needs value from its own perspective
+                q_value = -(child.value_sum - <float>child.virtual_loss) / <float>child_total
             else:
                 q_value = fpu
             u_value = exploration_factor * child.prior_prob / (1 + child_total)

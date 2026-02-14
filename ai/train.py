@@ -1,282 +1,180 @@
 import os
 import time
-import glob
 import torch
 import torch._inductor.config
+import wandb
 
-# NVIDIA PyTorch optimizations
 torch._inductor.config.triton.cudagraph_dynamic_shape_warn_limit = None
 if torch.cuda.is_available():
-    torch.backends.cudnn.benchmark = True  # 입력 크기 고정 시 최적 알고리즘 선택
-    torch.set_float32_matmul_precision('high')  # TensorCore 활용
+    torch.backends.cudnn.benchmark = True
+    torch.set_float32_matmul_precision('high')
 
 from tqdm import tqdm
 from ai.config import Config
 from ai.training import Trainer
-from utils import (
-    upload_to_hf,
+from ai.utils import (
+    RUNS_FILE, select_run_and_checkpoint, register_run,
+    update_run_iteration, cleanup_checkpoints,
+    log_iteration_to_file, collect_wandb_metrics,
+    run_and_log_eval, log_training_complete
 )
-
-
-def select_checkpoint(save_dir: str) -> tuple:
-    """Interactive checkpoint selection."""
-    checkpoints = []
-    
-    # Find all checkpoint files
-    best_path = os.path.join(save_dir, 'best.pt')
-    if os.path.exists(best_path):
-        checkpoints.append(('best.pt', best_path))
-    
-    # Find checkpoint_*.pt files
-    for f in sorted(glob.glob(os.path.join(save_dir, 'checkpoint_*.pt'))):
-        name = os.path.basename(f)
-        checkpoints.append((name, f))
-    
-    # Find model_*.pt files
-    for f in sorted(glob.glob(os.path.join(save_dir, 'model_*.pt'))):
-        name = os.path.basename(f)
-        checkpoints.append((name, f))
-    
-    if not checkpoints:
-        print("\n체크포인트 없음. 처음부터 시작합니다.")
-        return None, 0
-    
-    print("\n" + "=" * 50)
-    print("체크포인트 선택")
-    print("=" * 50)
-    print("  0: 처음부터 시작 (새 학습)")
-    for i, (name, path) in enumerate(checkpoints, 1):
-        size_mb = os.path.getsize(path) / 1024 / 1024
-        print(f"  {i}: {name} ({size_mb:.1f} MB)")
-    print("=" * 50)
-    
-    while True:
-        try:
-            choice = input("선택 (0-{}): ".format(len(checkpoints))).strip()
-            choice = int(choice)
-            if choice == 0:
-                print("→ 처음부터 시작")
-                return None, 0
-            elif 1 <= choice <= len(checkpoints):
-                name, path = checkpoints[choice - 1]
-                print(f"→ {name} 로드")
-                return path, 0
-            else:
-                print("잘못된 선택")
-        except ValueError:
-            print("숫자를 입력하세요")
-        except KeyboardInterrupt:
-            print("\n취소됨")
-            exit(0)
+from utils import upload_to_hf
 
 
 def main():
     config = Config()
+    base_dir = config.training.save_dir
+    os.makedirs(base_dir, exist_ok=True)
     
-    checkpoint_path, start_iteration = select_checkpoint(config.training.save_dir) 
+    # 1. Select or create run
+    run_id, run_name, checkpoint_path, is_new_run = select_run_and_checkpoint(base_dir)
     
-    if config.gpu.device == "auto":
-        import torch
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-    else:
-        device = config.gpu.device
+    # 2. Device
+    device = "cuda" if torch.cuda.is_available() else "cpu" if config.gpu.device == "auto" else config.gpu.device
     
-    os.makedirs(config.training.save_dir, exist_ok=True)
+    # 3. W&B init
+    wandb.init(
+        entity="seanp2-carnegie-mellon-university",
+        project="ultra-tictactoe",
+        name=run_name, id=run_id, resume='allow',
+        config={
+            'num_res_blocks': config.network.num_res_blocks,
+            'num_channels': config.network.num_channels,
+            'num_iterations': config.training.num_iterations,
+            'num_self_play_games': config.training.num_self_play_games,
+            'num_train_epochs': config.training.num_train_epochs,
+            'num_simulations': config.training.num_simulations,
+            'batch_size': config.training.batch_size,
+            'lr': config.training.lr,
+            'weight_decay': config.training.weight_decay,
+            'replay_buffer_size': config.training.replay_buffer_size,
+            'parallel_games': config.gpu.parallel_games,
+            'use_amp': config.training.use_amp,
+        },
+    )
+    if is_new_run:
+        run_id = wandb.run.id
+    print(f"W&B run: {wandb.run.url}")
+    
+    # 4. Run directory + mapping
+    run_dir = os.path.join(base_dir, run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    register_run(base_dir, run_id, run_name)
+    upload_to_hf(os.path.join(base_dir, RUNS_FILE), RUNS_FILE)
     
     print("=" * 80)
-    print("AlphaZero Training with DTW + Compressed Transposition Table")
-    print("=" * 80)
-    print(f"Network:")
-    print(f"  Residual Blocks: {config.network.num_res_blocks}")
-    print(f"  Channels: {config.network.num_channels}")
-    print(f"\nTraining:")
-    print(f"  Iterations: {config.training.num_iterations}")
-    print(f"  Games per iteration: {config.training.num_self_play_games}")
-    print(f"  Training epochs: {config.training.num_train_epochs}")
-    print(f"  MCTS simulations: {config.training.num_simulations}")
-    print(f"  Batch size: {config.training.batch_size}")
-    print(f"  Learning rate: {config.training.lr}")
-    print(f"\nDTW (Always Enabled):")
-    print(f"  Endgame threshold: {config.dtw.endgame_threshold} cells")
-    print(f"  Cache size: {config.dtw.hot_cache_size + config.dtw.cold_cache_size:,} entries")
-    print(f"\nGPU:")
-    print(f"  Device: {device}")
-    print(f"  AMP: {config.training.use_amp}")
-    print(f"  Parallel Games: {config.gpu.parallel_games}")
+    print(f"Run: {run_name} ({run_id}) | Dir: {run_dir}")
+    print(f"Network: {config.network.num_res_blocks}b/{config.network.num_channels}ch | Device: {device}")
+    print(f"Training: {config.training.num_iterations} iters x {config.training.num_self_play_games} games x {config.training.num_simulations} sims")
     print("=" * 80)
     
+    # 5. Create trainer
     trainer = Trainer(
-        network=None,
-        lr=config.training.lr,
-        weight_decay=config.training.weight_decay,
-        batch_size=config.training.batch_size,
-        num_simulations=config.training.num_simulations,
-        replay_buffer_size=config.training.replay_buffer_size,
-        device=device,
-        use_amp=config.training.use_amp,
-        num_res_blocks=config.network.num_res_blocks,
-        num_channels=config.network.num_channels,
-        hot_cache_size=config.dtw.hot_cache_size,
-        cold_cache_size=config.dtw.cold_cache_size,
-        total_iterations=config.training.num_iterations
+        network=None, lr=config.training.lr, weight_decay=config.training.weight_decay,
+        batch_size=config.training.batch_size, num_simulations=config.training.num_simulations,
+        replay_buffer_size=config.training.replay_buffer_size, device=device,
+        use_amp=config.training.use_amp, num_res_blocks=config.network.num_res_blocks,
+        num_channels=config.network.num_channels, hot_cache_size=config.dtw.hot_cache_size,
+        cold_cache_size=config.dtw.cold_cache_size, total_iterations=config.training.num_iterations
     )
     
+    # 6. Load checkpoint if resuming
     best_loss = float('inf')
+    start_iteration = 0
     if checkpoint_path:
-        print(f"\n  Loading checkpoint: {checkpoint_path}")
         loaded_iter = trainer.load(checkpoint_path)
         if loaded_iter is not None:
             start_iteration = loaded_iter + 1
-        print(f"✓ Model loaded (will resume from iteration {start_iteration})")
-        
-        # Load DTW cache if exists
-        dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
-        if os.path.exists(dtw_cache_path) and trainer.dtw_calculator and trainer.dtw_calculator.tt:
-            trainer.dtw_calculator.tt.load_from_file(dtw_cache_path)
-        print()
+        print(f"\u2713 Resuming from iteration {start_iteration}")
+        dtw_cache = os.path.join(run_dir, 'dtw_cache.pkl')
+        if os.path.exists(dtw_cache) and trainer.dtw_calculator and trainer.dtw_calculator.tt:
+            trainer.dtw_calculator.tt.load_from_file(dtw_cache)
     
-    # 고정 값 사용 (Lc0 style)
-    temp = 1.0  # 첫 8수만 적용됨 (self_play.py에서 처리)
-    num_sims = config.training.num_simulations  # 800 고정
-    num_games = config.training.num_self_play_games  # 2048 고정
-    
+    # 7. Training loop
+    log_path = os.path.join(run_dir, 'training.log')
+    total_iters = config.training.num_iterations
     print("Starting training...\n")
     
-    # Log file path
-    log_path = os.path.join(config.training.save_dir, 'training.log')
+    pbar = tqdm(range(start_iteration, total_iters), desc="Training", ncols=100,
+                initial=start_iteration, total=total_iters, leave=True, position=0)
     
-    # Main progress bar (position 0)
-    main_pbar = tqdm(range(start_iteration, config.training.num_iterations), 
-                     desc="Training", ncols=100, 
-                     initial=start_iteration, total=config.training.num_iterations, 
-                     leave=True, position=0)
-    
-    for iteration in main_pbar:
-        iter_start_time = time.time()
+    for iteration in pbar:
+        t0 = time.time()
         
         result = trainer.train_iteration(
-            num_self_play_games=num_games,
+            num_self_play_games=config.training.num_self_play_games,
             num_train_epochs=config.training.num_train_epochs,
-            temperature=temp,
-            verbose=False,
-            disable_tqdm=False,
-            num_simulations=num_sims,
-            parallel_games=config.gpu.parallel_games,
-            iteration=iteration
+            temperature=1.0, verbose=False, disable_tqdm=False,
+            num_simulations=config.training.num_simulations,
+            parallel_games=config.gpu.parallel_games, iteration=iteration
         )
         
-        # Log to file (detailed)
-        iter_elapsed = time.time() - iter_start_time
+        elapsed = time.time() - t0
         loss = result['avg_loss']
-        samples = result['num_samples']
-        buffer_stats = trainer.replay_buffer.get_stats() if hasattr(trainer.replay_buffer, 'get_stats') else {}
+        buf = trainer.replay_buffer.get_stats() if hasattr(trainer.replay_buffer, 'get_stats') else {}
         lr = result.get('learning_rate', 0)
+        dtw_stats = trainer.dtw_calculator.get_stats() if trainer.dtw_calculator else None
         
-        import datetime
         from ai.training.self_play import get_parallel_timing
-        timing_stats = get_parallel_timing()
+        timing = get_parallel_timing()
         
-        with open(log_path, 'a') as f:
-            f.write(f"\n{'='*60}\n")
-            f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ITERATION {iteration+1}/{config.training.num_iterations}\n")
-            f.write(f"{'='*60}\n")
-            
-            # Timing breakdown (moved inside iteration block)
-            total_t = timing_stats['total_time']
-            if total_t > 0:
-                network_t = timing_stats['network_time']
-                overhead_t = timing_stats['mcts_overhead']
-                games_t = timing_stats.get('games', 0)
-                moves_t = timing_stats.get('moves', 0)
-                f.write(f"[Timing]\n")
-                f.write(f"  Total: {total_t:.1f}s | Network: {network_t:.1f}s ({network_t/total_t*100:.1f}%) | Overhead: {overhead_t:.1f}s ({overhead_t/total_t*100:.1f}%)\n")
-                if moves_t > 0:
-                    f.write(f"  Avg Time/Move: {total_t/moves_t*1000:.2f}ms\n")
-                f.write(f"\n")
-            
-            f.write(f"[Self-Play]\n")
-            f.write(f"  Games: {num_games} | Simulations: {num_sims} | Temperature: {temp}\n")
-            f.write(f"  Samples Generated: {samples:,}\n")
-            f.write(f"\n[Replay Buffer]\n")
-            f.write(f"  Total Samples: {buffer_stats.get('total', 0):,}\n")
-            f.write(f"  Total Games: {buffer_stats.get('games', 0):,}\n")
-            f.write(f"  Avg Positions/Game: {buffer_stats.get('avg_positions_per_game', 0):.1f}\n")
-            f.write(f"  Current Iteration: {buffer_stats.get('current_iteration', 0)}\n")
-            f.write(f"\n[Training]\n")
-            f.write(f"  Epochs: {config.training.num_train_epochs} | Batch Size: {config.training.batch_size}\n")
-            f.write(f"  Total Loss: {loss['total_loss']:.6f}\n")
-            f.write(f"  Policy Loss: {loss['policy_loss']:.6f}\n")
-            f.write(f"  Value Loss: {loss['value_loss']:.6f}\n")
-            f.write(f"  Learning Rate: {lr:.8f}\n")
-            f.write(f"\n[Time]\n")
-            f.write(f"  Iteration Time: {iter_elapsed:.1f}s ({iter_elapsed/60:.1f} min)\n")
-            f.write(f"  Estimated Remaining: {iter_elapsed * (config.training.num_iterations - iteration - 1) / 3600:.1f} hours\n")
-            
-            # DTW stats
-            if trainer.dtw_calculator:
-                dtw_stats = trainer.dtw_calculator.get_stats()
-                if dtw_stats:
-                    f.write(f"\n[DTW Cache]\n")
-                    f.write(f"  Total Queries: {dtw_stats.get('total_queries', 0):,}\n")
-                    f.write(f"  Hit Rate: {dtw_stats.get('hit_rate', 'N/A')}\n")
-                    f.write(f"  Cache Size: {dtw_stats.get('total_mb', 0):.2f} MB\n")
-                    f.write(f"  Hot Entries: {dtw_stats.get('hot_entries', 0):,}\n")
-                    f.write(f"  Cold Entries: {dtw_stats.get('cold_entries', 0):,}\n")
+        # File log + HF
+        log_iteration_to_file(log_path, iteration, total_iters, loss, lr,
+                              result['num_samples'], buf, timing, elapsed, config, dtw_stats)
+        upload_to_hf(log_path, f'{run_id}/training.log')
         
-        upload_to_hf(log_path, 'training.log')
+        # W&B metrics + eval
+        wm = collect_wandb_metrics(loss, lr, buf, elapsed, dtw_stats)
+        run_and_log_eval(log_path, trainer.network, trainer.dtw_calculator, wm)
+        wandb.log(wm, step=iteration)
         
-        if 'dtw_stats' in result:
+        if dtw_stats:
             trainer.dtw_calculator.reset_search_stats()
         
-        current_loss = result['avg_loss']['total_loss']
-        if current_loss < best_loss:
-            best_loss = current_loss
-            save_path = os.path.join(config.training.save_dir, 'best.pt')
-            trainer.save(save_path, iteration=iteration)
-            upload_to_hf(save_path, 'best.pt')
+        # Save best
+        if loss['total_loss'] < best_loss:
+            best_loss = loss['total_loss']
+            p = os.path.join(run_dir, 'best.pt')
+            trainer.save(p, iteration=iteration)
+            upload_to_hf(p, f'{run_id}/best.pt')
         
+        # Checkpoint every 5 iters (keep last 2)
         if (iteration + 1) % 5 == 0:
-            ckpt_path = os.path.join(config.training.save_dir, f'checkpoint_{iteration + 1}.pt')
-            trainer.save(ckpt_path, iteration=iteration)
-            upload_to_hf(ckpt_path, f'checkpoint_{iteration + 1}.pt')
-            
-            old_iter = iteration + 1 - 10
-            if old_iter > 0:
-                old_path = os.path.join(config.training.save_dir, f'checkpoint_{old_iter}.pt')
-                if os.path.exists(old_path):
-                    os.remove(old_path)
+            p = os.path.join(run_dir, f'checkpoint_{iteration + 1}.pt')
+            trainer.save(p, iteration=iteration)
+            upload_to_hf(p, f'{run_id}/checkpoint_{iteration + 1}.pt')
+            old = os.path.join(run_dir, f'checkpoint_{iteration + 1 - 10}.pt')
+            if os.path.exists(old):
+                os.remove(old)
         
+        # Permanent model every 20 iters
         if (iteration + 1) % 20 == 0:
-            model_path = os.path.join(config.training.save_dir, f'model_{iteration + 1}.pt')
-            trainer.save(model_path, iteration=iteration)
-            upload_to_hf(model_path, f'model_{iteration + 1}.pt')
+            p = os.path.join(run_dir, f'model_{iteration + 1}.pt')
+            trainer.save(p, iteration=iteration)
+            upload_to_hf(p, f'{run_id}/model_{iteration + 1}.pt')
         
+        # DTW cache
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:
-            dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
-            trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
+            dp = os.path.join(run_dir, 'dtw_cache.pkl')
+            trainer.dtw_calculator.tt.save_to_file(dp)
             if (iteration + 1) % 10 == 0:
-                upload_to_hf(dtw_cache_path, 'dtw_cache.pkl')
+                upload_to_hf(dp, f'{run_id}/dtw_cache.pkl')
+        
+        update_run_iteration(base_dir, run_id, iteration + 1)
     
-    print(f"\n✓ Training completed! Best loss: {best_loss:.4f}")
+    # 8. Final cleanup + finish
+    cleanup_checkpoints(run_dir, total_iters)
+    log_training_complete(log_path, best_loss)
+    upload_to_hf(log_path, f'{run_id}/training.log')
     
     if trainer.dtw_calculator and trainer.dtw_calculator.tt:
-        dtw_cache_path = os.path.join(config.training.save_dir, 'dtw_cache.pkl')
-        trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
-        
-        # Log final stats
-        import datetime
-        stats = trainer.dtw_calculator.get_stats()
-        log_path = os.path.join(config.training.save_dir, 'training.log')
-        with open(log_path, 'a') as f:
-            f.write(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] TRAINING COMPLETE\n")
-            f.write(f"  Best Loss: {best_loss:.4f}\n")
-            if stats:
-                f.write(f"  DTW Queries: {stats.get('total_queries', 0)} | Hit Rate: {stats.get('hit_rate', 'N/A')} | Cache: {stats.get('total_mb', 0):.1f} MB\n")
+        dp = os.path.join(run_dir, 'dtw_cache.pkl')
+        trainer.dtw_calculator.tt.save_to_file(dp)
+        upload_to_hf(dp, f'{run_id}/dtw_cache.pkl')
+    
+    upload_to_hf(os.path.join(base_dir, RUNS_FILE), RUNS_FILE)
+    wandb.finish()
+    print(f"\n\u2713 Training completed! Best loss: {best_loss:.4f}")
 
 
 if __name__ == '__main__':

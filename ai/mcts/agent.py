@@ -120,9 +120,8 @@ class AlphaZeroAgent:
                             value = -1.0  # loss
                 else:
                     policy_probs = policy_probs_batch[leaf_idx]
-                    # Network outputs 0~1, convert to MCTS range -1~1
-                    net_value = values_batch[leaf_idx].item() if hasattr(values_batch[leaf_idx], 'item') else float(values_batch[leaf_idx].squeeze())
-                    value = 2.0 * net_value - 1.0  # 0~1 -> -1~1
+                    # Network outputs tanh (-1~1), same as MCTS range
+                    value = values_batch[leaf_idx].item() if hasattr(values_batch[leaf_idx], 'item') else float(values_batch[leaf_idx].squeeze())
                     leaf_idx += 1
                     
                     t0 = time.time()

@@ -224,7 +224,7 @@ class AlphaZeroNet:
                 policy_logits, value_preds = self.model(boards_tensor)
                 policy_loss = F.cross_entropy(policy_logits, policies_tensor)
                 value_loss = F.mse_loss(value_preds.squeeze(-1), values_tensor.squeeze(-1))
-                total_loss = policy_loss + 2.0 * value_loss
+                total_loss = policy_loss + value_loss
             
             self.scaler.scale(total_loss).backward()
             self.scaler.unscale_(self.optimizer)
@@ -235,7 +235,7 @@ class AlphaZeroNet:
             policy_logits, value_preds = self.model(boards_tensor)
             policy_loss = F.cross_entropy(policy_logits, policies_tensor)
             value_loss = F.mse_loss(value_preds.squeeze(-1), values_tensor.squeeze(-1))
-            total_loss = policy_loss + 2.0 * value_loss
+            total_loss = policy_loss + value_loss
             
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -260,10 +260,11 @@ class AlphaZeroNet:
             'scheduler_state_dict': self.scheduler.state_dict(),
             'num_res_blocks': len(self.model.res_blocks),
             'num_channels': self.model.num_channels,
-            'iteration': iteration,
         }
         if self.scaler is not None:
             save_dict['scaler_state_dict'] = self.scaler.state_dict()
+        if iteration is not None:
+            save_dict['iteration'] = iteration
         torch.save(save_dict, filepath)
     
     def load(self, filepath: str) -> int:
@@ -326,7 +327,7 @@ class AlphaZeroNet:
             print(f"[Model] Skipped {len(skipped)} mismatched layers: {skipped}")
         self.model.load_state_dict(filtered, strict=False)
         if skipped:
-            # Architecture changed — recreate optimizer with fresh state for new params
+            # Architecture changed — recreate optimizer for new params
             print("[Model] Recreating optimizer due to architecture change")
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
