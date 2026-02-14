@@ -9,18 +9,16 @@ from ai.baselines import RandomAgent, HeuristicAgent, MinimaxAgent
 from ai.training.self_play import ParallelMCTS
 
 
+OPENING_MOVES = 8
+OPENING_TEMP = 0.2
+
+
 def evaluate_vs_baseline(network, baseline, num_games=500, num_simulations=0,
                          parallel_games=None, dtw_calculator=None):
     """
     Evaluate model vs a baseline agent.
-    
-    Args:
-        network: AlphaZeroNet instance (on GPU)
-        baseline: Baseline agent with select_action(board) method
-        num_games: Number of games to play
-        num_simulations: MCTS simulations per move (0 = raw policy)
-        parallel_games: Max parallel games (default: num_games)
-        dtw_calculator: Optional DTW calculator
+    Uses temperature=0.2 for first 8 moves (opening diversity),
+    then greedy (temperature=0) for the rest.
     
     Returns:
         dict with win_rate, model_wins, baseline_wins, draws
@@ -47,6 +45,7 @@ def evaluate_vs_baseline(network, baseline, num_games=500, num_simulations=0,
             active_games.append({
                 'board': Board(),
                 'model_is_p1': model_is_p1,
+                'move_count': 0,
                 'done': False
             })
         
@@ -64,17 +63,20 @@ def evaluate_vs_baseline(network, baseline, num_games=500, num_simulations=0,
                     baseline_turn_games.append(g)
             
             if model_turn_games:
+                temp = OPENING_TEMP if model_turn_games[0]['move_count'] < OPENING_MOVES else 0.0
                 mcts_results = mcts.search_parallel(
-                    model_turn_games, temperature=0.0, add_noise=False
+                    model_turn_games, temperature=temp, add_noise=False
                 )
                 for g, (_, action) in zip(model_turn_games, mcts_results):
                     g['board'].make_move(action // 9, action % 9)
+                    g['move_count'] += 1
                     if g['board'].winner not in (None, -1):
                         g['done'] = True
             
             for g in baseline_turn_games:
                 action = baseline.select_action(g['board'])
                 g['board'].make_move(action // 9, action % 9)
+                g['move_count'] += 1
                 if g['board'].winner not in (None, -1):
                     g['done'] = True
         
@@ -95,7 +97,7 @@ def evaluate_vs_baseline(network, baseline, num_games=500, num_simulations=0,
     return results
 
 
-def run_evaluation_suite(network, num_games=500, dtw_calculator=None):
+def run_evaluation_suite(network, num_games=4000, num_games_minimax=500, dtw_calculator=None):
     """
     Run fast evaluation suite using raw policy only (0 sims).
     
@@ -105,16 +107,16 @@ def run_evaluation_suite(network, num_games=500, dtw_calculator=None):
     metrics = {}
     
     baselines = [
-        ('random', RandomAgent()),
-        ('heuristic', HeuristicAgent()),
-        ('minimax2', MinimaxAgent(depth=2)),
+        ('random', RandomAgent(), num_games),
+        ('heuristic', HeuristicAgent(), num_games),
+        ('minimax2', MinimaxAgent(depth=2), num_games_minimax),
     ]
     
     pbar = tqdm(baselines, desc="Eval", ncols=80, leave=False, position=1)
-    for name, agent in pbar:
-        pbar.set_postfix_str(f"vs {name}")
-        r = evaluate_vs_baseline(network, agent, num_games=num_games, num_simulations=0)
+    for name, agent, n in pbar:
+        pbar.set_postfix_str(f"vs {name} ({n}g)")
+        r = evaluate_vs_baseline(network, agent, num_games=n, num_simulations=0)
         metrics[f'eval/vs_{name}_winrate'] = r['win_rate'] * 100
-        metrics[f'eval/vs_{name}_drawrate'] = r['draws'] / num_games * 100
+        metrics[f'eval/vs_{name}_drawrate'] = r['draws'] / n * 100
     
     return metrics

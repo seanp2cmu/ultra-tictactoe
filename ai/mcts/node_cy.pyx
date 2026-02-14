@@ -105,7 +105,8 @@ cdef class NodeCy:
             if child_total > 0:
                 # Negate: child stores value from child's (opponent's) perspective
                 # Parent needs value from its own perspective
-                q_value = -(child.value_sum - <float>child.virtual_loss) / <float>child_total
+                # Virtual loss: only inflate denominator, don't modify value_sum
+                q_value = -child.value_sum / <float>child_total
             else:
                 q_value = fpu
             u_value = exploration_factor * child.prior_prob / (1 + child_total)

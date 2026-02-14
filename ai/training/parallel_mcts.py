@@ -94,6 +94,33 @@ class ParallelMCTS:
         for i, root in enumerate(roots):
             root.expand_numpy(policies_f32[i])
     
+    def _raw_policy_moves(self, games, temperature):
+        """Use raw network policy without MCTS search (0 sims)."""
+        boards = [g['board'] for g in games]
+        policies, _ = self.network.predict_batch(boards)
+        
+        results = []
+        for i, game in enumerate(games):
+            policy = policies[i].copy()
+            # Mask illegal moves
+            legal_set = set(r * 9 + c for r, c in game['board'].get_legal_moves())
+            for a in range(81):
+                if a not in legal_set:
+                    policy[a] = 0.0
+            total = policy.sum()
+            if total > 0:
+                policy /= total
+            else:
+                for a in legal_set:
+                    policy[a] = 1.0 / len(legal_set)
+            
+            if temperature < 0.01:
+                action = int(np.argmax(policy))
+            else:
+                action = int(np.random.choice(81, p=policy))
+            results.append((policy, action))
+        return results
+    
     @staticmethod
     def _select_moves(roots, temperature):
         """Select moves based on visit counts."""
@@ -164,18 +191,24 @@ class ParallelMCTS:
         if not games:
             return []
         
+        # 0 sims = raw policy only (no search)
+        if self.num_simulations == 0:
+            return self._raw_policy_moves(games, temperature)
+        
         roots = [Node(game['board']) for game in games]
         global _parallel_timing
         
         # Initial expansion (synchronous — no prior results to overlap)
         self._expand_roots(roots, games, add_noise)
         
-        # Determine leaves_per_game: maximize batch size to minimize inference rounds
-        # Constrained by TRT max_batch_size (group_size * leaves_per_game <= max_bs)
+        # Determine leaves_per_game: balance batch size vs search depth
+        # Must ensure enough rounds for iterative deepening (min 10 rounds)
         n_games = len(roots)
         group_size = (n_games + 1) // 2  # ceil(n/2)
         max_bs = int(self.network._trt_max_bs) if hasattr(self.network, '_trt_max_bs') and self.network._trt_max_bs != float('inf') else 8192
-        max_leaves = max(1, max_bs // max(1, group_size))
+        max_leaves_hw = max(1, max_bs // max(1, group_size))
+        max_leaves_depth = max(1, self.num_simulations // 10)  # ensure ≥10 rounds
+        max_leaves = min(max_leaves_hw, max_leaves_depth)
         leaves_per_game = max(1, min(self.num_simulations, max_leaves))
         num_rounds = max(1, (self.num_simulations + leaves_per_game - 1) // leaves_per_game)
         # Recompute to distribute evenly

@@ -8,9 +8,9 @@ class NetworkConfig:
 @dataclass
 class TrainingConfig:
     num_iterations: int = 100
-    num_self_play_games: int = 8192
+    num_self_play_games: int = 2048
     num_train_epochs: int = 40
-    num_simulations: int = 20
+    num_simulations: int = 200
     batch_size: int = 1024         
     lr: float = 0.002
     weight_decay: float = 1e-4

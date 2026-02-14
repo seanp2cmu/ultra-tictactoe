@@ -19,6 +19,7 @@ from ai.utils import (
     run_and_log_eval, log_training_complete
 )
 from utils import upload_to_hf
+from utils.hf_upload import delete_from_hf
 
 
 def main():
@@ -79,16 +80,17 @@ def main():
     )
     
     # 6. Load checkpoint if resuming
-    best_loss = float('inf')
     start_iteration = 0
     if checkpoint_path:
         loaded_iter = trainer.load(checkpoint_path)
         if loaded_iter is not None:
             start_iteration = loaded_iter + 1
         print(f"\u2713 Resuming from iteration {start_iteration}")
-        dtw_cache = os.path.join(run_dir, 'dtw_cache.pkl')
-        if os.path.exists(dtw_cache) and trainer.dtw_calculator and trainer.dtw_calculator.tt:
-            trainer.dtw_calculator.tt.load_from_file(dtw_cache)
+    
+    # Load shared DTW cache
+    dtw_cache_path = os.path.join(base_dir, 'dtw_cache.pkl')
+    if os.path.exists(dtw_cache_path) and trainer.dtw_calculator and trainer.dtw_calculator.tt:
+        trainer.dtw_calculator.tt.load_from_file(dtw_cache_path)
     
     # 7. Training loop
     log_path = os.path.join(run_dir, 'training.log')
@@ -131,21 +133,22 @@ def main():
         if dtw_stats:
             trainer.dtw_calculator.reset_search_stats()
         
-        # Save best
-        if loss['total_loss'] < best_loss:
-            best_loss = loss['total_loss']
-            p = os.path.join(run_dir, 'best.pt')
-            trainer.save(p, iteration=iteration)
-            upload_to_hf(p, f'{run_id}/best.pt')
+        # Save latest
+        p = os.path.join(run_dir, 'latest.pt')
+        trainer.save(p, iteration=iteration)
+        upload_to_hf(p, f'{run_id}/latest.pt')
         
         # Checkpoint every 5 iters (keep last 2)
         if (iteration + 1) % 5 == 0:
             p = os.path.join(run_dir, f'checkpoint_{iteration + 1}.pt')
             trainer.save(p, iteration=iteration)
             upload_to_hf(p, f'{run_id}/checkpoint_{iteration + 1}.pt')
-            old = os.path.join(run_dir, f'checkpoint_{iteration + 1 - 10}.pt')
-            if os.path.exists(old):
-                os.remove(old)
+            old_iter = iteration + 1 - 10
+            if old_iter > 0:
+                old = os.path.join(run_dir, f'checkpoint_{old_iter}.pt')
+                if os.path.exists(old):
+                    os.remove(old)
+                delete_from_hf(f'{run_id}/checkpoint_{old_iter}.pt')
         
         # Permanent model every 20 iters
         if (iteration + 1) % 20 == 0:
@@ -153,28 +156,26 @@ def main():
             trainer.save(p, iteration=iteration)
             upload_to_hf(p, f'{run_id}/model_{iteration + 1}.pt')
         
-        # DTW cache
+        # Shared DTW cache
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:
-            dp = os.path.join(run_dir, 'dtw_cache.pkl')
-            trainer.dtw_calculator.tt.save_to_file(dp)
+            trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
             if (iteration + 1) % 10 == 0:
-                upload_to_hf(dp, f'{run_id}/dtw_cache.pkl')
+                upload_to_hf(dtw_cache_path, 'dtw_cache.pkl')
         
         update_run_iteration(base_dir, run_id, iteration + 1)
     
     # 8. Final cleanup + finish
-    cleanup_checkpoints(run_dir, total_iters)
-    log_training_complete(log_path, best_loss)
+    cleanup_checkpoints(run_dir, run_id, total_iters)
+    log_training_complete(log_path)
     upload_to_hf(log_path, f'{run_id}/training.log')
     
     if trainer.dtw_calculator and trainer.dtw_calculator.tt:
-        dp = os.path.join(run_dir, 'dtw_cache.pkl')
-        trainer.dtw_calculator.tt.save_to_file(dp)
-        upload_to_hf(dp, f'{run_id}/dtw_cache.pkl')
+        trainer.dtw_calculator.tt.save_to_file(dtw_cache_path)
+        upload_to_hf(dtw_cache_path, 'dtw_cache.pkl')
     
     upload_to_hf(os.path.join(base_dir, RUNS_FILE), RUNS_FILE)
     wandb.finish()
-    print(f"\n\u2713 Training completed! Best loss: {best_loss:.4f}")
+    print(f"\n\u2713 Training completed!")
 
 
 if __name__ == '__main__':

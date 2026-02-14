@@ -1,4 +1,4 @@
-from .hf_upload import upload_to_hf, wait_for_uploads, HF_UPLOAD_ENABLED
+from .hf_upload import upload_to_hf, wait_for_uploads, delete_from_hf, HF_UPLOAD_ENABLED
 from ._board_encoder_cy import BoardEncoderCy as BoardEncoder
 
 __all__ = [

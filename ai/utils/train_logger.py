@@ -55,7 +55,6 @@ def run_and_log_eval(log_path, network, dtw_calculator, wandb_metrics):
     try:
         eval_metrics = run_evaluation_suite(
             network=network,
-            num_games=500,
             dtw_calculator=dtw_calculator
         )
         eval_elapsed = time.time() - eval_start
@@ -73,8 +72,8 @@ def run_and_log_eval(log_path, network, dtw_calculator, wandb_metrics):
         print(f"Eval failed: {e}")
 
 
-def log_training_complete(log_path, best_loss):
+def log_training_complete(log_path):
     """Write final completion message."""
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with open(log_path, 'a') as f:
-        f.write(f"\n[{now}] TRAINING COMPLETE | Best Loss: {best_loss:.4f}\n")
+        f.write(f"\n[{now}] TRAINING COMPLETE\n")

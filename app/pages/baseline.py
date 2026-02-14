@@ -122,6 +122,7 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
                     'game_num': game_num,
                     'model_is_p1': model_is_p1,
                     'moves': [],
+                    'move_count': 0,
                     'done': False
                 })
             
@@ -142,12 +143,14 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
                 
                 # Batch MCTS for model turn games
                 if model_turn_games:
+                    temp = 0.2 if model_turn_games[0]['move_count'] < 8 else 0.0
                     mcts_results = parallel_mcts.search_parallel(
-                        model_turn_games, temperature=0.0, add_noise=False
+                        model_turn_games, temperature=temp, add_noise=False
                     )
                     for g, (_, action) in zip(model_turn_games, mcts_results):
                         g['moves'].append(('model', int(action)))
                         g['board'].make_move(action // 9, action % 9)
+                        g['move_count'] += 1
                         if g['board'].winner not in (None, -1):
                             g['done'] = True
                 
@@ -156,6 +159,7 @@ def test_vs_baseline(model_name, baseline_name, num_games, num_simulations):
                     action = baseline.select_action(g['board'])
                     g['moves'].append(('baseline', int(action)))
                     g['board'].make_move(action // 9, action % 9)
+                    g['move_count'] += 1
                     if g['board'].winner not in (None, -1):
                         g['done'] = True
             

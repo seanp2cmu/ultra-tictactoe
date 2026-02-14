@@ -50,7 +50,7 @@ def select_run_and_checkpoint(base_dir: str) -> tuple:
     
     while True:
         try:
-            choice = int(input(f"선택 (0-{len(existing_runs)}): ").strip())
+            choice = int(input(f"(0-{len(existing_runs)}): ").strip())
             if choice == 0:
                 run_name = input("Run name: ").strip()
                 if not run_name:
@@ -95,14 +95,18 @@ def update_run_iteration(base_dir: str, run_id: str, iteration: int):
         save_runs(base_dir, runs)
 
 
-def cleanup_checkpoints(run_dir: str, total_iterations: int):
-    """Keep only best.pt, model_*.pt, and the midpoint checkpoint."""
+def cleanup_checkpoints(run_dir: str, run_id: str, total_iterations: int):
+    """Keep only best.pt, model_*.pt, and the midpoint checkpoint. Deletes from local + HF."""
+    from utils.hf_upload import delete_from_hf
+    
     mid = total_iterations // 2
     keep = f"checkpoint_{mid}.pt"
     removed = []
     for f in glob.glob(os.path.join(run_dir, 'checkpoint_*.pt')):
-        if os.path.basename(f) != keep:
+        fname = os.path.basename(f)
+        if fname != keep:
             os.remove(f)
-            removed.append(os.path.basename(f))
+            delete_from_hf(f'{run_id}/{fname}')
+            removed.append(fname)
     if removed:
-        print(f"Cleanup: removed {len(removed)} checkpoints, kept {keep}")
+        print(f"Cleanup: removed {len(removed)} checkpoints (local+HF), kept {keep}")

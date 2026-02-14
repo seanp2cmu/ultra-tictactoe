@@ -41,16 +41,15 @@ def load_models_from_hf(repo_id: str):
         model_files = [f for f in files if f.endswith('.pt')]
         print(f"Found {len(model_files)} model files")
         
-        # Load DTW caches from runs
-        for f in files:
-            if f.endswith('dtw_cache.pkl'):
-                try:
-                    cache_path = hf_hub_download(repo_id, f)
-                    if config.dtw_calculator and config.dtw_calculator.tt:
-                        config.dtw_calculator.tt.load_from_file(cache_path)
-                        print(f"\u2713 DTW cache loaded: {f}")
-                except:
-                    pass
+        # Load shared DTW cache
+        if 'dtw_cache.pkl' in files:
+            try:
+                cache_path = hf_hub_download(repo_id, 'dtw_cache.pkl')
+                if config.dtw_calculator and config.dtw_calculator.tt:
+                    config.dtw_calculator.tt.load_from_file(cache_path)
+                    print(f"\u2713 DTW cache loaded from HF")
+            except:
+                pass
         
         for model_file in model_files:
             try:
@@ -94,6 +93,15 @@ def load_models_from_local():
         endgame_threshold=15
     )
     
+    # Load shared DTW cache
+    dtw_cache_path = os.path.join(config.MODEL_DIR, 'dtw_cache.pkl')
+    if os.path.exists(dtw_cache_path):
+        try:
+            config.dtw_calculator.tt.load_from_file(dtw_cache_path)
+            print(f"\u2713 DTW cache loaded: {dtw_cache_path}")
+        except Exception as e:
+            print(f"\u26a0 Failed to load DTW cache: {e}")
+    
     runs = _load_runs_json(config.MODEL_DIR)
     
     # Scan run directories
@@ -103,15 +111,6 @@ def load_models_from_local():
             continue
         
         run_name = info.get('name', run_id[:8])
-        
-        # Load DTW cache from this run
-        dtw_cache_path = os.path.join(run_dir, 'dtw_cache.pkl')
-        if os.path.exists(dtw_cache_path):
-            try:
-                config.dtw_calculator.tt.load_from_file(dtw_cache_path)
-                print(f"\u2713 DTW cache loaded: {run_name}")
-            except:
-                pass
         
         # Load model files
         for model_file in sorted(os.listdir(run_dir)):

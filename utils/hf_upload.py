@@ -60,6 +60,26 @@ def upload_to_hf(local_path: str, repo_path: str = None):
     _log_hf(f"[HF] Upload started: {repo_path}")
 
 
+def _delete_worker(repo_path: str):
+    """Background delete worker"""
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        api.delete_file(repo_path, repo_id=HF_REPO_ID, repo_type="model")
+        _log_hf(f"[HF] Deleted: {repo_path}")
+    except Exception as e:
+        _log_hf(f"[HF] Delete failed: {repo_path} - {e}")
+
+
+def delete_from_hf(repo_path: str):
+    """Delete file from HuggingFace Hub (async background)"""
+    if not HF_UPLOAD_ENABLED:
+        return
+    thread = threading.Thread(target=_delete_worker, args=(repo_path,), daemon=True)
+    thread.start()
+    _upload_threads.append(thread)
+
+
 def wait_for_uploads():
     """Wait for all pending uploads to complete"""
     for thread in _upload_threads:
