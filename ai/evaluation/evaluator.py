@@ -3,6 +3,7 @@ Fast baseline evaluation for training loop.
 Runs model vs baseline agents and returns win rates.
 """
 import numpy as np
+from tqdm import tqdm
 from game import Board
 from ai.baselines import RandomAgent, HeuristicAgent, MinimaxAgent
 from ai.training.self_play import ParallelMCTS
@@ -103,23 +104,17 @@ def run_evaluation_suite(network, num_games=500, dtw_calculator=None):
     """
     metrics = {}
     
-    random_agent = RandomAgent()
-    heuristic_agent = HeuristicAgent()
-    minimax2_agent = MinimaxAgent(depth=2)
+    baselines = [
+        ('random', RandomAgent()),
+        ('heuristic', HeuristicAgent()),
+        ('minimax2', MinimaxAgent(depth=2)),
+    ]
     
-    # vs Random - raw policy (0 sims) ~7s
-    r = evaluate_vs_baseline(network, random_agent, num_games=num_games, num_simulations=0)
-    metrics['eval/vs_random_winrate'] = r['win_rate'] * 100
-    metrics['eval/vs_random_drawrate'] = r['draws'] / num_games * 100
-    
-    # vs Heuristic - raw policy (0 sims) ~7s
-    r = evaluate_vs_baseline(network, heuristic_agent, num_games=num_games, num_simulations=0)
-    metrics['eval/vs_heuristic_winrate'] = r['win_rate'] * 100
-    metrics['eval/vs_heuristic_drawrate'] = r['draws'] / num_games * 100
-    
-    # vs Minimax-2 - raw policy (0 sims) ~15s
-    r = evaluate_vs_baseline(network, minimax2_agent, num_games=num_games, num_simulations=0)
-    metrics['eval/vs_minimax2_winrate'] = r['win_rate'] * 100
-    metrics['eval/vs_minimax2_drawrate'] = r['draws'] / num_games * 100
+    pbar = tqdm(baselines, desc="Eval", ncols=80, leave=False, position=1)
+    for name, agent in pbar:
+        pbar.set_postfix_str(f"vs {name}")
+        r = evaluate_vs_baseline(network, agent, num_games=num_games, num_simulations=0)
+        metrics[f'eval/vs_{name}_winrate'] = r['win_rate'] * 100
+        metrics[f'eval/vs_{name}_drawrate'] = r['draws'] / num_games * 100
     
     return metrics
