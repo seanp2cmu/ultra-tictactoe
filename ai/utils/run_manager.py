@@ -95,18 +95,3 @@ def update_run_iteration(base_dir: str, run_id: str, iteration: int):
         save_runs(base_dir, runs)
 
 
-def cleanup_checkpoints(run_dir: str, run_id: str, total_iterations: int):
-    """Keep only best.pt, model_*.pt, and the midpoint checkpoint. Deletes from local + HF."""
-    from utils.hf_upload import delete_from_hf
-    
-    mid = total_iterations // 2
-    keep = f"checkpoint_{mid}.pt"
-    removed = []
-    for f in glob.glob(os.path.join(run_dir, 'checkpoint_*.pt')):
-        fname = os.path.basename(f)
-        if fname != keep:
-            os.remove(f)
-            delete_from_hf(f'{run_id}/{fname}')
-            removed.append(fname)
-    if removed:
-        print(f"Cleanup: removed {len(removed)} checkpoints (local+HF), kept {keep}")

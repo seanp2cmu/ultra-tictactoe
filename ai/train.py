@@ -14,12 +14,11 @@ from ai.config import Config
 from ai.training import Trainer
 from ai.utils import (
     RUNS_FILE, select_run_and_checkpoint, register_run,
-    update_run_iteration, cleanup_checkpoints,
+    update_run_iteration,
     log_iteration_to_file, collect_wandb_metrics,
     run_and_log_eval, log_training_complete
 )
 from utils import upload_to_hf
-from utils.hf_upload import delete_from_hf
 
 
 def main():
@@ -95,6 +94,7 @@ def main():
     # 7. Training loop
     log_path = os.path.join(run_dir, 'training.log')
     total_iters = config.training.num_iterations
+    best_winrate = 0.0
     print("Starting training...\n")
     
     pbar = tqdm(range(start_iteration, total_iters), desc="Training", ncols=100,
@@ -138,23 +138,13 @@ def main():
         trainer.save(p, iteration=iteration)
         upload_to_hf(p, f'{run_id}/latest.pt')
         
-        # Checkpoint every 5 iters (keep last 2)
-        if (iteration + 1) % 5 == 0:
-            p = os.path.join(run_dir, f'checkpoint_{iteration + 1}.pt')
+        # Save best.pt if this is the best eval so far
+        current_wr = wm.get('eval/vs_random_winrate', 0)
+        if current_wr > best_winrate:
+            best_winrate = current_wr
+            p = os.path.join(run_dir, 'best.pt')
             trainer.save(p, iteration=iteration)
-            upload_to_hf(p, f'{run_id}/checkpoint_{iteration + 1}.pt')
-            old_iter = iteration + 1 - 10
-            if old_iter > 0:
-                old = os.path.join(run_dir, f'checkpoint_{old_iter}.pt')
-                if os.path.exists(old):
-                    os.remove(old)
-                delete_from_hf(f'{run_id}/checkpoint_{old_iter}.pt')
-        
-        # Permanent model every 20 iters
-        if (iteration + 1) % 20 == 0:
-            p = os.path.join(run_dir, f'model_{iteration + 1}.pt')
-            trainer.save(p, iteration=iteration)
-            upload_to_hf(p, f'{run_id}/model_{iteration + 1}.pt')
+            upload_to_hf(p, f'{run_id}/best.pt')
         
         # Shared DTW cache
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:
@@ -164,8 +154,7 @@ def main():
         
         update_run_iteration(base_dir, run_id, iteration + 1)
     
-    # 8. Final cleanup + finish
-    cleanup_checkpoints(run_dir, run_id, total_iters)
+    # 8. Finish
     log_training_complete(log_path)
     upload_to_hf(log_path, f'{run_id}/training.log')
     
