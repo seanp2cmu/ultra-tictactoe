@@ -81,7 +81,7 @@ cdef class NodeCy:
         cdef int total = self.visits + self.virtual_loss
         if total == 0:
             return 0.0
-        return (self.value_sum - <float>self.virtual_loss) / <float>total
+        return self.value_sum / <float>total
     
     cpdef tuple select_child(self, float c_puct=1.0):
         """Select child with highest UCB score."""
@@ -208,6 +208,10 @@ def select_multi_leaves_cy(list roots, list indices, int leaves_per_game, float 
     cdef NodeCy root, node, n
     cdef list search_path
     
+    cdef int k, path_len
+    cdef float value
+    cdef NodeCy path_node
+    
     for idx in indices:
         root = <NodeCy>roots[idx]
         for j in range(leaves_per_game):
@@ -215,8 +219,24 @@ def select_multi_leaves_cy(list roots, list indices, int leaves_per_game, float 
             if not node.is_terminal() and not node.is_expanded():
                 leaves.append((idx, node, search_path))
                 boards.append(node.board)
+            elif node.is_terminal():
+                # Terminal node: backpropagate actual game result
+                winner = node.board.winner
+                if winner is not None and winner != -1 and winner != 3:
+                    # winner != current_player always at terminal
+                    value = -1.0  # current player lost
+                else:
+                    value = 0.0  # draw
+                # Revert VL + backprop (leaf to root)
+                path_len = len(search_path)
+                for k in range(path_len - 1, -1, -1):
+                    path_node = <NodeCy>search_path[k]
+                    path_node.virtual_loss -= 1
+                    path_node.visits += 1
+                    path_node.value_sum += value
+                    value = -value
             else:
-                # Terminal or already expanded — revert virtual loss
+                # Already expanded — just revert virtual loss
                 for n in search_path:
                     n.virtual_loss -= 1
     
