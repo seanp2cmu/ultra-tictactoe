@@ -130,7 +130,7 @@ class SelfPlayWorker:
                 game_temps = []
                 for g in mcts_games:
                     move_count = len(g['history'])
-                    game_temps.append(self.temperature if move_count < 8 else 0)
+                    game_temps.append(self.temperature if move_count < 16 else 0)
                 
                 batch_temp = sum(game_temps) / len(game_temps) if game_temps else 0
                 

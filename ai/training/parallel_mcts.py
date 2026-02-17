@@ -117,7 +117,20 @@ class ParallelMCTS:
             if temperature < 0.01:
                 action = int(np.argmax(policy))
             else:
-                action = int(np.random.choice(81, p=policy))
+                # Apply temperature scaling: p^(1/T) then renormalize
+                with np.errstate(divide='ignore'):
+                    log_policy = np.where(policy > 0, np.log(policy), -1e9)
+                log_temp = log_policy / temperature
+                log_temp -= log_temp.max()
+                policy_temp = np.exp(log_temp)
+                policy_temp_sum = policy_temp.sum()
+                if policy_temp_sum > 0 and np.isfinite(policy_temp_sum):
+                    policy_temp /= policy_temp_sum
+                else:
+                    # Fallback to uniform over legal
+                    policy_temp = (policy > 0).astype(np.float64)
+                    policy_temp /= policy_temp.sum()
+                action = int(np.random.choice(81, p=policy_temp))
             results.append((policy, action))
         return results
     

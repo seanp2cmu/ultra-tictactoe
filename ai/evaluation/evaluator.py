@@ -9,8 +9,8 @@ from ai.baselines import RandomAgent, HeuristicAgent, MinimaxAgent
 from ai.training.self_play import ParallelMCTS
 
 
-OPENING_MOVES = 8
-OPENING_TEMP = 0.2
+OPENING_MOVES = 16
+OPENING_TEMP = 1.0
 
 
 def evaluate_vs_baseline(network, baseline, num_games=500, num_simulations=0,
@@ -97,7 +97,7 @@ def evaluate_vs_baseline(network, baseline, num_games=500, num_simulations=0,
     return results
 
 
-def run_evaluation_suite(network, num_games=4000, num_games_minimax=500, dtw_calculator=None):
+def run_evaluation_suite(network, num_games=4000, num_games_minimax=2000, dtw_calculator=None):
     """
     Run fast evaluation suite using raw policy only (0 sims).
     
