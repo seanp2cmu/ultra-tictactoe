@@ -212,12 +212,9 @@ class NNUEDataGenerator:
                 arr[r * 9 + c] = board.get_cell(r, c)
         
         # 9 meta-board states
-        completed = board.completed_boards
+        completed = board.get_completed_boards_2d()
         for i in range(9):
-            if isinstance(completed[0], (list, tuple)):
-                arr[81 + i] = completed[i // 3][i % 3]
-            else:
-                arr[81 + i] = completed[i]
+            arr[81 + i] = completed[i // 3][i % 3]
         
         # Active board
         if board.last_move is not None:

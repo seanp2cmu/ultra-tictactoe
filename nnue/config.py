@@ -76,6 +76,12 @@ class PipelineConfig:
     selfplay_games: int = 50000
     selfplay_threads: int = 64
     selfplay_depth: int = 8
+    lambda_search: float = 0.75          # target = λ × search + (1-λ) × game_result
+    
+    # Evaluation
+    eval_games: int = 200             # Games per baseline (random, heuristic)
+    eval_games_minimax: int = 100     # Games for minimax (slower)
+    eval_depth: int = 5               # NNUE search depth for eval games
     
     # General
     device: str = "cuda"

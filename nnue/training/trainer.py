@@ -1,4 +1,4 @@
-"""NNUE training loop with AMP, LR scheduling, and gradient clipping."""
+"""NNUE training loop with AMP, LR scheduling, gradient clipping, and tqdm."""
 import os
 import math
 import time
@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
+from tqdm import tqdm
 
 from nnue.core.model import NNUE
 from nnue.training.dataset import NNUEDataset
@@ -34,29 +35,21 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
                net_config=None, train_config=None, device='cuda'):
     """Train NNUE model from .npz data.
     
-    Args:
-        data_path: Path to .npz training data
-        output_path: Path to save trained model
-        net_config: NNUEConfig (network architecture)
-        train_config: TrainingConfig (training hyperparams)
-        device: torch device
+    Returns:
+        (model, best_val_loss, epoch_metrics_list)
     """
     net_config = net_config or NNUEConfig()
     train_config = train_config or TrainingConfig()
     use_amp = train_config.use_amp and device != 'cpu'
     
     # Load data
-    print(f"Loading data from {data_path}...")
     data = np.load(data_path)
     boards, values = data['boards'], data['values']
-    print(f"  Positions: {len(values):,}")
-    print(f"  Value range: [{values.min():.3f}, {values.max():.3f}]")
     
     # Split
     t0 = time.time()
     train_ds, val_ds = NNUEDataset.train_val_split(boards, values)
-    print(f"  Train: {len(train_ds):,}, Val: {len(val_ds):,}")
-    print(f"  Feature extraction: {time.time() - t0:.1f}s")
+    feat_time = time.time() - t0
     
     train_loader = DataLoader(
         train_ds, batch_size=train_config.batch_size,
@@ -77,9 +70,6 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
     ).to(device)
     
     param_count = sum(p.numel() for p in model.parameters())
-    print(f"\nModel: {param_count:,} parameters")
-    print(f"AMP: {use_amp}, LR schedule: {train_config.lr_schedule}, "
-          f"grad_clip: {train_config.grad_clip}")
     
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -90,10 +80,19 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
     scaler = GradScaler(enabled=use_amp)
     scheduler = _build_scheduler(optimizer, train_config, len(train_loader))
     
+    # Info bar
+    tqdm.write(f"  Data: {len(train_ds):,} train, {len(val_ds):,} val "
+               f"(feat: {feat_time:.1f}s) | Model: {param_count:,} params | "
+               f"AMP={use_amp}")
+    
     # Training loop
     best_val_loss = float('inf')
+    all_metrics = []
     
-    for epoch in range(train_config.num_epochs):
+    epoch_pbar = tqdm(range(train_config.num_epochs), desc="Train",
+                      ncols=100, leave=False)
+    
+    for epoch in epoch_pbar:
         t0 = time.time()
         
         # Train
@@ -101,7 +100,9 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
         train_loss = 0.0
         train_batches = 0
         
-        for stm, nstm, target in train_loader:
+        batch_pbar = tqdm(train_loader, desc=f"Ep {epoch+1}",
+                          ncols=90, leave=False)
+        for stm, nstm, target in batch_pbar:
             stm = stm.to(device, non_blocking=True)
             nstm = nstm.to(device, non_blocking=True)
             target = target.to(device, non_blocking=True)
@@ -125,6 +126,8 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
             
             train_loss += loss.item()
             train_batches += 1
+            batch_pbar.set_postfix(loss=f"{loss.item():.5f}")
+        batch_pbar.close()
         
         # Validate
         model.eval()
@@ -148,16 +151,29 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
         elapsed = time.time() - t0
         lr_now = optimizer.param_groups[0]['lr']
         
-        print(f"Epoch {epoch+1:>3}/{train_config.num_epochs} | "
-              f"Train: {train_loss:.6f} | Val: {val_loss:.6f} | "
-              f"LR: {lr_now:.2e} | Time: {elapsed:.1f}s")
+        # Epoch metrics
+        metrics = {
+            'train/loss': train_loss,
+            'train/val_loss': val_loss,
+            'train/lr': lr_now,
+            'train/epoch_time_s': elapsed,
+            'train/epoch': epoch + 1,
+        }
+        all_metrics.append(metrics)
         
-        # Save best
+        # Update outer progress bar
+        saved = ""
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             model.save(output_path)
-            print(f"  -> Saved best model (val_loss={val_loss:.6f})")
+            saved = " ★"
+        
+        epoch_pbar.set_postfix_str(
+            f"loss={train_loss:.5f} val={val_loss:.5f} lr={lr_now:.1e}{saved}"
+        )
     
-    print(f"\nTraining complete. Best val_loss: {best_val_loss:.6f}")
-    return model, best_val_loss
+    epoch_pbar.close()
+    tqdm.write(f"  Best val_loss: {best_val_loss:.6f}")
+    
+    return model, best_val_loss, all_metrics
