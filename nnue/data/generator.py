@@ -10,7 +10,7 @@ from ai.core import AlphaZeroNet
 from ai.mcts import AlphaZeroAgent
 from ai.mcts import Node
 from ai.endgame import DTWCalculator
-from nnue.config import NNUEConfig
+from nnue.config import DataGenConfig
 from nnue.data.skipping import PositionFilter
 
 
@@ -20,12 +20,12 @@ class NNUEDataGenerator:
     def __init__(
         self,
         network: AlphaZeroNet,
-        config: Optional[NNUEConfig] = None,
+        config: Optional[DataGenConfig] = None,
         num_simulations: int = 800,
         seed: Optional[int] = None
     ):
         self.network = network
-        self.config = config or NNUEConfig()
+        self.config = config or DataGenConfig()
         self.num_simulations = num_simulations
         self.rng = random.Random(seed)
         

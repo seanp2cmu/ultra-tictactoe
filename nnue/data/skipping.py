@@ -4,7 +4,7 @@ from typing import Optional
 
 from game import Board
 from ai.endgame import DTWCalculator
-from nnue.config import NNUEConfig
+from nnue.config import DataGenConfig
 
 
 class PositionFilter:
@@ -12,10 +12,10 @@ class PositionFilter:
     
     def __init__(
         self,
-        config: Optional[NNUEConfig] = None,
+        config: Optional[DataGenConfig] = None,
         dtw_calculator: Optional[DTWCalculator] = None
     ):
-        self.config = config or NNUEConfig()
+        self.config = config or DataGenConfig()
         self.dtw = dtw_calculator
         
     def should_save(

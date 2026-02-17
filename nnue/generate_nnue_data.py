@@ -1,70 +1,47 @@
 #!/usr/bin/env python3
 """Generate NNUE training data from trained AlphaZero model."""
-import argparse
 from pathlib import Path
 
 from ai.core import AlphaZeroNet
 from nnue.data import NNUEDataGenerator
-from nnue.config import NNUEConfig
+from nnue.config import DataGenConfig
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate NNUE training data')
-    parser.add_argument('--model', type=str, default='model/best_model.pt',
-                        help='Path to trained AlphaZero model')
-    parser.add_argument('--games', type=int, default=10000,
-                        help='Number of self-play games')
-    parser.add_argument('--simulations', type=int, default=800,
-                        help='MCTS simulations per move')
-    parser.add_argument('--output', type=str, default='nnue_data/training_data.npz',
-                        help='Output path for training data')
-    parser.add_argument('--seed', type=int, default=None,
-                        help='Random seed for reproducibility')
-    parser.add_argument('--device', type=str, default='mps',
-                        help='Device (cpu, cuda, mps)')
-    args = parser.parse_args()
+    config = DataGenConfig()
     
     # Create output directory
-    output_path = Path(args.output)
+    output_path = Path(config.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Load trained AlphaZero model
-    print(f"Loading model from {args.model}...")
-    network = AlphaZeroNet(device=args.device)
+    print(f"Loading model from {config.model_path}...")
+    network = AlphaZeroNet(device=config.device)
     
-    if Path(args.model).exists():
-        network.load(args.model)
+    if Path(config.model_path).exists():
+        network.load(config.model_path)
         print("Model loaded successfully")
     else:
-        print(f"WARNING: Model not found at {args.model}, using random weights")
-    
-    # Configure NNUE data generation
-    config = NNUEConfig(
-        write_minply=4,
-        write_maxply=60,
-        eval_limit=0.9,
-        random_skip_rate=0.3,
-        skip_endgame=True,
-    )
+        print(f"WARNING: Model not found at {config.model_path}, using random weights")
     
     # Create generator
     generator = NNUEDataGenerator(
         network=network,
         config=config,
-        num_simulations=args.simulations,
-        seed=args.seed,
+        num_simulations=config.num_simulations,
+        seed=config.seed,
     )
     
     print(f"\n=== NNUE Data Generation ===")
-    print(f"Games: {args.games}")
-    print(f"Simulations: {args.simulations}")
+    print(f"Games: {config.num_games}")
+    print(f"Simulations: {config.num_simulations}")
     print(f"Skip settings: minply={config.write_minply}, maxply={config.write_maxply}, "
           f"eval_limit={config.eval_limit}, random_skip={config.random_skip_rate}")
     print()
     
     # Generate dataset
     dataset = generator.generate_dataset(
-        num_games=args.games,
+        num_games=config.num_games,
         output_path=str(output_path),
         verbose=True,
     )
