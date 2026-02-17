@@ -49,6 +49,9 @@ PYBIND11_MODULE(uttt_cpp, m) {
         .def_readwrite("current_player", &uttt::Board::current_player)
         .def_readwrite("winner", &uttt::Board::winner)
         .def_readwrite("completed_mask", &uttt::Board::completed_mask)
+        .def_readonly("last_move_r", &uttt::Board::last_move_r)
+        .def_readonly("last_move_c", &uttt::Board::last_move_c)
+        .def_readonly("has_last_move", &uttt::Board::has_last_move)
         .def_property("x_masks",
             [](const uttt::Board& self) { return std::vector<int>(self.x_masks.begin(), self.x_masks.end()); },
             [](uttt::Board& self, const std::vector<int>& v) { for (int i = 0; i < 9; i++) self.x_masks[i] = v[i]; })

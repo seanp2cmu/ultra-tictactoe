@@ -70,11 +70,16 @@ ultra-tictactoe/
 │   ├── board_cy.pyx          # Cython board (training)
 │   └── __init__.py           # Board import selector
 │
-├── cpp/                      # C++ extensions (pybind11)
-│   ├── board.cpp/.hpp        # C++ board implementation
-│   ├── dtw.cpp/.hpp          # C++ DTW alpha-beta search
-│   ├── bindings.cpp          # pybind11 bindings
-│   └── setup.py              # C++ build configuration
+├── game/cpp/                 # C++ board (pybind11)
+│   ├── board.cpp             # C++ board implementation
+│   └── board.hpp
+│
+├── ai/endgame/cpp/           # C++ DTW (pybind11)
+│   ├── dtw.cpp               # C++ DTW alpha-beta search
+│   └── dtw.hpp
+│
+├── cpp_bindings.cpp          # pybind11 bindings
+├── setup_cpp.py              # C++ build configuration
 │
 ├── utils/                    # Utilities
 │   ├── hf_upload.py          # HuggingFace upload
@@ -154,18 +159,18 @@ Value Head:
 
 ### 2. C++ Extensions (pybind11)
 
-**`cpp/board.cpp`** - C++ board implementation
+**`game/cpp/board.cpp`** - C++ board implementation
 
 - Used for DTW search (fastest path)
 - Minimal Python overhead
 
-**`cpp/dtw.cpp`** - Alpha-beta search
+**`ai/endgame/cpp/dtw.cpp`** - Alpha-beta search
 
 - Perfect endgame evaluation
 - Transposition table integration
 - ~20x faster than Python minimax
 
-**Build**: `cd cpp && python setup.py build_ext --inplace`
+**Build**: `python setup_cpp.py build_ext --inplace`
 
 ### 3. PyTorch Optimizations
 

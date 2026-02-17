@@ -1,6 +1,7 @@
 """NNUE training data generator using AlphaZero agent."""
 import random
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import numpy as np
@@ -53,6 +54,10 @@ class NNUEDataGenerator:
         """
         Play one self-play game and collect NNUE training data.
         
+        Blends search score with game result:
+          target = λ × search_score + (1-λ) × game_result
+        where game_result is from the side-to-move's perspective.
+        
         Returns:
             List of training samples: {'board': np.ndarray, 'value': float}
         """
@@ -77,7 +82,8 @@ class NNUEDataGenerator:
             if self.position_filter.should_save(board, ply, eval_value, self.rng):
                 sample = {
                     'board': self._board_to_array(board),
-                    'value': eval_value,
+                    'search_eval': eval_value,
+                    'stm': board.current_player,  # side to move
                     'ply': ply,
                 }
                 samples.append(sample)
@@ -105,6 +111,21 @@ class NNUEDataGenerator:
             board.make_move(row, col)
             ply += 1
         
+        # Determine game result: +1 = P1 win, -1 = P2 win, 0 = draw/unfinished
+        if board.winner == 1:
+            game_result_p1 = 1.0
+        elif board.winner == 2:
+            game_result_p1 = -1.0
+        else:
+            game_result_p1 = 0.0
+        
+        # Blend search score with game result for each sample
+        lam = self.config.lambda_search
+        for s in samples:
+            # Game result from side-to-move's perspective
+            game_result_stm = game_result_p1 if s['stm'] == 1 else -game_result_p1
+            s['value'] = lam * s['search_eval'] + (1.0 - lam) * game_result_stm
+        
         self.stats['games_played'] += 1
         return samples
     
@@ -125,35 +146,50 @@ class NNUEDataGenerator:
         Returns:
             Dict with 'boards' and 'values' arrays
         """
-        all_boards = []
-        all_values = []
+        # Pre-allocate chunks to avoid per-sample list.append overhead
+        board_chunks = []
+        value_chunks = []
         
         start_time = time.time()
         
         for i in range(num_games):
             samples = self.generate_game()
             
-            for s in samples:
-                all_boards.append(s['board'])
-                all_values.append(s['value'])
+            if samples:
+                boards_batch = np.array([s['board'] for s in samples], dtype=np.int8)
+                values_batch = np.array([s['value'] for s in samples], dtype=np.float32)
+                board_chunks.append(boards_batch)
+                value_chunks.append(values_batch)
             
             if verbose and (i + 1) % 100 == 0:
                 elapsed = time.time() - start_time
                 rate = (i + 1) / elapsed
-                saved_rate = self.stats['positions_saved'] / max(1, self.stats['positions_total'])
+                saved = self.stats['positions_saved']
+                total = self.stats['positions_total']
+                kept = saved / max(1, total)
                 print(f"Games: {i+1}/{num_games} | "
-                      f"Positions: {self.stats['positions_saved']} ({saved_rate:.1%} kept) | "
+                      f"Positions: {saved:,} ({kept:.1%} kept) | "
                       f"Rate: {rate:.1f} games/s")
         
+        if board_chunks:
+            all_boards = np.concatenate(board_chunks)
+            all_values = np.concatenate(value_chunks)
+        else:
+            all_boards = np.zeros((0, 92), dtype=np.int8)
+            all_values = np.zeros(0, dtype=np.float32)
+        
         dataset = {
-            'boards': np.array(all_boards, dtype=np.int8),
-            'values': np.array(all_values, dtype=np.float32),
+            'boards': all_boards,
+            'values': all_values,
         }
         
         if output_path:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             np.savez_compressed(output_path, **dataset)
             if verbose:
-                print(f"Saved {len(all_values)} positions to {output_path}")
+                elapsed = time.time() - start_time
+                print(f"\nSaved {len(all_values):,} positions to {output_path} "
+                      f"({elapsed:.1f}s total)")
         
         return dataset
     
@@ -167,48 +203,31 @@ class NNUEDataGenerator:
         return -best_child.value()
     
     def _board_to_array(self, board: Board) -> np.ndarray:
-        """
-        Convert board to flat array for storage.
-        
-        Format: 81 cells + 9 meta-board + 1 active_board + 1 current_player
-        Total: 92 int8 values
-        """
+        """Convert board to flat (92,) int8 array for storage."""
         arr = np.zeros(92, dtype=np.int8)
         
-        # 81 cells
+        # 81 cells — use board's flat representation if available
         for r in range(9):
             for c in range(9):
                 arr[r * 9 + c] = board.get_cell(r, c)
         
         # 9 meta-board states
-        if hasattr(board, 'get_completed_boards_2d'):
-            completed = board.get_completed_boards_2d()
-        else:
-            completed = board.completed_boards
+        completed = board.completed_boards
+        for i in range(9):
+            if isinstance(completed[0], (list, tuple)):
+                arr[81 + i] = completed[i // 3][i % 3]
+            else:
+                arr[81 + i] = completed[i]
         
-        for br in range(3):
-            for bc in range(3):
-                arr[81 + br * 3 + bc] = completed[br][bc]
-        
-        # Active board (derived from last_move)
+        # Active board
         if board.last_move is not None:
             lr, lc = board.last_move
-            target_br, target_bc = lr % 3, lc % 3
-            if hasattr(board, 'get_completed_boards_2d'):
-                target_completed = completed[target_br][target_bc]
-            else:
-                target_completed = completed[target_br][target_bc]
-            
-            if target_completed == 0:
-                arr[90] = target_br * 3 + target_bc
-            else:
-                arr[90] = -1  # Any board allowed
+            target_sub = (lr % 3) * 3 + (lc % 3)
+            arr[90] = target_sub if arr[81 + target_sub] == 0 else -1
         else:
-            arr[90] = -1  # First move, any board
+            arr[90] = -1
         
-        # Current player
         arr[91] = board.current_player
-        
         return arr
     
     def print_stats(self):
