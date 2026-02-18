@@ -69,6 +69,12 @@ def _trt_server_loop(
     def cu_d2h(h_ptr, d, n):
         _ck(_rt.cudaMemcpy(h_ptr, d, ctypes.c_size_t(n), ctypes.c_int(DTOH)), 'd2h')
 
+    def cu_h2d_async(d, h_ptr, n, s):
+        _ck(_rt.cudaMemcpyAsync(d, h_ptr, ctypes.c_size_t(n), ctypes.c_int(HTOD), s), 'h2d_a')
+
+    def cu_d2h_async(h_ptr, d, n, s):
+        _ck(_rt.cudaMemcpyAsync(h_ptr, d, ctypes.c_size_t(n), ctypes.c_int(DTOH), s), 'd2h_a')
+
     _ck(_rt.cudaSetDevice(ctypes.c_int(0)), 'setdev')
     stream = ctypes.c_void_p()
     _ck(_rt.cudaStreamCreate(ctypes.byref(stream)), 'stream')
@@ -93,6 +99,7 @@ def _trt_server_loop(
     context = None
     d_in = d_pol = d_val = None
     alloc_bs = 0
+    _addrs_set = False
 
     def _build_from_onnx(ox, ep, mbs, f16):
         nonlocal engine, context
@@ -115,8 +122,9 @@ def _trt_server_loop(
             cfg.set_flag(_trt.BuilderFlag.FP16)
             # print('[TRT-Srv] FP16 enabled')
         prof = builder.create_optimization_profile()
+        opt_bs = min(128, mbs)
         prof.set_shape(
-            'input', (1, 7, 9, 9), (mbs // 2, 7, 9, 9), (mbs, 7, 9, 9)
+            'input', (1, 7, 9, 9), (opt_bs, 7, 9, 9), (mbs, 7, 9, 9)
         )
         cfg.add_optimization_profile(prof)
         # print(f'[TRT-Srv] Building engine (max_batch={mbs}) ...')
@@ -147,7 +155,7 @@ def _trt_server_loop(
         return True
 
     def _ensure_dev(bs):
-        nonlocal d_in, d_pol, d_val, alloc_bs
+        nonlocal d_in, d_pol, d_val, alloc_bs, _addrs_set
         if bs <= alloc_bs:
             return
         cu_free(d_in)
@@ -157,6 +165,7 @@ def _trt_server_loop(
         d_in  = cu_malloc(alloc_bs * 7 * 9 * 9 * 4)
         d_pol = cu_malloc(alloc_bs * 81 * 4)
         d_val = cu_malloc(alloc_bs * 1  * 4)
+        _addrs_set = False  # addresses changed, need to re-set
 
     # ── initial load / build ──
     ok = _load_engine(engine_path) if os.path.exists(engine_path) else False
@@ -189,17 +198,18 @@ def _trt_server_loop(
                 pb = bs * 81 * 4
                 vb = bs * 1  * 4
 
-                cu_h2d(d_in, h_in, ib)
+                if not _addrs_set:
+                    context.set_tensor_address('input',  d_in.value)
+                    context.set_tensor_address('policy', d_pol.value)
+                    context.set_tensor_address('value',  d_val.value)
+                    _addrs_set = True
 
+                cu_h2d_async(d_in, h_in, ib, stream.value)
                 context.set_input_shape('input', (bs, 7, 9, 9))
-                context.set_tensor_address('input',  d_in.value)
-                context.set_tensor_address('policy', d_pol.value)
-                context.set_tensor_address('value',  d_val.value)
                 context.execute_async_v3(stream.value)
+                cu_d2h_async(h_pol, d_pol, pb, stream.value)
+                cu_d2h_async(h_val, d_val, vb, stream.value)
                 _rt.cudaStreamSynchronize(stream)
-
-                cu_d2h(h_pol, d_pol, pb)
-                cu_d2h(h_val, d_val, vb)
 
                 resp_q.put(('done',))
             except Exception as e:
@@ -209,6 +219,7 @@ def _trt_server_loop(
             _, ox, ep, mbs, f16 = msg
             context = None
             engine = None
+            _addrs_set = False
             try:
                 ok = _build_from_onnx(ox, ep, mbs, f16)
                 if ok:

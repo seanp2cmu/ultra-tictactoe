@@ -1,5 +1,7 @@
 import os
+import sys
 import time
+import subprocess
 import torch
 import torch._inductor.config
 import wandb
@@ -21,10 +23,113 @@ from ai.utils import (
 from utils import upload_to_hf
 
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _ensure_extensions_built():
+    """Auto-build Cython/C++ extensions if .so files are missing."""
+    required_so = [
+        'game/board_cy',
+        'ai/mcts/node_cy',
+        'utils/_board_symmetry_cy',
+        'utils/_board_encoder_cy',
+        'uttt_cpp',
+        'nnue_cpp',
+    ]
+    missing = []
+    for mod in required_so:
+        parts = mod.rsplit('/', 1)
+        if len(parts) == 2:
+            search_dir = os.path.join(ROOT_DIR, parts[0])
+            prefix = parts[1]
+        else:
+            search_dir = ROOT_DIR
+            prefix = parts[0]
+        found = any(
+            f.startswith(prefix) and f.endswith('.so')
+            for f in os.listdir(search_dir)
+        ) if os.path.isdir(search_dir) else False
+        if not found:
+            missing.append(mod)
+
+    if not missing:
+        return
+
+    print(f"[Setup] Missing extensions: {missing}")
+
+    # Determine which setup scripts to run
+    cython_mods = {'game/board_cy', 'ai/mcts/node_cy', 'utils/_board_symmetry_cy', 'utils/_board_encoder_cy'}
+    cpp_mods = {'uttt_cpp', 'nnue_cpp'}
+    need_cython = bool(set(missing) & cython_mods)
+    need_cpp = bool(set(missing) & cpp_mods)
+
+    if need_cython:
+        print("[Setup] Building Cython extensions (setup.py) ...")
+        ret = subprocess.run(
+            [sys.executable, 'setup.py', 'build_ext', '--inplace'],
+            cwd=ROOT_DIR
+        )
+        if ret.returncode != 0:
+            print("[Setup] WARNING: Cython build failed")
+
+    if need_cpp:
+        print("[Setup] Building C++ extensions (setup_cpp.py) ...")
+        ret = subprocess.run(
+            [sys.executable, 'setup_cpp.py', 'build_ext', '--inplace'],
+            cwd=ROOT_DIR
+        )
+        if ret.returncode != 0:
+            print("[Setup] WARNING: C++ build failed")
+
+
+def _download_from_hf(base_dir: str):
+    """Download runs.json and latest checkpoints from HuggingFace if not present locally."""
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+        repo_id = os.environ.get('HF_REPO_ID', 'sean2474/ultra-tictactoe-models')
+        api = HfApi()
+
+        # Download runs.json
+        runs_path = os.path.join(base_dir, RUNS_FILE)
+        if not os.path.exists(runs_path):
+            try:
+                p = hf_hub_download(repo_id, RUNS_FILE, repo_type='model',
+                                    local_dir=base_dir, local_dir_use_symlinks=False)
+                print(f"[HF] Downloaded {RUNS_FILE}")
+            except Exception:
+                print(f"[HF] No {RUNS_FILE} on remote")
+
+        # Download latest.pt for each run listed in runs.json
+        if os.path.exists(runs_path):
+            import json
+            with open(runs_path) as f:
+                runs = json.load(f)
+            for run_id in runs:
+                run_dir = os.path.join(base_dir, run_id)
+                latest_local = os.path.join(run_dir, 'latest.pt')
+                if not os.path.exists(latest_local):
+                    remote_path = f'{run_id}/latest.pt'
+                    try:
+                        os.makedirs(run_dir, exist_ok=True)
+                        hf_hub_download(repo_id, remote_path, repo_type='model',
+                                        local_dir=base_dir, local_dir_use_symlinks=False)
+                        print(f"[HF] Downloaded {remote_path}")
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"[HF] Download failed: {e}")
+
+
 def main():
+    # 0. Auto-build extensions if needed
+    _ensure_extensions_built()
+
     config = Config()
     base_dir = config.training.save_dir
     os.makedirs(base_dir, exist_ok=True)
+
+    # 0.5. Download checkpoints from HF if not present locally
+    _download_from_hf(base_dir)
     
     # 1. Select or create run
     run_id, run_name, checkpoint_path, is_new_run = select_run_and_checkpoint(base_dir)
@@ -75,7 +180,8 @@ def main():
         replay_buffer_size=config.training.replay_buffer_size, device=device,
         use_amp=config.training.use_amp, num_res_blocks=config.network.num_res_blocks,
         num_channels=config.network.num_channels, hot_cache_size=config.dtw.hot_cache_size,
-        cold_cache_size=config.dtw.cold_cache_size, total_iterations=config.training.num_iterations
+        cold_cache_size=config.dtw.cold_cache_size, total_iterations=config.training.num_iterations,
+        inference_batch_size=config.gpu.inference_batch_size,
     )
     
     # 6. Load checkpoint if resuming
@@ -108,7 +214,8 @@ def main():
             num_train_epochs=config.training.num_train_epochs,
             temperature=1.0, verbose=False, disable_tqdm=False,
             num_simulations=config.training.num_simulations,
-            parallel_games=config.gpu.parallel_games, iteration=iteration
+            parallel_games=config.gpu.parallel_games, iteration=iteration,
+            num_workers=config.gpu.num_workers,
         )
         
         elapsed = time.time() - t0
@@ -117,8 +224,7 @@ def main():
         lr = result.get('learning_rate', 0)
         dtw_stats = trainer.dtw_calculator.get_stats() if trainer.dtw_calculator else None
         
-        from ai.training.self_play import get_parallel_timing
-        timing = get_parallel_timing()
+        timing = getattr(trainer, '_mp_timing', {})
         
         # File log + HF
         log_iteration_to_file(log_path, iteration, total_iters, loss, lr,
@@ -153,6 +259,7 @@ def main():
                 upload_to_hf(dtw_cache_path, 'dtw_cache.pkl')
         
         update_run_iteration(base_dir, run_id, iteration + 1)
+        upload_to_hf(os.path.join(base_dir, RUNS_FILE), RUNS_FILE)
     
     # 8. Finish
     log_training_complete(log_path)

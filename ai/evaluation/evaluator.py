@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 from game import Board
 from ai.baselines import RandomAgent, HeuristicAgent, MinimaxAgent
-from ai.training.self_play import ParallelMCTS
+from ai.training.parallel_mcts import ParallelMCTS
 
 
 OPENING_MOVES = 16

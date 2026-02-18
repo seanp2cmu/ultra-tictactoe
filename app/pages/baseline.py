@@ -4,7 +4,7 @@ import time
 import gradio as gr
 
 from ai.baselines import RandomAgent, HeuristicAgent, MinimaxAgent
-from ai.training.self_play import ParallelMCTS
+from ai.training.parallel_mcts import ParallelMCTS
 from game import Board
 from app import config
 

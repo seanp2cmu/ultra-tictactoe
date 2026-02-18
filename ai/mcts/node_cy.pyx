@@ -13,7 +13,7 @@ from game import Board
 
 
 cdef class NodeCy:
-    """Cython-optimized MCTS Node."""
+    """Cython-optimized MCTS Node with lazy board creation."""
     
     cdef public object board
     cdef public object parent
@@ -24,6 +24,7 @@ cdef class NodeCy:
     cdef public float value_sum
     cdef public int _is_terminal  # -1: unknown, 0: false, 1: true
     cdef public int virtual_loss
+    cdef public bint _board_ready  # True if board is materialized
     
     def __init__(self, board, parent=None, int action=-1, float prior_prob=0.0, bint _clone=True):
         self.board = board.clone() if _clone else board
@@ -35,6 +36,17 @@ cdef class NodeCy:
         self.value_sum = 0.0
         self._is_terminal = -1
         self.virtual_loss = 0
+        self._board_ready = True
+    
+    cdef inline void _ensure_board(self):
+        """Lazily materialize board from parent if needed."""
+        if self._board_ready:
+            return
+        # board field holds parent's board; clone and apply action
+        cdef object parent_board = self.board
+        self.board = parent_board.clone()
+        self.board.make_move(self.action // 9, self.action % 9)
+        self._board_ready = True
     
     cpdef bint is_expanded(self):
         return len(self.children) > 0
@@ -46,6 +58,7 @@ cdef class NodeCy:
         if self._is_terminal != -1:
             return self._is_terminal == 1
         
+        self._ensure_board()
         winner = self.board.winner
         if winner is not None and winner != -1:
             self._is_terminal = 1
@@ -120,36 +133,62 @@ cdef class NodeCy:
         return best_action, best_child
     
     cpdef void expand(self, dict action_probs):
-        """Expand node by creating children for legal moves (dict API)."""
+        """Expand node by creating children for legal moves (dict API) — lazy board creation."""
+        self._ensure_board()
         cdef list legal_moves = self.board.get_legal_moves()
         cdef int action
         cdef float prior
-        cdef object next_board
         cdef tuple move
+        cdef NodeCy child
         
         for move in legal_moves:
             action = move[0] * 9 + move[1]
             if action not in self.children:
-                next_board = self.board.clone()
-                next_board.make_move(move[0], move[1])
                 prior = action_probs.get(action, 1e-8)
-                self.children[action] = NodeCy(next_board, parent=self, action=action, prior_prob=prior, _clone=False)
+                child = NodeCy.__new__(NodeCy)
+                child.board = self.board
+                child.parent = self
+                child.action = action
+                child.prior_prob = prior
+                child.children = {}
+                child.visits = 0
+                child.value_sum = 0.0
+                child._is_terminal = -1
+                child.virtual_loss = 0
+                child._board_ready = False
+                self.children[action] = child
     
     cpdef void expand_numpy(self, float[:] policy):
-        """Expand node using a flat numpy policy array (avoids dict creation)."""
+        """Expand node using a flat numpy policy array — lazy board creation.
+        
+        Children are created with a reference to parent's board instead of
+        cloning. The actual clone+make_move happens lazily when the child
+        is first visited (via _ensure_board).
+        """
+        self._ensure_board()
         cdef list legal_moves = self.board.get_legal_moves()
         cdef int action
         cdef float prior
-        cdef object next_board
         cdef tuple move
+        cdef NodeCy child
         
         for move in legal_moves:
             action = move[0] * 9 + move[1]
             if action not in self.children:
-                next_board = self.board.clone()
-                next_board.make_move(move[0], move[1])
                 prior = policy[action]
-                self.children[action] = NodeCy(next_board, parent=self, action=action, prior_prob=prior, _clone=False)
+                # Lazy child: store parent's board ref, defer clone+make_move
+                child = NodeCy.__new__(NodeCy)
+                child.board = self.board  # NOT cloned yet
+                child.parent = self
+                child.action = action
+                child.prior_prob = prior
+                child.children = {}
+                child.visits = 0
+                child.value_sum = 0.0
+                child._is_terminal = -1
+                child.virtual_loss = 0
+                child._board_ready = False  # lazy
+                self.children[action] = child
     
     cpdef void add_virtual_loss(self, int n=1):
         """Add virtual loss to discourage re-selection."""
@@ -185,6 +224,7 @@ cpdef tuple select_leaf_vl(NodeCy root, float c_puct):
     
     while node.is_expanded() and not node.is_terminal():
         action, node = node.select_child(c_puct)
+        node._ensure_board()  # materialize board on visit
         search_path.append(node)
     
     # Apply virtual loss to entire path (direct field access, no method call)

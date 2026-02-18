@@ -24,9 +24,10 @@ class TrainingConfig:
 @dataclass
 class GPUConfig:
     device: str = "cuda"
-    num_workers: int = 12  
+    num_workers: int = 16  
     pin_memory: bool = True
-    parallel_games: int = 2048
+    parallel_games: int = 8192
+    inference_batch_size: int = 8192
 
 @dataclass
 class DTWConfig:

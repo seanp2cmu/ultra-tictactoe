@@ -1,5 +1,7 @@
 from .replay_buffer import SelfPlayData
-from .self_play import SelfPlayWorker, reset_parallel_timing, get_parallel_timing
+from .parallel_mcts import ParallelMCTS, reset_parallel_timing, get_parallel_timing
+from .self_play import run_multiprocess_self_play
 from .trainer import Trainer
 
-__all__ = ['SelfPlayData', 'SelfPlayWorker', 'Trainer', 'reset_parallel_timing', 'get_parallel_timing']
+__all__ = ['SelfPlayData', 'ParallelMCTS', 'Trainer',
+           'reset_parallel_timing', 'get_parallel_timing', 'run_multiprocess_self_play']

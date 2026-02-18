@@ -21,7 +21,9 @@ A high-performance AI engine that combines deep reinforcement learning (AlphaZer
 - **AlphaZero-style Training**: Self-play reinforcement learning with MCTS
 - **DTW Endgame Solver**: Perfect play in endgame positions (≤15 empty cells)
 - **High Performance**: Cython + C++ optimizations for critical paths
+- **TensorRT Inference**: Dedicated TRT server process for fast self-play
 - **Lc0-style Training**: Large-scale self-play with optimized replay buffer
+- **Auto Setup**: Extensions auto-build on first run; checkpoints auto-sync with HuggingFace
 
 ---
 
@@ -40,7 +42,8 @@ ultra-tictactoe/
 │   │
 │   ├── core/                 # Neural network
 │   │   ├── network.py        # Model architecture (ResNet + SE)
-│   │   └── alpha_zero_net.py # Training wrapper (optimizer, AMP, torch.compile)
+│   │   ├── alpha_zero_net.py # Training wrapper (optimizer, AMP, torch.compile)
+│   │   └── tensorrt_engine.py # TensorRT inference server (separate process)
 │   │
 │   ├── mcts/                 # Monte Carlo Tree Search
 │   │   ├── node.py           # Python MCTS node
@@ -82,13 +85,15 @@ ultra-tictactoe/
 ├── setup_cpp.py              # C++ build configuration
 │
 ├── utils/                    # Utilities
-│   ├── hf_upload.py          # HuggingFace upload
+│   ├── hf_upload.py          # HuggingFace upload/download
 │   └── __init__.py
 │
 └── model/                    # Saved models & cache
-    ├── best.pt               # Best model checkpoint
+    ├── runs.json             # Run registry (synced to HF)
+    ├── <run_id>/latest.pt    # Latest checkpoint per run
+    ├── <run_id>/best.pt      # Best checkpoint per run
     ├── dtw_cache.pkl         # DTW transposition table
-    └── training.log          # Training logs
+    └── <run_id>/training.log # Training logs
 ```
 
 ---
@@ -106,7 +111,7 @@ Input: 7 channels × 9 × 9
 │   ├── [5]   Sub-board completion status
 │   └── [6]   Current player indicator
 
-Backbone: 30 Residual Blocks × 256 channels
+Backbone: 20 Residual Blocks × 256 channels
 ├── Each block:
 │   ├── Conv2d 3×3 → BatchNorm → ReLU
 │   ├── Conv2d 3×3 → BatchNorm
@@ -125,13 +130,13 @@ Value Head:
 └── Output: Win probability [0, 1]
 ```
 
-**Model Size**: ~107M parameters (~409 MB)
+**Model Size**: ~74M parameters (~274 MB)
 
 ### Key Design Choices
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
-| Residual Blocks | 30 | Deep enough for strategic understanding |
+| Residual Blocks | 20 | Balance between depth and training speed |
 | Channels | 256 | Balance between capacity and speed |
 | SE Blocks | Yes | Channel attention improves feature selection |
 | Value Output | Sigmoid [0,1] | 0=loss, 0.5=draw, 1=win |
@@ -172,23 +177,37 @@ Value Head:
 
 **Build**: `python setup_cpp.py build_ext --inplace`
 
-### 3. PyTorch Optimizations
+### 3. TensorRT Inference
+
+Self-play inference runs in a **dedicated TensorRT server process** to avoid CUDA context conflicts with PyTorch training:
+
+- ONNX export → TensorRT engine build (FP16)
+- Zero-copy shared memory communication
+- Automatic engine rebuild after each training iteration
+- Fallback to `torch.compile` if TRT is unavailable
+
+Disable TRT via environment variable if needed:
+```bash
+ULTRA_TRT_DISABLE=1 python -m ai.train
+```
+
+### 4. PyTorch Optimizations
 
 | Optimization | Description |
 |--------------|-------------|
-| `torch.compile` | Graph compilation for faster inference |
+| `torch.compile` | Graph compilation (fallback when TRT unavailable) |
 | AMP (FP16) | Mixed precision training |
-| CUDAGraphs | Reduced kernel launch overhead |
 | Batch Inference | Parallel position evaluation |
 
-### 4. Performance Summary
+### 5. Performance Summary
 
 | Component | Implementation | Speedup |
-|-----------|---------------|---------|
+|-----------|---------------|--------|
 | Board Logic | Cython (bitboard) | ~10x |
 | MCTS Node | Cython | ~5x |
 | DTW Search | C++ | ~20x |
-| Network | torch.compile + AMP | ~2x |
+| Inference | TensorRT FP16 | ~3-5x vs eager |
+| Network Training | AMP + torch.compile | ~2x |
 
 ---
 
@@ -205,14 +224,15 @@ For each iteration:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Iterations | 400 | Total training cycles |
+| Iterations | 500 | Total training cycles |
 | Games/Iteration | 8,192 | Self-play games per cycle |
-| MCTS Simulations | 800 | Simulations per move |
-| Batch Size | 1,024 | Training batch size |
+| MCTS Simulations | 200 | Simulations per move |
+| Batch Size | 2,048 | Training batch size |
 | Training Epochs | 40 | Epochs per iteration |
 | Learning Rate | 0.002 | Initial LR (cosine decay) |
 | Weight Decay | 1e-4 | L2 regularization |
 | Replay Buffer | 2M | Maximum samples |
+| Parallel Games | 2,048 | Concurrent self-play games |
 
 ### Temperature Schedule
 
@@ -337,28 +357,48 @@ Cache is persisted to `dtw_cache.pkl` and uploaded to HuggingFace.
 
 ## Running the Project
 
-### Local Development
+### Quick Start
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 
-# Build Cython extensions
+# Run Gradio app (extensions auto-build on startup)
+python app.py
+```
+
+### Manual Extension Build (optional)
+
+Extensions are auto-built when missing, but you can build manually:
+
+```bash
+# Cython extensions (board, MCTS node, board encoder)
 python setup.py build_ext --inplace
 
-# Build C++ extensions
-cd cpp && python setup.py build_ext --inplace && cd ..
-
-# Run Gradio app
-python app.py
+# C++ extensions (board, DTW, NNUE)
+python setup_cpp.py build_ext --inplace
 ```
 
 ### Training
 
 ```bash
-# Start training (interactive checkpoint selection)
+# Start training (auto-downloads checkpoints from HF, interactive run selection)
 python -m ai.train
 ```
+
+On first run:
+1. Missing `.so` extensions are **auto-built**
+2. `runs.json` + checkpoints are **auto-downloaded** from HuggingFace
+3. Select an existing run to resume or start a new one
+4. Every iteration, `latest.pt` + `runs.json` are **auto-uploaded** to HuggingFace
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HF_REPO_ID` | `sean2474/ultra-tictactoe-models` | HuggingFace model repo |
+| `HF_UPLOAD` | `true` | Enable/disable HF uploads |
+| `ULTRA_TRT_DISABLE` | unset | Set to `1` to disable TensorRT |
 
 ### HuggingFace Spaces
 
@@ -382,27 +422,6 @@ The app automatically builds Cython/C++ extensions on startup via `packages.txt`
 - **Loss convergence**: ~1.8 after 30 iterations
 - **DTW cache hit rate**: Increases over training
 - **Average game length**: ~50 moves
-
----
-
-## Configuration
-
-Edit `ai/config.py` to adjust:
-
-```python
-@dataclass
-class TrainingConfig:
-    num_iterations: int = 400
-    num_self_play_games: int = 8192
-    num_simulations: int = 800
-    batch_size: int = 1024
-    lr: float = 0.002
-    
-@dataclass
-class DTWConfig:
-    endgame_threshold: int = 15  # Use DTW when ≤15 cells empty
-    hot_cache_size: int = 60_000_000
-```
 
 ---
 

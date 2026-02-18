@@ -3,7 +3,8 @@ from typing import Dict, Optional
 from tqdm import tqdm
 
 from .replay_buffer import SelfPlayData
-from .self_play import SelfPlayWorker, reset_parallel_timing
+from .parallel_mcts import reset_parallel_timing, get_parallel_timing
+from .self_play import run_multiprocess_self_play
 
 
 class Trainer:
@@ -24,14 +25,16 @@ class Trainer:
         endgame_threshold: int = 15,
         hot_cache_size: int = 50000,
         cold_cache_size: int = 500000,
-        total_iterations: int = 300
+        total_iterations: int = 300,
+        inference_batch_size: int = 8192,
     ) -> None:
         if network is None:
             from ..core import Model, AlphaZeroNet
             model = Model(num_res_blocks=num_res_blocks, num_channels=num_channels)
             self.network = AlphaZeroNet(
                 model=model, lr=lr, weight_decay=weight_decay,
-                device=device, use_amp=use_amp, total_iterations=total_iterations
+                device=device, use_amp=use_amp, total_iterations=total_iterations,
+                inference_batch_size=inference_batch_size,
             )
         else:
             self.network = network
@@ -53,51 +56,31 @@ class Trainer:
         self,
         num_games: int = 10,
         temperature: float = 1.0,
-        verbose: bool = False,
-        disable_tqdm: bool = False,
         num_simulations: Optional[int] = None,
-        parallel_games: int = 128
+        parallel_games: int = 2048,
+        num_workers: int = 4,
     ) -> int:
-        """Generate self-play data using parallel self-play."""
+        """Generate self-play data using multi-process workers + centralised GPU inference."""
+        import numpy as np
         sims = num_simulations if num_simulations is not None else self.num_simulations
+        game_id_start = self.replay_buffer._next_game_id
         
-        # Reset timing stats
-        reset_parallel_timing()
-        
-        # Parallel self-play
-        worker = SelfPlayWorker(
+        (states, policies, values, game_ids), self._mp_timing = run_multiprocess_self_play(
             network=self.network,
-            dtw_calculator=self.dtw_calculator,
+            num_games=num_games,
             num_simulations=sims,
+            parallel_games=parallel_games,
             temperature=temperature,
-            parallel_games=parallel_games
+            game_id_start=game_id_start,
+            num_workers=num_workers,
+            endgame_threshold=self.dtw_calculator.endgame_threshold if self.dtw_calculator else 15,
         )
         
-        # Get starting game_id from replay buffer
-        game_id_start = self.replay_buffer._next_game_id
-        all_data = worker.play_games(num_games, disable_tqdm=disable_tqdm, 
-                                      game_id_start=game_id_start)
+        if len(states) > 0:
+            self.replay_buffer._next_game_id = int(game_ids.max()) + 1
+            self.replay_buffer.add_batch(states, policies, values, game_ids)
         
-        # Update replay buffer's game_id counter
-        max_game_id = max((d[3] for d in all_data), default=game_id_start)
-        self.replay_buffer._next_game_id = max_game_id + 1
-        
-        # Batch insert into replay buffer (avoids per-sample Python overhead)
-        if all_data:
-            import numpy as np
-            states = np.array([d[0] for d in all_data])
-            policies = np.array([d[1] for d in all_data])
-            values = np.array([d[2] for d in all_data], dtype=np.float32)
-            game_ids_arr = np.array([d[3] for d in all_data], dtype=np.int64)
-            self.replay_buffer.add_batch(states, policies, values, game_ids_arr)
-        
-        if verbose:
-            print(f"\nTotal samples in replay buffer: {len(self.replay_buffer)}")
-            if self.dtw_calculator:
-                cache_stats = self.dtw_calculator.get_stats()
-                print(f"DTW Cache: {cache_stats}")
-        
-        return len(all_data)
+        return len(states)
     
     def train(self, num_epochs: int = 10, verbose: bool = False, disable_tqdm: bool = False) -> Dict:
         """Train network on replay buffer."""
@@ -141,8 +124,9 @@ class Trainer:
         verbose: bool = False,
         disable_tqdm: bool = False,
         num_simulations: Optional[int] = None,
-        parallel_games: int = 1,
-        iteration: int = 0
+        parallel_games: int = 2048,
+        iteration: int = 0,
+        num_workers: int = 4,
     ) -> Dict:
         """Single training iteration."""
         # Set current iteration for age-based weighting
@@ -157,10 +141,9 @@ class Trainer:
         num_samples = self.generate_self_play_data(
             num_games=num_self_play_games,
             temperature=temperature,
-            verbose=verbose,
-            disable_tqdm=disable_tqdm,
             num_simulations=num_simulations,
-            parallel_games=parallel_games
+            parallel_games=parallel_games,
+            num_workers=num_workers,
         )
         
         if verbose:
@@ -181,7 +164,9 @@ class Trainer:
             'learning_rate': current_lr
         }
         
-        if self.dtw_calculator:
+        if hasattr(self, '_mp_timing') and self._mp_timing.get('dtw_stats'):
+            result['dtw_stats'] = self._mp_timing['dtw_stats']
+        elif self.dtw_calculator:
             result['dtw_stats'] = self.dtw_calculator.get_stats()
         
         if verbose:

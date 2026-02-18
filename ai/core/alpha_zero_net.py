@@ -21,7 +21,8 @@ class AlphaZeroNet:
         device: Optional[str] = None,
         model: Optional[Model] = None,
         use_amp: bool = True,
-        total_iterations: int = 300
+        total_iterations: int = 500,
+        inference_batch_size: int = 8192,
     ) -> None:
         if device is None:
             if torch.cuda.is_available():
@@ -56,6 +57,7 @@ class AlphaZeroNet:
         self.predict_lock = threading.Lock()
         self._compiled = False
         self.trt_engine = None
+        self.inference_batch_size = inference_batch_size
         
         # Try TensorRT first, then torch.compile (only when actually on CUDA)
         if self.device.type == 'cuda':
@@ -376,7 +378,7 @@ class AlphaZeroNet:
                 model=self.model,
                 engine_path="./model/model.trt",
                 onnx_path="./model/model.onnx",
-                max_batch_size=8192,
+                max_batch_size=self.inference_batch_size,
                 force_rebuild=force_rebuild,
             )
             if self.trt_engine is not None:
