@@ -433,19 +433,6 @@ def run_multiprocess_self_play(
             except Exception:
                 break
 
-        # Log progress at 10% intervals
-        if num_games > 0:
-            pct = (_games_done * 100) // num_games
-            if pct >= _last_log_pct + 10:
-                _last_log_pct = (pct // 10) * 10
-                elapsed = time.perf_counter() - t0
-                rate = _games_done / elapsed if elapsed > 0 else 0
-                try:
-                    from tqdm import tqdm as _tq
-                    _tq.write(f'  [Self-Play] {_games_done}/{num_games} games ({_last_log_pct}%) - {rate:.1f} games/s')
-                except ImportError:
-                    print(f'  [Self-Play] {_games_done}/{num_games} games ({_last_log_pct}%) - {rate:.1f} games/s', flush=True)
-
         # Adaptive batching: if we have infer requests but not all workers
         # have reported in, wait up to last_infer_time for stragglers.
         # This costs nothing because inference would take that long anyway.

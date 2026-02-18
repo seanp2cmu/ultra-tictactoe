@@ -194,9 +194,6 @@ def _trt_server_loop(
                 continue
             try:
                 _ensure_dev(bs)
-                ib = bs * 7 * 9 * 9 * 4
-                pb = bs * 81 * 4
-                vb = bs * 1  * 4
 
                 if not _addrs_set:
                     context.set_tensor_address('input',  d_in.value)
@@ -204,6 +201,9 @@ def _trt_server_loop(
                     context.set_tensor_address('value',  d_val.value)
                     _addrs_set = True
 
+                ib = bs * 7 * 9 * 9 * 4
+                pb = bs * 81 * 4
+                vb = bs * 1  * 4
                 cu_h2d_async(d_in, h_in, ib, stream.value)
                 context.set_input_shape('input', (bs, 7, 9, 9))
                 context.execute_async_v3(stream.value)
@@ -420,6 +420,228 @@ def export_onnx(model, onnx_path: str = './model/model.onnx') -> bool:
         return False
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# C++ TRT Server Client  (near-zero latency IPC via shared memory flags)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _cpp_server_wrapper(shm_ctrl_name, shm_in_name, shm_pol_name, shm_val_name,
+                        engine_path, max_batch, so_path):
+    """Thin wrapper to call the C++ server from a spawned process."""
+    import ctypes
+    from multiprocessing.shared_memory import SharedMemory as _SHM
+
+    shm_ctrl = _SHM(name=shm_ctrl_name, create=False)
+    shm_in   = _SHM(name=shm_in_name,   create=False)
+    shm_pol  = _SHM(name=shm_pol_name,  create=False)
+    shm_val  = _SHM(name=shm_val_name,  create=False)
+
+    lib = ctypes.CDLL(so_path)
+    lib.trt_server_run.restype = ctypes.c_int
+    lib.trt_server_run.argtypes = [
+        ctypes.c_void_p, ctypes.c_size_t,  # shm_ctrl
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,  # in/pol/val
+        ctypes.c_char_p, ctypes.c_int,  # engine_path, max_batch
+    ]
+
+    ret = lib.trt_server_run(
+        ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(shm_ctrl.buf))),
+        ctypes.c_size_t(shm_ctrl.size),
+        ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(shm_in.buf))),
+        ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(shm_pol.buf))),
+        ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(shm_val.buf))),
+        engine_path.encode('utf-8'),
+        ctypes.c_int(max_batch),
+    )
+
+    shm_ctrl.close()
+    shm_in.close()
+    shm_pol.close()
+    shm_val.close()
+
+
+class TensorRTCppClient:
+    """TRT client using C++ server with atomic shared memory flags.
+
+    Same interface as TensorRTProcessClient but ~4x lower inference latency
+    by eliminating Python Queue pickle overhead and Python TRT binding calls.
+
+    Control shared memory layout (524 bytes):
+      [0:4]   cmd_flag   — 0=idle, 1=infer, 2=shutdown, 3=rebuild
+      [4:8]   resp_flag  — 0=idle, 1=done, 2=error
+      [8:12]  batch_size — int
+      [12:524] rebuild_buf — engine path for rebuild (512 bytes)
+    """
+
+    _CTRL_SIZE = 524
+
+    def __init__(self, max_batch_size: int = 4096):
+        self.max_batch_size = max_batch_size
+        self._ready = False
+        self._proc = None
+        self._shms: list = []
+        self._input_buf = None
+        self._policy_buf = None
+        self._value_buf = None
+        self._ctrl_buf = None  # raw memoryview
+        self._ctrl_arr = None  # numpy int32 view for cmd/resp/bs
+
+    def start(
+        self,
+        engine_path: str = './model/model.trt',
+        onnx_path: str = './model/model.onnx',
+        fp16: bool = True,
+    ) -> bool:
+        if self._proc is not None and self._proc.is_alive():
+            return self._ready
+
+        so_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'trt_server.so')
+        if not os.path.exists(so_path):
+            print('[TRT-C++] trt_server.so not found')
+            return False
+
+        pid = os.getpid()
+        names = [f'trtc_ctrl_{pid}', f'trtc_in_{pid}',
+                 f'trtc_pol_{pid}', f'trtc_val_{pid}']
+        sizes = [
+            self._CTRL_SIZE,
+            self.max_batch_size * 7 * 9 * 9 * 4,
+            self.max_batch_size * 81 * 4,
+            self.max_batch_size * 1  * 4,
+        ]
+
+        for n in names:
+            try:
+                s = SharedMemory(name=n, create=False)
+                s.close(); s.unlink()
+            except FileNotFoundError:
+                pass
+
+        shms = [SharedMemory(name=n, create=True, size=sz)
+                for n, sz in zip(names, sizes)]
+        self._shms = shms
+
+        # Zero out control region
+        shms[0].buf[:self._CTRL_SIZE] = b'\x00' * self._CTRL_SIZE
+
+        self._ctrl_arr = np.ndarray(3, dtype=np.int32, buffer=shms[0].buf)
+        self._input_buf  = np.ndarray(
+            (self.max_batch_size, 7, 9, 9), np.float32, buffer=shms[1].buf)
+        self._policy_buf = np.ndarray(
+            (self.max_batch_size, 81),       np.float32, buffer=shms[2].buf)
+        self._value_buf  = np.ndarray(
+            (self.max_batch_size, 1),        np.float32, buffer=shms[3].buf)
+
+        self._proc = _mp.Process(
+            target=_cpp_server_wrapper,
+            args=(names[0], names[1], names[2], names[3],
+                  engine_path, self.max_batch_size, so_path),
+            daemon=True,
+        )
+        self._proc.start()
+
+        # Wait for C++ server to signal ready (resp_flag)
+        import time
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            resp = int(self._ctrl_arr[1])
+            if resp == 1:
+                self._ready = True
+                print('[TRT-C++] server ready')
+                # Reset resp_flag
+                self._ctrl_arr[1] = 0
+                return True
+            elif resp == 2:
+                print('[TRT-C++] server FAILED')
+                return False
+            time.sleep(0.01)
+
+        print('[TRT-C++] server timeout')
+        return False
+
+    def shutdown(self):
+        if self._proc is not None and self._proc.is_alive():
+            try:
+                self._ctrl_arr[0] = 2  # cmd=shutdown
+                self._proc.join(timeout=5)
+            except Exception:
+                self._proc.kill()
+        for s in self._shms:
+            try:
+                s.close(); s.unlink()
+            except Exception:
+                pass
+        self._shms.clear()
+        self._proc = None
+        self._ready = False
+
+    def __del__(self):
+        self.shutdown()
+
+    def infer(self, input_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        bs = input_array.shape[0]
+        self._input_buf[:bs] = input_array
+        # Write batch_size, then cmd=infer (order matters for C++ side)
+        self._ctrl_arr[2] = bs        # batch_size
+        self._ctrl_arr[1] = 0         # clear resp
+        self._ctrl_arr[0] = 1         # cmd=infer (triggers C++ loop)
+        # Spin-wait for response
+        while self._ctrl_arr[1] == 0:
+            pass
+        resp = int(self._ctrl_arr[1])
+        if resp == 2:
+            raise RuntimeError('TRT-C++ infer error')
+        return self._policy_buf[:bs].copy(), self._value_buf[:bs].copy()
+
+    def infer_async(self, input_array: np.ndarray) -> int:
+        bs = input_array.shape[0]
+        self._input_buf[:bs] = input_array
+        self._ctrl_arr[2] = bs
+        self._ctrl_arr[1] = 0
+        self._ctrl_arr[0] = 1
+        return bs
+
+    def infer_wait(self, bs: int) -> Tuple[np.ndarray, np.ndarray]:
+        while self._ctrl_arr[1] == 0:
+            pass
+        resp = int(self._ctrl_arr[1])
+        if resp == 2:
+            raise RuntimeError('TRT-C++ infer error')
+        return self._policy_buf[:bs].copy(), self._value_buf[:bs].copy()
+
+    def rebuild(self, onnx_path: str, engine_path: str,
+                max_batch_size: int = 4096, fp16: bool = True) -> bool:
+        if not self.is_ready():
+            return False
+        # Write engine path into rebuild_buf (offset 12 in ctrl shm)
+        path_bytes = engine_path.encode('utf-8')[:511]
+        self._shms[0].buf[12:12+len(path_bytes)] = path_bytes
+        self._shms[0].buf[12+len(path_bytes)] = 0  # null terminator
+        self._ctrl_arr[1] = 0  # clear resp
+        self._ctrl_arr[0] = 3  # cmd=rebuild
+        # Wait for response
+        import time
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            resp = int(self._ctrl_arr[1])
+            if resp == 1:
+                self._ready = True
+                return True
+            elif resp == 2:
+                self._ready = False
+                return False
+            time.sleep(0.001)
+        self._ready = False
+        return False
+
+    def is_ready(self) -> bool:
+        return (self._ready
+                and self._proc is not None
+                and self._proc.is_alive())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 def get_tensorrt_process_client(
     model=None,
     engine_path: str = './model/model.trt',
@@ -427,7 +649,11 @@ def get_tensorrt_process_client(
     max_batch_size: int = 4096,
     force_rebuild: bool = False,
 ) -> Optional[TensorRTProcessClient]:
-    """Get a TensorRT inference client backed by a dedicated server process."""
+    """Get a TensorRT inference client backed by a dedicated server process.
+
+    Prefers C++ server (TensorRTCppClient) for lower latency.
+    Falls back to Python server (TensorRTProcessClient) if C++ .so not available.
+    """
     if not TRT_AVAILABLE:
         print('[TRT] TensorRT not available')
         return None
@@ -441,6 +667,17 @@ def get_tensorrt_process_client(
     if force_rebuild and os.path.exists(engine_path):
         os.remove(engine_path)
 
+    # Try C++ server first (need engine to already exist since C++ can't build from ONNX)
+    so_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'trt_server.so')
+    if os.path.exists(so_path) and os.path.exists(engine_path):
+        cpp_client = TensorRTCppClient(max_batch_size)
+        if cpp_client.start(engine_path=engine_path, onnx_path=onnx_path):
+            return cpp_client
+        cpp_client.shutdown()
+        print('[TRT] C++ server failed, falling back to Python server')
+
+    # Fallback: Python server (can build engine from ONNX)
     client = TensorRTProcessClient(max_batch_size)
     if client.start(engine_path=engine_path, onnx_path=onnx_path):
         return client
