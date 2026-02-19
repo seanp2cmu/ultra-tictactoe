@@ -1,6 +1,7 @@
 """
 Minimax Agent with Alpha-Beta Pruning.
 Depth-limited search with heuristic evaluation.
+Move ordering for better pruning efficiency.
 """
 from typing import List
 from game import Board
@@ -11,6 +12,16 @@ def _get_completed_2d(board):
     if hasattr(board, 'get_completed_boards_2d'):
         return board.get_completed_boards_2d()
     return board.completed_boards
+
+
+# Move priority: center > corners > edges (within each local board)
+_LOCAL_PRIORITY = {4: 0, 0: 1, 2: 1, 6: 1, 8: 1, 1: 2, 3: 2, 5: 2, 7: 2}
+
+
+def _move_order_key(move):
+    """Sort key for move ordering: prefer center/corner cells."""
+    local_pos = (move[0] % 3) * 3 + (move[1] % 3)
+    return _LOCAL_PRIORITY.get(local_pos, 2)
 
 
 class MinimaxAgent:
@@ -36,7 +47,7 @@ class MinimaxAgent:
             action: Move as action index (row * 9 + col)
         """
         self.nodes_searched = 0
-        legal_moves = board.get_legal_moves()
+        legal_moves = sorted(board.get_legal_moves(), key=_move_order_key)
         
         if not legal_moves:
             return 0
@@ -47,11 +58,9 @@ class MinimaxAgent:
         beta = float('inf')
         
         for move in legal_moves:
-            # Make move on copy
-            new_board = self._copy_board(board)
+            new_board = board.clone()
             new_board.make_move(move[0], move[1])
             
-            # Minimax with alpha-beta
             score = self._minimax(new_board, self.depth - 1, alpha, beta, False, board.current_player)
             
             if score > best_score:
@@ -64,51 +73,51 @@ class MinimaxAgent:
     
     def _minimax(self, board: Board, depth: int, alpha: float, beta: float, 
                  maximizing: bool, original_player: int) -> float:
-        """Minimax with alpha-beta pruning."""
+        """Minimax with alpha-beta pruning and move ordering."""
         self.nodes_searched += 1
         
         # Terminal or depth limit (BoardCy uses -1 for no winner)
         if board.winner is not None and board.winner != -1:
             if board.winner == original_player:
-                return 10000 + depth  # Win (prefer faster wins)
+                return 10000 + depth
             elif board.winner == 3:
-                return 0  # Draw
+                return 0
             else:
-                return -10000 - depth  # Loss (prefer slower losses)
+                return -10000 - depth
         
         if depth == 0:
             return self._evaluate(board, original_player)
         
-        legal_moves = board.get_legal_moves()
+        legal_moves = sorted(board.get_legal_moves(), key=_move_order_key)
         if not legal_moves:
             return 0
         
         if maximizing:
             max_eval = float('-inf')
             for move in legal_moves:
-                new_board = self._copy_board(board)
+                new_board = board.clone()
                 new_board.make_move(move[0], move[1])
                 eval_score = self._minimax(new_board, depth - 1, alpha, beta, False, original_player)
-                max_eval = max(max_eval, eval_score)
-                alpha = max(alpha, eval_score)
+                if eval_score > max_eval:
+                    max_eval = eval_score
+                if eval_score > alpha:
+                    alpha = eval_score
                 if beta <= alpha:
-                    break  # Beta cutoff
+                    break
             return max_eval
         else:
             min_eval = float('inf')
             for move in legal_moves:
-                new_board = self._copy_board(board)
+                new_board = board.clone()
                 new_board.make_move(move[0], move[1])
                 eval_score = self._minimax(new_board, depth - 1, alpha, beta, True, original_player)
-                min_eval = min(min_eval, eval_score)
-                beta = min(beta, eval_score)
+                if eval_score < min_eval:
+                    min_eval = eval_score
+                if eval_score < beta:
+                    beta = eval_score
                 if beta <= alpha:
-                    break  # Alpha cutoff
+                    break
             return min_eval
-    
-    def _copy_board(self, board: Board) -> Board:
-        """Create a deep copy of the board."""
-        return board.clone()
     
     def _evaluate(self, board: Board, player: int) -> float:
         """Evaluate board position for player using heuristics."""

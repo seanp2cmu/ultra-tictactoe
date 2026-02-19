@@ -24,6 +24,11 @@ from nnue.training.trainer import train_nnue
 from nnue.evaluation.evaluator import run_evaluation_suite
 from nnue.agent import NNUEAgent
 from nnue.config import PipelineConfig, TrainingConfig
+from ai.evaluation.elo import EloTracker
+
+
+ELO_CHECKPOINT_INTERVAL = 10
+ELO_GAMES_PER_MATCHUP = 50
 
 
 # ─── Paths (set per-run in run()) ─────────────────────────────────
@@ -291,6 +296,17 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
     global_step = 0
     best_winrate = 0.0
 
+    # ── Elo tracker ──
+    elo_tracker = EloTracker(
+        save_path=str(run_dir / 'elo.json'),
+        max_opponents=5,
+        num_games=ELO_GAMES_PER_MATCHUP,
+    )
+
+    def _make_nnue_agent(ckpt_path):
+        """Create NNUE agent from a .pt checkpoint for Elo evaluation."""
+        return NNUEAgent(model_path=ckpt_path, depth=cfg.eval_depth)
+
     # ── Phase 1: AlphaZero teacher ──
     if not cfg.skip_phase1:
         p1_path = phase1_generate(cfg, log_path)
@@ -344,7 +360,6 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
         eval_metrics['loop/total_positions'] = sum(
             len(np.load(p)['values']) for p in data_paths if Path(p).exists()
         )
-        wandb.log(eval_metrics, step=global_step)
 
         # Save best model by winrate
         wr = eval_metrics.get('eval/vs_random_winrate', 0)
@@ -352,6 +367,27 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
             best_winrate = wr
             shutil.copy2(str(PT_PATH), str(run_dir / "best.pt"))
             shutil.copy2(str(NNUE_PATH), str(run_dir / "best.nnue"))
+
+        # Elo checkpoint evaluation every N loops
+        if (loop + 1) % ELO_CHECKPOINT_INTERVAL == 0:
+            ckpt_name = f'loop_{loop+1:03d}'
+            ckpt_pt = run_dir / f'{ckpt_name}.pt'
+            ckpt_nnue = run_dir / f'{ckpt_name}.nnue'
+            shutil.copy2(str(PT_PATH), str(ckpt_pt))
+            shutil.copy2(str(NNUE_PATH), str(ckpt_nnue))
+
+            elo_tracker.register_checkpoint(ckpt_name, str(ckpt_pt), iteration=loop)
+            try:
+                elo_metrics = elo_tracker.evaluate_latest(_make_nnue_agent)
+                eval_metrics.update(elo_metrics)
+                _log(log_path, f"Elo: {ckpt_name} = {elo_metrics.get('elo/current', 0):.0f} "
+                     f"(delta={elo_metrics.get('elo/delta', 0):+.0f})")
+                tqdm.write(f"  Elo: {ckpt_name} = {elo_metrics.get('elo/current', 0):.0f}")
+            except Exception as e:
+                tqdm.write(f"  Elo eval failed: {e}")
+
+        # Log all metrics (including Elo if evaluated this loop)
+        wandb.log(eval_metrics, step=global_step)
 
         # Early stopping
         improved = ""

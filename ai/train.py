@@ -20,7 +20,12 @@ from ai.utils import (
     log_iteration_to_file, collect_wandb_metrics,
     run_and_log_eval, log_training_complete
 )
+from ai.evaluation.elo import EloTracker
 from utils import upload_to_hf
+
+
+ELO_CHECKPOINT_INTERVAL = 10
+ELO_GAMES_PER_MATCHUP = 2000
 
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -196,11 +201,10 @@ def main():
         net = trainer.network
         for pg in net.optimizer.param_groups:
             pg['lr'] = config.training.lr
-        remaining = config.training.num_iterations - start_iteration
-        net.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            net.optimizer, T_max=max(1, remaining), eta_min=config.training.lr * 0.01
+        net.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            net.optimizer, T_0=50, T_mult=1, eta_min=config.training.lr * 0.01
         )
-        print(f"\u2713 LR reset to {config.training.lr} (cosine → {config.training.lr * 0.01:.6f} over {remaining} iters)")
+        print(f"\u2713 LR reset to {config.training.lr} (cosine warm restarts, T_0=50)")
     
     # Load shared DTW cache
     dtw_cache_path = os.path.join(base_dir, 'dtw_cache.pkl')
@@ -211,6 +215,52 @@ def main():
     log_path = os.path.join(run_dir, 'training.log')
     total_iters = config.training.num_iterations
     best_winrate = 0.0
+    
+    # Chain-based Elo: each checkpoint plays vs previous, anchored to eval Elo
+    _elo_state = {'prev_path': None, 'prev_elo': None}
+    
+    # Phase 2 auto-switch: detect convergence and switch to higher sims
+    _phase = {'current': 1, 'elo_history': [], 'switched_at': None}
+    
+    def _check_convergence(elo_value):
+        """Track Elo and detect convergence. Returns True if should switch to phase 2."""
+        if _phase['current'] != 1 or elo_value is None:
+            return False
+        _phase['elo_history'].append(elo_value)
+        window = config.training.convergence_window
+        if len(_phase['elo_history']) < window:
+            return False
+        recent = _phase['elo_history'][-window:]
+        elo_range = max(recent) - min(recent)
+        return elo_range < config.training.convergence_threshold * window
+    
+    def _switch_to_phase2(iteration):
+        """Switch to phase 2: higher sims, fewer epochs."""
+        _phase['current'] = 2
+        _phase['switched_at'] = iteration
+        with open(log_path, 'a') as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"[Phase 2] Convergence detected at iter {iteration}. "
+                    f"Switching to {config.training.phase2_num_simulations} sims, "
+                    f"{config.training.phase2_num_train_epochs} epochs.\n")
+            f.write(f"{'='*60}\n\n")
+        print(f"\n🔄 Phase 2: {config.training.phase2_num_simulations} sims, "
+              f"{config.training.phase2_num_train_epochs} epochs\n")
+    
+    def _load_net_no_trt(ckpt_path):
+        """Load network without TRT for multi-network Elo comparison."""
+        from ai.core import AlphaZeroNet
+        import ai.core.alpha_zero_net as _azn
+        _orig_trt = _azn.AlphaZeroNet._try_tensorrt
+        _orig_compile = _azn.AlphaZeroNet._try_compile
+        _azn.AlphaZeroNet._try_tensorrt = lambda self, **kw: None
+        _azn.AlphaZeroNet._try_compile = lambda self: None
+        net = AlphaZeroNet(device=device)
+        net.load(ckpt_path)
+        _azn.AlphaZeroNet._try_tensorrt = _orig_trt
+        _azn.AlphaZeroNet._try_compile = _orig_compile
+        return net
+    
     print("Starting training...\n")
     
     pbar = tqdm(range(start_iteration, total_iters), desc="Training", ncols=100,
@@ -219,11 +269,19 @@ def main():
     for iteration in pbar:
         t0 = time.time()
         
+        # Phase-appropriate settings
+        if _phase['current'] == 2:
+            cur_sims = config.training.phase2_num_simulations
+            cur_epochs = config.training.phase2_num_train_epochs
+        else:
+            cur_sims = config.training.num_simulations
+            cur_epochs = config.training.num_train_epochs
+        
         result = trainer.train_iteration(
             num_self_play_games=config.training.num_self_play_games,
-            num_train_epochs=config.training.num_train_epochs,
+            num_train_epochs=cur_epochs,
             temperature=1.0, verbose=False, disable_tqdm=False,
-            num_simulations=config.training.num_simulations,
+            num_simulations=cur_sims,
             parallel_games=config.gpu.parallel_games, iteration=iteration,
             num_workers=config.gpu.num_workers,
             dtw_cache_path=dtw_cache_path,
@@ -245,7 +303,13 @@ def main():
         # W&B metrics + eval
         wm = collect_wandb_metrics(loss, lr, buf, elapsed, dtw_stats)
         run_and_log_eval(log_path, trainer.network, trainer.dtw_calculator, wm)
+        wm['train/phase'] = _phase['current']
+        wm['train/num_simulations'] = cur_sims
         wandb.log(wm, step=iteration)
+        
+        # Check convergence → auto-switch to phase 2
+        if _phase['current'] == 1 and _check_convergence(wm.get('elo/current')):
+            _switch_to_phase2(iteration)
         
         if dtw_stats:
             trainer.dtw_calculator.reset_search_stats()
@@ -262,6 +326,54 @@ def main():
             p = os.path.join(run_dir, 'best.pt')
             trainer.save(p, iteration=iteration)
             upload_to_hf(p, f'{run_id}/best.pt')
+        
+        # Elo checkpoint evaluation every N iterations (chain-based)
+        if (iteration + 1) % ELO_CHECKPOINT_INTERVAL == 0:
+            ckpt_name = f'iter_{iteration+1:04d}'
+            ckpt_path = os.path.join(run_dir, f'{ckpt_name}.pt')
+            trainer.save(ckpt_path, iteration=iteration)
+            upload_to_hf(ckpt_path, f'{run_id}/{ckpt_name}.pt')
+            
+            try:
+                from ai.evaluation.elo import winrate_to_elo_diff, DRAW_SCORE
+                
+                if _elo_state['prev_path'] is None:
+                    # First checkpoint: use eval-based Elo as anchor
+                    _elo_state['prev_path'] = ckpt_path
+                    _elo_state['prev_elo'] = wm.get('elo/current', 1400)
+                    with open(log_path, 'a') as f:
+                        f.write(f"[Elo] {ckpt_name}: {_elo_state['prev_elo']:.0f} (anchor from eval)\n")
+                else:
+                    # Play vs previous checkpoint (2000 games, 0 sims, ~7s)
+                    net_prev = _load_net_no_trt(_elo_state['prev_path'])
+                    net_curr = _load_net_no_trt(ckpt_path)
+                    
+                    match = EloTracker.play_match_parallel(
+                        net_prev, net_curr, num_games=ELO_GAMES_PER_MATCHUP,
+                        num_simulations=0, random_opening_plies=6,
+                    )
+                    
+                    # Current checkpoint's winrate
+                    wr_curr = (match.wins_b + DRAW_SCORE * match.draws) / match.games
+                    elo_diff = winrate_to_elo_diff(wr_curr)
+                    prev_elo = _elo_state['prev_elo']
+                    curr_elo = prev_elo + elo_diff
+                    
+                    wm['elo/current'] = curr_elo
+                    wm['elo/delta'] = curr_elo - prev_elo
+                    wm['elo/vs_prev_winrate'] = wr_curr * 100
+                    
+                    with open(log_path, 'a') as f:
+                        f.write(f"[Elo] {ckpt_name}: {curr_elo:.0f} "
+                                f"(delta={curr_elo - prev_elo:+.0f}, "
+                                f"vs prev: {wr_curr*100:.1f}%)\n")
+                    
+                    _elo_state['prev_path'] = ckpt_path
+                    _elo_state['prev_elo'] = curr_elo
+                    
+                    del net_prev, net_curr
+            except Exception as e:
+                print(f"Elo eval failed: {e}")
         
         # Shared DTW cache
         if trainer.dtw_calculator and trainer.dtw_calculator.tt:

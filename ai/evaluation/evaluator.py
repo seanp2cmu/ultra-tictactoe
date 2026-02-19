@@ -119,4 +119,14 @@ def run_evaluation_suite(network, num_games=4000, num_games_minimax=2000, dtw_ca
         metrics[f'eval/vs_{name}_winrate'] = r['win_rate'] * 100
         metrics[f'eval/vs_{name}_drawrate'] = r['draws'] / n * 100
     
+    # Elo estimation from minimax2 results (anchor: Minimax-2 = 1620, Minimax-4 = 1800)
+    mm2_wr = metrics.get('eval/vs_minimax2_winrate', 0) / 100
+    mm2_dr = metrics.get('eval/vs_minimax2_drawrate', 0) / 100
+    score = mm2_wr + 0.5 * mm2_dr
+    if 0 < score < 1:
+        from ai.evaluation.elo import winrate_to_elo_diff
+        MINIMAX2_ELO = 1620
+        metrics['elo/current'] = MINIMAX2_ELO + winrate_to_elo_diff(score)
+        metrics['elo/anchor_minimax4'] = 1800
+    
     return metrics

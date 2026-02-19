@@ -7,19 +7,25 @@ class NetworkConfig:
     
 @dataclass
 class TrainingConfig:
-    num_iterations: int = 500
+    num_iterations: int = 300
     num_self_play_games: int = 8192
-    num_train_epochs: int = 40
+    num_train_epochs: int = 20
     num_simulations: int = 200
     batch_size: int = 2048         
-    lr: float = 0.0005
+    lr: float = 0.001
     weight_decay: float = 1e-4
     
-    replay_buffer_size: int = 750000  
+    replay_buffer_size: int = 2000000  
     
     save_dir: str = "./model"
     
     use_amp: bool = True
+    
+    # Phase 2: auto-switch when convergence detected
+    phase2_num_simulations: int = 800
+    phase2_num_train_epochs: int = 10
+    convergence_window: int = 20       # check last N iterations
+    convergence_threshold: float = 1.0  # max Elo change to trigger phase 2
     
 @dataclass
 class GPUConfig:

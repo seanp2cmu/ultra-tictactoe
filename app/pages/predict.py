@@ -130,7 +130,8 @@ def create_predict_tab(available_models):
         fn=predict,
         inputs=[model_dropdown, board_input, num_sims_slider],
         outputs=output,
-        api_name="predict"
+        api_name="predict",
+        concurrency_limit=4
     )
     
     gr.Markdown("""

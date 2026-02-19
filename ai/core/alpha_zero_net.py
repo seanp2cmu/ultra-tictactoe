@@ -47,9 +47,10 @@ class AlphaZeroNet:
             weight_decay=weight_decay
         )
         
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
-            T_max=total_iterations,
+            T_0=50,        # 50 iters per cycle
+            T_mult=1,      # constant cycle length
             eta_min=lr * 0.01
         )
         

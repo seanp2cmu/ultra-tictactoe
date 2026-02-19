@@ -19,7 +19,7 @@ class SelfPlayData:
     sample() uses numpy fancy indexing for O(1) batch gather.
     """
     
-    def __init__(self, max_size: int = 2000000, decay_factor: float = 0.97) -> None:
+    def __init__(self, max_size: int = 2000000, decay_factor: float = 0.93) -> None:
         self.max_size = max_size
         self.decay_factor = decay_factor
         
