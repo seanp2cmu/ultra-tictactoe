@@ -208,6 +208,11 @@ class ParallelMCTS:
         if self.num_simulations == 0:
             return self._raw_policy_moves(games, temperature)
         
+        # Double-buffer pipeline requires ≥2 groups to avoid stale backprop.
+        # With few games, both groups share the same trees → use sync instead.
+        if len(games) < 4:
+            return self.search_parallel_sync(games, temperature, add_noise)
+        
         roots = [Node(game['board']) for game in games]
         global _parallel_timing
         
