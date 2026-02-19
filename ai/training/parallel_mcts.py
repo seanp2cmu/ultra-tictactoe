@@ -208,85 +208,8 @@ class ParallelMCTS:
         if self.num_simulations == 0:
             return self._raw_policy_moves(games, temperature)
         
-        # Double-buffer pipeline requires ≥2 groups to avoid stale backprop.
-        # With few games, both groups share the same trees → use sync instead.
-        if len(games) < 4:
-            return self.search_parallel_sync(games, temperature, add_noise)
-        
-        roots = [Node(game['board']) for game in games]
-        global _parallel_timing
-        
-        # Initial expansion (synchronous — no prior results to overlap)
-        self._expand_roots(roots, games, add_noise)
-        
-        # Determine leaves_per_game: balance batch size vs search depth
-        # Must ensure enough rounds for iterative deepening (min 10 rounds)
-        n_games = len(roots)
-        group_size = (n_games + 1) // 2  # ceil(n/2)
-        max_bs = int(self.network._trt_max_bs) if hasattr(self.network, '_trt_max_bs') and self.network._trt_max_bs != float('inf') else 8192
-        max_leaves_hw = max(1, max_bs // max(1, group_size))
-        max_leaves_depth = max(1, self.num_simulations // 10)  # ensure ≥10 rounds
-        max_leaves = min(max_leaves_hw, max_leaves_depth)
-        leaves_per_game = max(1, min(self.num_simulations, max_leaves))
-        num_rounds = max(1, (self.num_simulations + leaves_per_game - 1) // leaves_per_game)
-        # Recompute to distribute evenly
-        leaves_per_game = max(1, self.num_simulations // num_rounds)
-        leftover = self.num_simulations - leaves_per_game * num_rounds
-        
-        # Split into 2 groups for double buffering
-        mid = n_games // 2
-        groups = [list(range(0, mid)), list(range(mid, n_games))]
-        
-        # Pipeline loop with multi-leaf selection
-        pending_leaves = None
-        pending_handle = None
-        pending_submit_time = 0.0
-        
-        for rnd in range(num_rounds):
-            # Extra leaf on first rounds to absorb leftover
-            k = leaves_per_game + (1 if rnd < leftover else 0)
-            
-            for g in range(2):
-                if not groups[g]:
-                    continue
-                
-                # 1. Select K leaves per game (virtual loss prevents duplicates)
-                leaves, leaf_boards = self._select_multi_leaves(roots, groups[g], k)
-                
-                # 2. Submit inference (non-blocking)
-                t0 = time.perf_counter()
-                if leaf_boards:
-                    handle = self.network.predict_batch_submit(leaf_boards)
-                else:
-                    handle = None
-                submit_elapsed = time.perf_counter() - t0
-                
-                # 3. While GPU works: expand+backprop previous batch (CPU overlaps GPU)
-                if pending_handle is not None:
-                    t_collect = time.perf_counter()
-                    policies, values = self.network.predict_batch_collect(pending_handle)
-                    _parallel_timing['network_time'] += (time.perf_counter() - t_collect) + pending_submit_time
-                    self._expand_backprop(pending_leaves, policies, values)
-                    pending_handle = None
-                    pending_leaves = None
-                
-                # 4. Store current handle for next phase
-                if handle is not None:
-                    pending_leaves = leaves
-                    pending_handle = handle
-                    pending_submit_time = submit_elapsed
-                elif leaves:
-                    # No boards to infer (all terminal) — revert virtual losses
-                    self._revert_virtual_losses(leaves)
-        
-        # Process final pending results
-        if pending_handle is not None:
-            t0 = time.perf_counter()
-            policies, values = self.network.predict_batch_collect(pending_handle)
-            _parallel_timing['network_time'] += (time.perf_counter() - t0) + pending_submit_time
-            self._expand_backprop(pending_leaves, policies, values)
-        
-        return self._select_moves(roots, temperature)
+        # Use synchronous multi-leaf MCTS (correct backprop ordering).
+        return self.search_parallel_sync(games, temperature, add_noise)
     
     def search_parallel_sync(
         self,
