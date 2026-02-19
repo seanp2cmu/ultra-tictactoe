@@ -59,6 +59,7 @@ class Trainer:
         num_simulations: Optional[int] = None,
         parallel_games: int = 2048,
         num_workers: int = 4,
+        dtw_cache_path: str = None,
     ) -> int:
         """Generate self-play data using multi-process workers + centralised GPU inference."""
         import numpy as np
@@ -74,11 +75,22 @@ class Trainer:
             game_id_start=game_id_start,
             num_workers=num_workers,
             endgame_threshold=self.dtw_calculator.endgame_threshold if self.dtw_calculator else 15,
+            dtw_cache_path=dtw_cache_path,
         )
         
         if len(states) > 0:
             self.replay_buffer._next_game_id = int(game_ids.max()) + 1
             self.replay_buffer.add_batch(states, policies, values, game_ids)
+        
+        # Merge new DTW entries from workers into main cache
+        new_entries = self._mp_timing.get('new_dtw_entries', {})
+        if new_entries and self.dtw_calculator and self.dtw_calculator.tt:
+            tt = self.dtw_calculator.tt
+            for key, (result, dtw, best_move) in new_entries.items():
+                if key not in tt.hot and key not in tt.cold:
+                    if len(tt.hot) >= tt.hot_size:
+                        tt._evict_from_hot()
+                    tt.hot[key] = (result, dtw, best_move)
         
         return len(states)
     
@@ -127,6 +139,7 @@ class Trainer:
         parallel_games: int = 2048,
         iteration: int = 0,
         num_workers: int = 4,
+        dtw_cache_path: str = None,
     ) -> Dict:
         """Single training iteration."""
         # Set current iteration for age-based weighting
@@ -144,6 +157,7 @@ class Trainer:
             num_simulations=num_simulations,
             parallel_games=parallel_games,
             num_workers=num_workers,
+            dtw_cache_path=dtw_cache_path,
         )
         
         if verbose:
@@ -166,6 +180,10 @@ class Trainer:
         
         if hasattr(self, '_mp_timing') and self._mp_timing.get('dtw_stats'):
             result['dtw_stats'] = self._mp_timing['dtw_stats']
+            # Update hot_entries to reflect main cache after merge
+            if self.dtw_calculator and self.dtw_calculator.tt:
+                result['dtw_stats']['hot_entries'] = len(self.dtw_calculator.tt.hot)
+                result['dtw_stats']['cold_entries'] = len(self.dtw_calculator.tt.cold)
         elif self.dtw_calculator:
             result['dtw_stats'] = self.dtw_calculator.get_stats()
         

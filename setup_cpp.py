@@ -1,4 +1,5 @@
 """Build script for C++ extensions (Board + DTW + NNUE)."""
+import os
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 
@@ -9,7 +10,10 @@ class get_pybind_include:
         return pybind11.get_include()
 
 
-common_args = ['-std=c++17', '-O3', '-fPIC', '-march=native', '-mavx2', '-mfma']
+_avx_flags = ['-march=native', '-mavx2', '-mfma']
+if os.environ.get('SPACE_ID'):
+    _avx_flags = ['-march=x86-64']  # Safe fallback for HF Spaces
+common_args = ['-std=c++17', '-O3', '-fPIC'] + _avx_flags
 common_includes = [get_pybind_include(), '.']
 
 ext_modules = [

@@ -212,12 +212,13 @@ class CompressedTranspositionTable:
         with open(log_path, 'a') as f:
             f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] DTW Cache: {size_mb:.1f} MB | {len(self.hot)} hot + {len(self.cold)} cold\n")
     
-    def load_from_file(self, filepath):
+    def load_from_file(self, filepath, quiet=False):
         """
         load DTW cache from disk
         
         Args:
             filepath: path to load file
+            quiet: if True, suppress print output
         
         Returns:
             bool: success or failure
@@ -226,7 +227,8 @@ class CompressedTranspositionTable:
         import os
         
         if not os.path.exists(filepath):
-            print(f"⚠ DTW cache not found: {filepath}")
+            if not quiet:
+                print(f"⚠ DTW cache not found: {filepath}")
             return False
         
         try:
@@ -238,16 +240,18 @@ class CompressedTranspositionTable:
             self.cold = data['cold']
             self.stats = data['stats']
             
-            size_mb = os.path.getsize(filepath) / 1024 / 1024
-            print(f"✓ DTW cache loaded: {filepath} ({size_mb:.1f} MB)")
-            print(f"  Entries: {len(self.hot)} hot + {len(self.cold)} cold")
-            
-            stats = self.get_stats()
-            if 'hit_rate' in stats:
-                print(f"  Cache stats available")
+            if not quiet:
+                size_mb = os.path.getsize(filepath) / 1024 / 1024
+                print(f"✓ DTW cache loaded: {filepath} ({size_mb:.1f} MB)")
+                print(f"  Entries: {len(self.hot)} hot + {len(self.cold)} cold")
+                
+                stats = self.get_stats()
+                if 'hit_rate' in stats:
+                    print(f"  Cache stats available")
             
             return True
         
         except Exception as e:
-            print(f"✗ Failed to load DTW cache: {e}")
+            if not quiet:
+                print(f"✗ Failed to load DTW cache: {e}")
             return False

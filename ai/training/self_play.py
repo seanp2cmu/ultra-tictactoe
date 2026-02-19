@@ -1,4 +1,4 @@
-"""Multi-process self-play with centralised GPU inference.
+"""Multi-process self-play orchestrator with centralised GPU inference.
 
 Architecture:
   - N CPU worker processes run MCTS (select / expand / backprop / game mgmt).
@@ -10,10 +10,10 @@ Architecture:
     signals the workers.
 
 Communication per worker:
-  shm_in   (max_leaves × 7 × 9 × 9 float32)  — worker writes encoded tensor
-  shm_pol  (max_leaves × 81 float32)          — main writes policy result
-  shm_val  (max_leaves × 1  float32)          — main writes value result
-  shm_inv  (max_leaves × 81 int64)            — worker writes inverse indices
+  shm_in   (max_leaves x 7 x 9 x 9 float32)  — worker writes encoded tensor
+  shm_pol  (max_leaves x 81 float32)          — main writes policy result
+  shm_val  (max_leaves x 1  float32)          — main writes value result
+  shm_inv  (max_leaves x 81 int64)            — worker writes inverse indices
   resp_event — main sets when result is ready
   req_queue  — shared: worker → main messages
 """
@@ -25,264 +25,13 @@ from multiprocessing import get_context
 from multiprocessing.shared_memory import SharedMemory
 from typing import List, Tuple, Optional
 
+from .self_play_worker import _cpu_worker
+
 _mp = get_context('spawn')
 
 # Max leaves any single worker can submit in one inference request
 _MAX_LEAVES_PER_WORKER = 4096
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Worker process  (CPU only — no GPU, no PyTorch)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _cpu_worker(
-    worker_id: int,
-    shm_names: dict,      # {'in':..,'pol':..,'val':..,'inv':..}
-    max_leaves: int,
-    req_queue,             # shared queue: worker → main
-    resp_event,            # per-worker Event: main sets when result ready
-    num_games: int,
-    num_simulations: int,
-    parallel_games: int,
-    temperature: float,
-    game_id_start: int,
-    endgame_threshold: int,
-    c_puct: float,
-):
-    """CPU-only self-play worker. Calls main for every inference."""
-    try:
-        import numpy as _np
-        from multiprocessing.shared_memory import SharedMemory as _SHM
-        from game import Board
-        from ai.mcts.node_cy import (
-            NodeCy as Node,
-            select_multi_leaves_cy,
-            expand_backprop_batch_cy,
-            revert_vl_batch_cy,
-        )
-        from utils import BoardEncoder
-        from ai.endgame import DTWCalculator
-
-        # Attach to shared memory
-        _shm_in  = _SHM(name=shm_names['in'],  create=False)
-        _shm_pol = _SHM(name=shm_names['pol'], create=False)
-        _shm_val = _SHM(name=shm_names['val'], create=False)
-        _shm_inv = _SHM(name=shm_names['inv'], create=False)
-
-        buf_in  = _np.ndarray((max_leaves, 7, 9, 9), _np.float32, buffer=_shm_in.buf)
-        buf_pol = _np.ndarray((max_leaves, 81),       _np.float32, buffer=_shm_pol.buf)
-        buf_val = _np.ndarray((max_leaves, 1),        _np.float32, buffer=_shm_val.buf)
-        buf_inv = _np.ndarray((max_leaves, 81),       _np.int64,   buffer=_shm_inv.buf)
-
-        dtw = DTWCalculator(use_cache=True, endgame_threshold=endgame_threshold)
-
-        def _request_inference(boards):
-            """Encode boards, write to shm, signal main, wait for result."""
-            if not boards:
-                return _np.empty((0, 81), _np.float32), _np.empty((0, 1), _np.float32)
-            batch_tensor, inv_idx = BoardEncoder.to_inference_tensor_batch(boards)
-            bs = batch_tensor.shape[0]
-            buf_in[:bs] = batch_tensor
-            buf_inv[:bs] = _np.asarray(inv_idx, dtype=_np.int64)[:bs]
-            req_queue.put(('infer', worker_id, bs))
-            resp_event.wait()
-            resp_event.clear()
-            policies = buf_pol[:bs].copy()
-            values = buf_val[:bs].copy()
-            inv = buf_inv[:bs]
-            row_idx = _np.arange(bs)[:, None]
-            return policies[row_idx, inv], values
-
-        # ── Self-play loop ──
-        all_data = []
-        games_completed = 0
-        games_started = 0
-        current_game_id = game_id_start
-
-        def _new_game():
-            nonlocal current_game_id, games_started
-            g = {'board': Board(), 'history': [], 'done': False,
-                 'game_id': current_game_id}
-            current_game_id += 1
-            games_started += 1
-            return g
-
-        pool_size = min(parallel_games, num_games)
-        pool = [_new_game() for _ in range(pool_size)]
-
-        while pool:
-            # Separate endgame vs MCTS
-            endgame_games = []
-            mcts_games = []
-            for g in pool:
-                if dtw and dtw.is_endgame(g['board']):
-                    endgame_games.append(g)
-                else:
-                    mcts_games.append(g)
-
-            finished_ids = set()
-            for game in endgame_games:
-                dtw_result = dtw.calculate_dtw(game['board'], need_best_move=False)
-                if dtw_result is not None:
-                    result_code, _, _ = dtw_result
-                    game['done'] = True
-                    board = game['board']
-                    fv = 1.0 if result_code == 1 else (-1.0 if result_code == -1 else 0.0)
-                    for step in game['history']:
-                        value = fv if step['player'] == board.current_player else -fv
-                        all_data.append((step['state'], step['policy'], value, game['game_id']))
-                    finished_ids.add(id(game))
-                else:
-                    mcts_games.append(game)
-
-            if mcts_games:
-                game_temps = []
-                for g in mcts_games:
-                    game_temps.append(temperature if len(g['history']) < 16 else 0)
-                batch_temp = sum(game_temps) / len(game_temps) if game_temps else 0
-                add_noise = (batch_temp > 0)
-
-                roots = [Node(g['board'], _clone=False) for g in mcts_games]
-
-                # Initial expansion
-                boards_init = [g['board'] for g in mcts_games]
-                policies_init, _ = _request_inference(boards_init)
-                if add_noise:
-                    noise = _np.random.dirichlet([0.3] * 81, size=len(roots))
-                    policies_init = 0.75 * policies_init + 0.25 * noise
-                policies_init = policies_init.astype(_np.float32)
-                for i, root in enumerate(roots):
-                    root.expand_numpy(policies_init[i])
-
-                # MCTS rounds
-                n_games_mcts = len(roots)
-                all_indices = list(range(n_games_mcts))
-                max_bs = max_leaves
-                max_lpg = max(1, max_bs // max(1, n_games_mcts))
-                max_lpg_depth = max(1, num_simulations // 10)
-                lpg = max(1, min(num_simulations, min(max_lpg, max_lpg_depth)))
-                num_rounds = max(1, (num_simulations + lpg - 1) // lpg)
-                lpg = max(1, num_simulations // num_rounds)
-                leftover = num_simulations - lpg * num_rounds
-
-                for rnd in range(num_rounds):
-                    k = lpg + (1 if rnd < leftover else 0)
-                    leaves, leaf_boards = select_multi_leaves_cy(
-                        roots, all_indices, k, c_puct)
-                    if not leaf_boards:
-                        if leaves:
-                            revert_vl_batch_cy(leaves)
-                        break
-                    policies_batch, values_batch = _request_inference(leaf_boards)
-                    n_leaves = len(leaves)
-                    vals_scaled = _np.ascontiguousarray(
-                        values_batch[:n_leaves].ravel(), dtype=_np.float32)
-                    pols_f32 = _np.ascontiguousarray(
-                        policies_batch[:n_leaves], dtype=_np.float32)
-                    expand_backprop_batch_cy(leaves, pols_f32, vals_scaled)
-
-                # Select moves
-                for gi, (game, root) in enumerate(zip(mcts_games, roots)):
-                    visits = _np.zeros(81, dtype=_np.float32)
-                    for action, child in root.children.items():
-                        visits[action] = child.visits
-                    if visits.sum() == 0:
-                        policy = _np.zeros(81, dtype=_np.float32)
-                        for action, child in root.children.items():
-                            policy[action] = child.prior_prob
-                        total = policy.sum()
-                        if total > 0:
-                            policy /= total
-                        else:
-                            legal = game['board'].get_legal_moves()
-                            for r, c in legal:
-                                policy[r * 9 + c] = 1.0 / len(legal)
-                        action = int(_np.argmax(policy)) if batch_temp < 0.01 else int(_np.random.choice(81, p=policy))
-                    elif batch_temp < 0.01:
-                        action = int(_np.argmax(visits))
-                        policy = _np.zeros(81, dtype=_np.float32)
-                        policy[action] = 1.0
-                    else:
-                        with _np.errstate(divide='ignore'):
-                            log_v = _np.where(visits > 0, _np.log(visits), -1e9)
-                        log_t = log_v / batch_temp
-                        log_t -= log_t.max()
-                        vt = _np.exp(log_t)
-                        total = vt.sum()
-                        policy = vt / total if total > 0 and _np.isfinite(total) else _np.ones(81) / 81
-                        policy = policy / policy.sum()
-                        action = int(_np.random.choice(81, p=policy))
-
-                    board = game['board']
-                    canonical_tensor, canonical_policy = BoardEncoder.to_training_tensor(board, policy)
-                    game['history'].append({
-                        'state': canonical_tensor,
-                        'policy': canonical_policy,
-                        'player': board.current_player,
-                    })
-                    row, col = action // 9, action % 9
-                    try:
-                        board.make_move(row, col)
-                    except Exception:
-                        legal = board.get_legal_moves()
-                        if legal:
-                            board.make_move(*legal[0])
-                    if board.is_game_over():
-                        game['done'] = True
-                        if board.winner in (None, -1, 3):
-                            result = 0.0
-                        else:
-                            result = 1.0 if board.winner == 1 else -1.0
-                        for step in game['history']:
-                            value = result if step['player'] == 1 else -result
-                            all_data.append((step['state'], step['policy'], value, game['game_id']))
-                        finished_ids.add(id(game))
-
-            # Replace finished games
-            if finished_ids:
-                new_pool = []
-                batch_done = 0
-                for g in pool:
-                    if id(g) in finished_ids:
-                        games_completed += 1
-                        batch_done += 1
-                        if games_started < num_games:
-                            new_pool.append(_new_game())
-                    else:
-                        new_pool.append(g)
-                pool = new_pool
-                if batch_done > 0:
-                    req_queue.put(('progress', worker_id, batch_done))
-
-        # Send results back
-        if all_data:
-            states = _np.array([d[0] for d in all_data], dtype=_np.float32)
-            policies = _np.array([d[1] for d in all_data], dtype=_np.float32)
-            values = _np.array([d[2] for d in all_data], dtype=_np.float32)
-            game_ids = _np.array([d[3] for d in all_data], dtype=_np.int64)
-        else:
-            states = _np.empty((0, 7, 9, 9), dtype=_np.float32)
-            policies = _np.empty((0, 81), dtype=_np.float32)
-            values = _np.empty(0, dtype=_np.float32)
-            game_ids = _np.empty(0, dtype=_np.int64)
-
-        dtw_stats = dtw.get_stats() if dtw else {}
-        req_queue.put(('done', worker_id, states, policies, values, game_ids, dtw_stats))
-
-        _shm_in.close()
-        _shm_pol.close()
-        _shm_val.close()
-        _shm_inv.close()
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        req_queue.put(('error', worker_id, str(e)))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Orchestrator  (main process — owns GPU / TRT)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def run_multiprocess_self_play(
     network,
@@ -294,6 +43,7 @@ def run_multiprocess_self_play(
     num_workers: int = 4,
     endgame_threshold: int = 15,
     c_puct: float = 1.0,
+    dtw_cache_path: str = None,
 ) -> Tuple[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray], dict]:
     """Run multi-process self-play with centralised GPU inference.
 
@@ -365,7 +115,7 @@ def run_multiprocess_self_play(
                 max_leaves,
                 req_queue, ctx['resp_event'],
                 ng, num_simulations, worker_parallel, temperature, gid,
-                endgame_threshold, c_puct,
+                endgame_threshold, c_puct, dtw_cache_path,
             ),
             daemon=True,
         )
@@ -385,12 +135,16 @@ def run_multiprocess_self_play(
     total_batches = 0
     all_results = {}
     all_dtw_stats = []  # collect DTW stats from workers
+    all_new_dtw_entries = {}  # collect new DTW cache entries from workers
     errors = []
     alive_count = num_workers
     last_infer_time = 0.005  # initial estimate: 5ms
 
     _games_done = 0
-    _last_log_pct = 0
+
+    from tqdm import tqdm as _tqdm
+    sp_pbar = _tqdm(total=num_games, desc="Self-Play", ncols=100, leave=False, position=1,
+                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
 
     while alive_count > 0:
         try:
@@ -404,7 +158,7 @@ def run_multiprocess_self_play(
         pending_wids = set()
 
         def _process(m):
-            nonlocal alive_count, _games_done, _last_log_pct
+            nonlocal alive_count, _games_done
             cmd = m[0]
             if cmd == 'infer':
                 pending.append((m[1], m[2]))
@@ -415,6 +169,8 @@ def run_multiprocess_self_play(
                 all_results[wid] = (st, po, va, gi)
                 if len(m) > 6 and m[6]:
                     all_dtw_stats.append(m[6])
+                if len(m) > 7 and m[7]:
+                    all_new_dtw_entries.update(m[7])
                 worker_ctx[wid]['alive'] = False
                 alive_count -= 1
             elif cmd == 'error':
@@ -423,6 +179,7 @@ def run_multiprocess_self_play(
                 alive_count -= 1
             elif cmd == 'progress':
                 _games_done += m[2]
+                sp_pbar.update(m[2])
 
         _process(msg)
 
@@ -483,6 +240,8 @@ def run_multiprocess_self_play(
             ctx['bufs']['val'][:bs] = values[off:off+bs]
             ctx['resp_event'].set()
 
+    sp_pbar.close()
+
     # Wait for processes
     for p in processes:
         p.join(timeout=10)
@@ -525,14 +284,28 @@ def run_multiprocess_self_play(
     # Aggregate DTW stats from all workers
     merged_dtw = {}
     if all_dtw_stats:
+        # Keys to sum across workers (counters)
+        sum_keys = {'hot_hits', 'cold_hits', 'misses', 'evictions', 'symmetry_saves', 'dtw_searches'}
+        # Keys to take max (cache sizes - workers share same base cache)
+        max_keys = {'hot_entries', 'cold_entries'}
         for ds in all_dtw_stats:
             for k, v in ds.items():
-                if isinstance(v, (int, float)):
+                if not isinstance(v, (int, float)):
+                    continue
+                if k in max_keys:
+                    merged_dtw[k] = max(merged_dtw.get(k, 0), v)
+                elif k in sum_keys:
                     merged_dtw[k] = merged_dtw.get(k, 0) + v
-        # Recompute hit_rate from totals
+                else:
+                    merged_dtw[k] = merged_dtw.get(k, 0) + v
+        # Recompute hit_rate and total_queries for logger compatibility
         total_q = merged_dtw.get('hot_hits', 0) + merged_dtw.get('cold_hits', 0) + merged_dtw.get('misses', 0)
+        merged_dtw['total_queries'] = total_q
         if total_q > 0:
-            merged_dtw['hit_rate'] = (merged_dtw.get('hot_hits', 0) + merged_dtw.get('cold_hits', 0)) / total_q
+            hr = (merged_dtw.get('hot_hits', 0) + merged_dtw.get('cold_hits', 0)) / total_q
+            merged_dtw['hit_rate'] = f"{hr:.2%}"
+        else:
+            merged_dtw['hit_rate'] = "0.00%"
 
     timing = {
         'total_time': wall_time,
@@ -542,5 +315,6 @@ def run_multiprocess_self_play(
         'games': num_games,
         'moves': len(states),
         'dtw_stats': merged_dtw,
+        'new_dtw_entries': all_new_dtw_entries,
     }
     return (states, policies, values, game_ids), timing

@@ -191,6 +191,16 @@ def main():
         if loaded_iter is not None:
             start_iteration = loaded_iter + 1
         print(f"\u2713 Resuming from iteration {start_iteration}")
+        
+        # Override LR and scheduler with current config values
+        net = trainer.network
+        for pg in net.optimizer.param_groups:
+            pg['lr'] = config.training.lr
+        remaining = config.training.num_iterations - start_iteration
+        net.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            net.optimizer, T_max=max(1, remaining), eta_min=config.training.lr * 0.01
+        )
+        print(f"\u2713 LR reset to {config.training.lr} (cosine → {config.training.lr * 0.01:.6f} over {remaining} iters)")
     
     # Load shared DTW cache
     dtw_cache_path = os.path.join(base_dir, 'dtw_cache.pkl')
@@ -216,13 +226,14 @@ def main():
             num_simulations=config.training.num_simulations,
             parallel_games=config.gpu.parallel_games, iteration=iteration,
             num_workers=config.gpu.num_workers,
+            dtw_cache_path=dtw_cache_path,
         )
         
         elapsed = time.time() - t0
         loss = result['avg_loss']
         buf = trainer.replay_buffer.get_stats() if hasattr(trainer.replay_buffer, 'get_stats') else {}
         lr = result.get('learning_rate', 0)
-        dtw_stats = trainer.dtw_calculator.get_stats() if trainer.dtw_calculator else None
+        dtw_stats = result.get('dtw_stats') or (trainer.dtw_calculator.get_stats() if trainer.dtw_calculator else None)
         
         timing = getattr(trainer, '_mp_timing', {})
         

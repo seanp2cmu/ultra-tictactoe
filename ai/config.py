@@ -12,10 +12,10 @@ class TrainingConfig:
     num_train_epochs: int = 40
     num_simulations: int = 200
     batch_size: int = 2048         
-    lr: float = 0.002
+    lr: float = 0.0005
     weight_decay: float = 1e-4
     
-    replay_buffer_size: int = 2000000  
+    replay_buffer_size: int = 750000  
     
     save_dir: str = "./model"
     

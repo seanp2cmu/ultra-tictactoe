@@ -25,8 +25,8 @@ def build_extensions():
             print(f"⚠ Cython build error: {result.stderr}")
         
         print("Building C++ extensions...")
-        result = subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"],
-                      cwd="cpp", capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "setup_cpp.py", "build_ext", "--inplace"],
+                      capture_output=True, text=True)
         if result.returncode == 0:
             print("✓ C++ extensions built")
         else:
