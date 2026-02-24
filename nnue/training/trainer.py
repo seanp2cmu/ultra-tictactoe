@@ -14,6 +14,20 @@ from nnue.training.dataset import NNUEDataset
 from nnue.config import NNUEConfig, TrainingConfig
 
 
+def wdl_loss(pred_raw, target, scaling=2.5, exponent=2.6):
+    """Stockfish-style WDL loss in sigmoid space.
+    
+    Args:
+        pred_raw: (batch,) raw network output (unbounded)
+        target: (batch,) target in [-1, 1] (from AlphaZero or game result)
+        scaling: sigmoid scaling factor
+        exponent: loss exponent (>2 for precision, Stockfish uses 2.6)
+    """
+    pred_wdl = torch.sigmoid(pred_raw / scaling)
+    target_wdl = (target + 1.0) * 0.5  # [-1,1] → [0,1]
+    return (pred_wdl - target_wdl).abs().pow(exponent).mean()
+
+
 def _build_scheduler(optimizer, config, steps_per_epoch):
     """Build LR scheduler with linear warmup + cosine decay."""
     warmup_steps = config.warmup_epochs * steps_per_epoch
@@ -67,6 +81,8 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
         accumulator_size=net_config.accumulator_size,
         hidden1_size=net_config.hidden1_size,
         hidden2_size=net_config.hidden2_size,
+        num_buckets=net_config.num_buckets,
+        bucket_divisor=net_config.bucket_divisor,
     ).to(device)
     
     param_count = sum(p.numel() for p in model.parameters())
@@ -76,7 +92,7 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
         lr=train_config.learning_rate,
         weight_decay=train_config.weight_decay,
     )
-    criterion = nn.MSELoss()
+    scaling = net_config.scaling_factor
     scaler = GradScaler(enabled=use_amp)
     scheduler = _build_scheduler(optimizer, train_config, len(train_loader))
     
@@ -109,7 +125,7 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
             
             with autocast(enabled=use_amp):
                 pred = model(stm, nstm).squeeze(-1)
-                loss = criterion(pred, target)
+                loss = wdl_loss(pred, target, scaling=scaling)
             
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -141,7 +157,7 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
                 
                 with autocast(enabled=use_amp):
                     pred = model(stm, nstm).squeeze(-1)
-                    loss = criterion(pred, target)
+                    loss = wdl_loss(pred, target, scaling=scaling)
                 
                 val_loss += loss.item()
                 val_batches += 1

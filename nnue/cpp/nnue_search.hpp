@@ -11,7 +11,7 @@ namespace nnue {
 
 constexpr int MAX_DEPTH = 64;
 constexpr int MAX_QS_DEPTH = 4;    // Max quiescence plies beyond depth 0
-constexpr float QS_DELTA = 0.15f;  // Delta pruning margin
+constexpr float QS_DELTA = 0.5f;   // Delta pruning margin (raw eval scale)
 constexpr float SCORE_INF = 1e9f;
 
 // Transposition table entry types

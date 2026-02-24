@@ -31,42 +31,41 @@ inline float hsum256(__m256 v) {
 #endif
 
 constexpr uint32_t NNUE_MAGIC = 0x454E4E55;  // "UNNE"
-constexpr uint32_t NNUE_VERSION = 1;
+constexpr uint32_t NNUE_VERSION = 2;
 
 /**
- * NNUE model for inference.
+ * NNUE model v2 for inference.
  *
- * Architecture:
- *   Input (199 sparse) → Accumulator (199→acc_size, shared) → ClippedReLU
- *   Concat STM+NSTM → fc1 → CReLU → fc2 → CReLU → fc3 → tanh
+ * Architecture (Stockfish SFNNv5+ style):
+ *   Input (199 sparse) → Accumulator (199 → acc_size+1, shared)
+ *     ├── acc_size hidden → SCReLU (clamp(x,0,1)²)
+ *     └── 1 PSQT output (direct to final output)
+ *   Concat STM+NSTM (acc_size*2) → LayerStack[bucket] (→h1→CReLU→h2→CReLU→1)
+ *   output = layer_stack_result + (psqt_stm - psqt_nstm) / 2
  *
- * Weight file format (binary):
+ * Weight file format v2 (binary):
  *   [0-3]   uint32 magic (0x454E4E55)
- *   [4-7]   uint32 version (1)
+ *   [4-7]   uint32 version (2)
  *   [8-11]  int32  num_features
- *   [12-15] int32  accumulator_size
+ *   [12-15] int32  accumulator_size (hidden, excludes PSQT)
  *   [16-19] int32  hidden1_size
  *   [20-23] int32  hidden2_size
- *   [24..]  float32 weights:
- *     acc_weight_T  [num_features * acc_size]  (transposed for cache-friendly sparse access)
- *     acc_bias      [acc_size]
- *     fc1_weight    [h1 * acc_size*2]
- *     fc1_bias      [h1]
- *     fc2_weight    [h2 * h1]
- *     fc2_bias      [h2]
- *     fc3_weight    [1 * h2]
- *     fc3_bias      [1]
+ *   [24-27] int32  num_buckets
+ *   [28-31] int32  bucket_divisor
+ *   [32..]  float32 weights (see export_weights.py for layout)
  */
 class NNUEModel {
 public:
     int accumulator_size = 256;
     int hidden1_size = 32;
     int hidden2_size = 32;
+    int num_buckets = 4;
+    int bucket_divisor = 20;
 
-    // acc_weight: transposed layout (NUM_FEATURES, accumulator_size)
+    // acc_weight: transposed layout (NUM_FEATURES, accumulator_size+1) — last col is PSQT
     std::vector<float> acc_weight;
-    std::vector<float> acc_bias;
-    // fc layers: standard (out, in) row-major
+    std::vector<float> acc_bias;  // (accumulator_size+1,)
+    // fc layers: bucket-folded (out*num_buckets, in) row-major
     std::vector<float> fc1_weight;
     std::vector<float> fc1_bias;
     std::vector<float> fc2_weight;
@@ -89,59 +88,95 @@ public:
         if (magic != NNUE_MAGIC)
             throw std::runtime_error("Invalid NNUE magic number");
         if (version != NNUE_VERSION)
-            throw std::runtime_error("Unsupported NNUE version");
+            throw std::runtime_error("Unsupported NNUE version: " + std::to_string(version));
 
-        int32_t sizes[4];
-        f.read(reinterpret_cast<char*>(sizes), 16);
+        int32_t sizes[6];
+        f.read(reinterpret_cast<char*>(sizes), 24);
         if (sizes[0] != NUM_FEATURES)
             throw std::runtime_error("Feature count mismatch");
 
         accumulator_size = sizes[1];
         hidden1_size = sizes[2];
         hidden2_size = sizes[3];
+        num_buckets = sizes[4];
+        bucket_divisor = sizes[5];
+
+        const int acc_full = accumulator_size + 1;  // hidden + PSQT
 
         auto read_vec = [&](std::vector<float>& v, int n) {
             v.resize(n);
             f.read(reinterpret_cast<char*>(v.data()), n * sizeof(float));
         };
 
-        read_vec(acc_weight, NUM_FEATURES * accumulator_size);
-        read_vec(acc_bias, accumulator_size);
-        read_vec(fc1_weight, hidden1_size * accumulator_size * 2);
-        read_vec(fc1_bias, hidden1_size);
-        read_vec(fc2_weight, hidden2_size * hidden1_size);
-        read_vec(fc2_bias, hidden2_size);
-        read_vec(fc3_weight, hidden2_size);  // 1 * hidden2_size
-        read_vec(fc3_bias, 1);
+        read_vec(acc_weight, NUM_FEATURES * acc_full);
+        read_vec(acc_bias, acc_full);
+        read_vec(fc1_weight, hidden1_size * num_buckets * accumulator_size * 2);
+        read_vec(fc1_bias, hidden1_size * num_buckets);
+        read_vec(fc2_weight, hidden2_size * num_buckets * hidden1_size);
+        read_vec(fc2_bias, hidden2_size * num_buckets);
+        read_vec(fc3_weight, num_buckets * hidden2_size);
+        read_vec(fc3_bias, num_buckets);
 
         loaded = true;
     }
 
     /**
+     * Count pieces from sparse feature arrays for bucket selection.
+     * Features [0-80] = my pieces, [81-161] = opponent pieces.
+     */
+    int count_pieces(const int* stm_feats, int stm_n) const {
+        int count = 0;
+        for (int i = 0; i < stm_n; ++i) {
+            if (stm_feats[i] < 162) ++count;  // cell features only
+        }
+        return count;
+    }
+
+    /**
      * Evaluate from sparse feature index arrays.
-     * Uses AVX2 SIMD when available, aligned stack buffers.
+     * Returns raw eval (unbounded). Use sigmoid(val/scaling) for win probability.
      */
     float evaluate(const int* stm_feats, int stm_n,
                    const int* nstm_feats, int nstm_n) const {
-        alignas(32) float acc_stm[512];
-        alignas(32) float acc_nstm[512];
+        const int acc = accumulator_size;
+        const int h1s = hidden1_size;
+        const int h2s = hidden2_size;
+        const int fc1_in = acc * 2;
+
+        alignas(32) float raw_stm[512];
+        alignas(32) float raw_nstm[512];
         alignas(32) float concat[1024];
-        alignas(32) float h1[128];
-        alignas(32) float h2[128];
 
-        accumulate(stm_feats, stm_n, acc_stm);
-        accumulate(nstm_feats, nstm_n, acc_nstm);
+        // Accumulate (acc_size+1 outputs, no activation yet)
+        accumulate_raw(stm_feats, stm_n, raw_stm);
+        accumulate_raw(nstm_feats, nstm_n, raw_nstm);
 
-        std::memcpy(concat, acc_stm, accumulator_size * sizeof(float));
-        std::memcpy(concat + accumulator_size, acc_nstm, accumulator_size * sizeof(float));
+        // Extract PSQT (last element)
+        float psqt = (raw_stm[acc] - raw_nstm[acc]) * 0.5f;
 
-        linear_crelu(fc1_weight.data(), fc1_bias.data(),
-                     concat, h1, hidden1_size, accumulator_size * 2);
-        linear_crelu(fc2_weight.data(), fc2_bias.data(),
-                     h1, h2, hidden2_size, hidden1_size);
+        // SCReLU on hidden part: clamp(x, 0, 1)²
+        screlu(raw_stm, concat, acc);
+        screlu(raw_nstm, concat + acc, acc);
 
-        float out = dot_product(fc3_weight.data(), h2, hidden2_size) + fc3_bias[0];
-        return std::tanh(out);
+        // Bucket selection
+        int piece_count = count_pieces(stm_feats, stm_n);
+        int bucket = std::min(piece_count / bucket_divisor, num_buckets - 1);
+
+        // fc1: offset into bucket-folded weights
+        const float* fc1_w = &fc1_weight[bucket * h1s * fc1_in];
+        const float* fc1_b = &fc1_bias[bucket * h1s];
+        linear_crelu(fc1_w, fc1_b, concat, h1_buf, h1s, fc1_in);
+
+        // fc2
+        const float* fc2_w = &fc2_weight[bucket * h2s * h1s];
+        const float* fc2_b = &fc2_bias[bucket * h2s];
+        linear_crelu(fc2_w, fc2_b, h1_buf, h2_buf, h2s, h1s);
+
+        // fc3
+        const float* fc3_w = &fc3_weight[bucket * h2s];
+        float ls_out = dot_product(fc3_w, h2_buf, h2s) + fc3_bias[bucket];
+
+        return ls_out + psqt;
     }
 
     /**
@@ -155,40 +190,56 @@ public:
     }
 
 private:
-    void accumulate(const int* feats, int n, float* output) const {
-        const int acc = accumulator_size;
+    // Mutable scratch buffers (small, stack-like)
+    alignas(32) mutable float h1_buf[128];
+    alignas(32) mutable float h2_buf[128];
+
+    /**
+     * Raw accumulation (no activation). Output has acc_size+1 elements.
+     */
+    void accumulate_raw(const int* feats, int n, float* output) const {
+        const int acc_full = accumulator_size + 1;
         const float* bias = acc_bias.data();
 #ifdef __AVX2__
-        // Copy bias with AVX2
-        for (int j = 0; j < acc; j += 8) {
+        for (int j = 0; j < acc_full; j += 8) {
             _mm256_store_ps(output + j, _mm256_loadu_ps(bias + j));
         }
-        // Add weight rows for active features
         for (int f = 0; f < n; ++f) {
-            const float* row = &acc_weight[feats[f] * acc];
-            for (int j = 0; j < acc; j += 8) {
+            const float* row = &acc_weight[feats[f] * acc_full];
+            for (int j = 0; j < acc_full; j += 8) {
                 __m256 a = _mm256_load_ps(output + j);
                 __m256 b = _mm256_loadu_ps(row + j);
                 _mm256_store_ps(output + j, _mm256_add_ps(a, b));
             }
         }
-        // ClippedReLU
+#else
+        std::memcpy(output, bias, acc_full * sizeof(float));
+        for (int f = 0; f < n; ++f) {
+            const float* row = &acc_weight[feats[f] * acc_full];
+            for (int j = 0; j < acc_full; ++j) output[j] += row[j];
+        }
+#endif
+    }
+
+    /**
+     * SCReLU: clamp(x, 0, 1)² — applied to accumulator hidden outputs.
+     */
+    static void screlu(const float* input, float* output, int n) {
+#ifdef __AVX2__
         __m256 zero = _mm256_setzero_ps();
         __m256 one = _mm256_set1_ps(1.0f);
-        for (int j = 0; j < acc; j += 8) {
-            __m256 v = _mm256_load_ps(output + j);
+        for (int j = 0; j < n; j += 8) {
+            __m256 v = _mm256_loadu_ps(input + j);
             v = _mm256_max_ps(v, zero);
             v = _mm256_min_ps(v, one);
-            _mm256_store_ps(output + j, v);
+            v = _mm256_mul_ps(v, v);  // square
+            _mm256_storeu_ps(output + j, v);
         }
 #else
-        std::memcpy(output, bias, acc * sizeof(float));
-        for (int f = 0; f < n; ++f) {
-            const float* row = &acc_weight[feats[f] * acc];
-            for (int j = 0; j < acc; ++j) output[j] += row[j];
+        for (int j = 0; j < n; ++j) {
+            float v = std::min(std::max(input[j], 0.0f), 1.0f);
+            output[j] = v * v;
         }
-        for (int j = 0; j < acc; ++j)
-            output[j] = std::min(std::max(output[j], 0.0f), 1.0f);
 #endif
     }
 

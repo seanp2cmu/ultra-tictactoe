@@ -189,13 +189,20 @@ def main():
         inference_batch_size=config.gpu.inference_batch_size,
     )
     
-    # 6. Load checkpoint if resuming
+    # 6. Load checkpoint if resuming or forking
     start_iteration = 0
     if checkpoint_path:
         loaded_iter = trainer.load(checkpoint_path)
-        if loaded_iter is not None:
-            start_iteration = loaded_iter + 1
-        print(f"\u2713 Resuming from iteration {start_iteration}")
+        
+        if is_new_run:
+            # Fork mode: load weights only, start from iteration 0
+            start_iteration = 0
+            print(f"✓ Forked weights from {os.path.basename(checkpoint_path)} (starting fresh at iter 0)")
+        else:
+            # Resume mode: continue from saved iteration
+            if loaded_iter is not None:
+                start_iteration = loaded_iter + 1
+            print(f"✓ Resuming from iteration {start_iteration}")
         
         # Override LR and scheduler with current config values
         net = trainer.network
@@ -204,7 +211,7 @@ def main():
         net.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             net.optimizer, T_0=50, T_mult=1, eta_min=config.training.lr * 0.01
         )
-        print(f"\u2713 LR reset to {config.training.lr} (cosine warm restarts, T_0=50)")
+        print(f"✓ LR reset to {config.training.lr} (cosine warm restarts, T_0=50)")
     
     # Load shared DTW cache
     dtw_cache_path = os.path.join(base_dir, 'dtw_cache.pkl')
@@ -235,17 +242,32 @@ def main():
         return elo_range < config.training.convergence_threshold * window
     
     def _switch_to_phase2(iteration):
-        """Switch to phase 2: higher sims, fewer epochs."""
+        """Switch to phase 2: higher sims, fewer epochs, flush buffer, reset LR."""
         _phase['current'] = 2
         _phase['switched_at'] = iteration
+        
+        # Flush replay buffer — old 200-sim data would pollute 800-sim learning
+        old_size = len(trainer.replay_buffer)
+        trainer.replay_buffer.clear()
+        
+        # Reset LR and scheduler for fresh learning
+        net = trainer.network
+        for pg in net.optimizer.param_groups:
+            pg['lr'] = config.training.lr
+        net.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            net.optimizer, T_0=50, T_mult=1, eta_min=config.training.lr * 0.01
+        )
+        
         with open(log_path, 'a') as f:
             f.write(f"\n{'='*60}\n")
             f.write(f"[Phase 2] Convergence detected at iter {iteration}. "
                     f"Switching to {config.training.phase2_num_simulations} sims, "
                     f"{config.training.phase2_num_train_epochs} epochs.\n")
+            f.write(f"[Phase 2] Buffer flushed ({old_size:,} → 0). LR reset to {config.training.lr}.\n")
             f.write(f"{'='*60}\n\n")
         print(f"\n🔄 Phase 2: {config.training.phase2_num_simulations} sims, "
-              f"{config.training.phase2_num_train_epochs} epochs\n")
+              f"{config.training.phase2_num_train_epochs} epochs")
+        print(f"   Buffer flushed ({old_size:,} → 0), LR reset to {config.training.lr}\n")
     
     def _load_net_no_trt(ckpt_path):
         """Load network without TRT for multi-network Elo comparison."""
@@ -297,18 +319,19 @@ def main():
         
         # File log + HF
         log_iteration_to_file(log_path, iteration, total_iters, loss, lr,
-                              result['num_samples'], buf, timing, elapsed, config, dtw_stats)
+                              result['num_samples'], buf, timing, elapsed, config,
+                              dtw_stats, num_simulations=cur_sims)
         upload_to_hf(log_path, f'{run_id}/training.log')
         
         # W&B metrics + eval
         wm = collect_wandb_metrics(loss, lr, buf, elapsed, dtw_stats)
         run_and_log_eval(log_path, trainer.network, trainer.dtw_calculator, wm)
-        wm['train/phase'] = _phase['current']
-        wm['train/num_simulations'] = cur_sims
+        wm['train/phase_new'] = _phase['current']
+        wm['train/num_simulations_new'] = cur_sims
         wandb.log(wm, step=iteration)
         
         # Check convergence → auto-switch to phase 2
-        if _phase['current'] == 1 and _check_convergence(wm.get('elo/current')):
+        if _phase['current'] == 1 and _check_convergence(wm.get('elo/current_new')):
             _switch_to_phase2(iteration)
         
         if dtw_stats:
@@ -320,7 +343,7 @@ def main():
         upload_to_hf(p, f'{run_id}/latest.pt')
         
         # Save best.pt if this is the best eval so far
-        current_wr = wm.get('eval/vs_random_winrate', 0)
+        current_wr = wm.get('eval/vs_random_winrate_new', 0)
         if current_wr > best_winrate:
             best_winrate = current_wr
             p = os.path.join(run_dir, 'best.pt')
@@ -340,7 +363,7 @@ def main():
                 if _elo_state['prev_path'] is None:
                     # First checkpoint: use eval-based Elo as anchor
                     _elo_state['prev_path'] = ckpt_path
-                    _elo_state['prev_elo'] = wm.get('elo/current', 1400)
+                    _elo_state['prev_elo'] = wm.get('elo/current_new', 1400)
                     with open(log_path, 'a') as f:
                         f.write(f"[Elo] {ckpt_name}: {_elo_state['prev_elo']:.0f} (anchor from eval)\n")
                 else:
@@ -359,9 +382,9 @@ def main():
                     prev_elo = _elo_state['prev_elo']
                     curr_elo = prev_elo + elo_diff
                     
-                    wm['elo/current'] = curr_elo
-                    wm['elo/delta'] = curr_elo - prev_elo
-                    wm['elo/vs_prev_winrate'] = wr_curr * 100
+                    wm['elo/current_new'] = curr_elo
+                    wm['elo/delta_new'] = curr_elo - prev_elo
+                    wm['elo/vs_prev_winrate_new'] = wr_curr * 100
                     
                     with open(log_path, 'a') as f:
                         f.write(f"[Elo] {ckpt_name}: {curr_elo:.0f} "

@@ -27,18 +27,20 @@ PYBIND11_MODULE(nnue_cpp, m) {
         .def("load", &nnue::NNUEModel::load, py::arg("path"),
              "Load weights from binary file.")
         .def("evaluate_board", &nnue::NNUEModel::evaluate_board, py::arg("board"),
-             "Evaluate a Board position. Returns float in [-1, 1].")
+             "Evaluate a Board position. Returns raw eval (unbounded).")
         .def("evaluate", [](const nnue::NNUEModel& self,
                             const std::vector<int>& stm,
                             const std::vector<int>& nstm) {
             return self.evaluate(stm.data(), static_cast<int>(stm.size()),
                                 nstm.data(), static_cast<int>(nstm.size()));
         }, py::arg("stm_features"), py::arg("nstm_features"),
-           "Evaluate from sparse feature index lists.")
+           "Evaluate from sparse feature index lists. Returns raw eval (unbounded).")
         .def_readonly("loaded", &nnue::NNUEModel::loaded)
         .def_readonly("accumulator_size", &nnue::NNUEModel::accumulator_size)
         .def_readonly("hidden1_size", &nnue::NNUEModel::hidden1_size)
-        .def_readonly("hidden2_size", &nnue::NNUEModel::hidden2_size);
+        .def_readonly("hidden2_size", &nnue::NNUEModel::hidden2_size)
+        .def_readonly("num_buckets", &nnue::NNUEModel::num_buckets)
+        .def_readonly("bucket_divisor", &nnue::NNUEModel::bucket_divisor);
 
     // Search Result
     py::class_<nnue::SearchResult>(m, "SearchResult")

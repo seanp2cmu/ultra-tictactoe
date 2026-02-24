@@ -19,7 +19,7 @@ class SelfPlayData:
     sample() uses numpy fancy indexing for O(1) batch gather.
     """
     
-    def __init__(self, max_size: int = 2000000, decay_factor: float = 0.93) -> None:
+    def __init__(self, max_size: int = 750000, decay_factor: float = 0.75) -> None:
         self.max_size = max_size
         self.decay_factor = decay_factor
         
@@ -219,5 +219,16 @@ class SelfPlayData:
             'current_iteration': self._current_iteration
         }
     
+    def clear(self) -> None:
+        """Flush all data from the buffer."""
+        self._size = 0
+        self._head = 0
+        self._game_ids[:] = -1
+        self._iterations[:] = 0
+        self._values[:] = 0
+        self._game_info.clear()
+        self._cache_valid = False
+        # Keep _states/_policies allocated (avoid re-allocation)
+
     def __len__(self) -> int:
         return self._size

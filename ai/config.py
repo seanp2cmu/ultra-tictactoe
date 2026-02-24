@@ -10,12 +10,12 @@ class TrainingConfig:
     num_iterations: int = 300
     num_self_play_games: int = 8192
     num_train_epochs: int = 20
-    num_simulations: int = 200
+    num_simulations: int = 800
     batch_size: int = 2048         
     lr: float = 0.001
     weight_decay: float = 1e-4
     
-    replay_buffer_size: int = 2000000  
+    replay_buffer_size: int = 750000
     
     save_dir: str = "./model"
     
@@ -25,7 +25,7 @@ class TrainingConfig:
     phase2_num_simulations: int = 800
     phase2_num_train_epochs: int = 10
     convergence_window: int = 20       # check last N iterations
-    convergence_threshold: float = 1.0  # max Elo change to trigger phase 2
+    convergence_threshold: float = 0.0  # disabled (phase1 == phase2 == 800 sims)
     
 @dataclass
 class GPUConfig:

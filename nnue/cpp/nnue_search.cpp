@@ -156,8 +156,8 @@ float NNUESearchEngine::negamax(uttt::Board& board, int depth,
     if (board.winner != -1) {
         if (board.winner == 3) return 0.0f;
         if (board.winner == board.current_player)
-            return 1.0f + depth * 0.001f;
-        return -(1.0f + depth * 0.001f);
+            return 100.0f + depth * 0.01f;
+        return -(100.0f + depth * 0.01f);
     }
 
     // Leaf evaluation: qsearch based on mode (0=off, 1=on, 2=auto)
@@ -285,8 +285,8 @@ float NNUESearchEngine::quiescence(uttt::Board& board, float alpha, float beta,
     if (board.winner != -1) {
         if (board.winner == 3) return 0.0f;
         if (board.winner == board.current_player)
-            return 1.0f;
-        return -1.0f;
+            return 100.0f;
+        return -100.0f;
     }
 
     // Stand pat: static eval as a lower bound

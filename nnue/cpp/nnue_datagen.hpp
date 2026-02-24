@@ -22,7 +22,7 @@ struct DataGenConfig {
     // Position filtering
     int write_minply = 4;
     int write_maxply = 60;
-    float eval_limit = 0.9f;
+    float eval_limit = 5.0f;    // raw eval scale (~88% win prob at scaling=2.5)
     float random_skip_rate = 0.3f;
     bool skip_noisy = true;
     int skip_noisy_maxply = 30;

@@ -23,11 +23,12 @@ from nnue.cpp.export_weights import export_weights
 from nnue.training.trainer import train_nnue
 from nnue.evaluation.evaluator import run_evaluation_suite
 from nnue.agent import NNUEAgent
-from nnue.config import PipelineConfig, TrainingConfig
+from nnue.config import PipelineConfig, TrainingConfig, NNUEConfig
 from ai.evaluation.elo import EloTracker
 
 
 ELO_CHECKPOINT_INTERVAL = 10
+_az_network = None  # Lazy-loaded AlphaZero network for rescoring
 ELO_GAMES_PER_MATCHUP = 50
 
 
@@ -179,7 +180,7 @@ def selfplay_generate(cfg, loop_idx, log_path=None):
     config.random_move_count = 8
     config.write_minply = 4
     config.write_maxply = 60
-    config.eval_limit = 0.9
+    config.eval_limit = 5.0
     config.random_skip_rate = 0.3
     config.skip_noisy = True
     config.skip_noisy_maxply = 30
@@ -227,6 +228,140 @@ def selfplay_generate(cfg, loop_idx, log_path=None):
         _log(log_path, msg)
 
     return str(output_path)
+
+
+# ─── Rescoring: re-evaluate with AlphaZero ───────────────────────
+
+def _get_az_network(cfg):
+    """Lazy-load AlphaZero network for rescoring."""
+    global _az_network
+    if _az_network is None:
+        from ai.core import AlphaZeroNet
+        _az_network = AlphaZeroNet(device=cfg.device)
+        if Path(cfg.alphazero_model).exists():
+            _az_network.load(cfg.alphazero_model)
+            tqdm.write(f"  [Rescore] Loaded AlphaZero: {cfg.alphazero_model}")
+        else:
+            tqdm.write(f"  [Rescore] WARNING: {cfg.alphazero_model} not found")
+    return _az_network
+
+
+def rescore_data(data_path, cfg, log_path=None):
+    """Rescore self-play data with AlphaZero GPU inference."""
+    from nnue.data.rescorer import rescore_with_alphazero
+
+    network = _get_az_network(cfg)
+    rescored_path = str(Path(data_path).with_suffix('.rescored.npz'))
+
+    t0 = time.time()
+    result = rescore_with_alphazero(
+        data_path=data_path,
+        network=network,
+        num_simulations=cfg.rescore_sims,
+        lambda_rescore=cfg.rescore_lambda,
+        output_path=rescored_path,
+        max_positions=cfg.rescore_max_positions,
+    )
+    elapsed = time.time() - t0
+
+    msg = (f"Rescore: {result['num_positions']:,} pos, "
+           f"shift={result['value_shift_mean']:.4f} ({elapsed:.1f}s)")
+    tqdm.write(f"  {msg}")
+    if log_path:
+        _log(log_path, msg)
+
+    return rescored_path
+
+
+def evaluate_vs_alphazero(cfg, log_path=None):
+    """Play NNUE agent vs AlphaZero to measure relative strength.
+    
+    Returns:
+        dict with winrate and game counts
+    """
+    from ai.core import AlphaZeroNet
+    from ai.mcts import AlphaZeroAgent
+    import uttt_cpp
+    import random
+
+    network = _get_az_network(cfg)
+    az_agent = AlphaZeroAgent(
+        network=network,
+        num_simulations=cfg.vs_alphazero_sims,
+        temperature=0.1,
+    )
+    nnue_agent = NNUEAgent(
+        model_path=str(PT_PATH) if PT_PATH.exists() else None,
+        depth=cfg.eval_depth,
+    )
+
+    wins, losses, draws = 0, 0, 0
+    num_games = cfg.vs_alphazero_games
+
+    pbar = tqdm(range(num_games), desc="NNUE vs AZ", ncols=80, leave=False)
+    for game_num in pbar:
+        board = uttt_cpp.Board()
+        nnue_is_p1 = (game_num % 2 == 0)
+
+        # Random opening
+        for _ in range(6):
+            legal = board.get_legal_moves()
+            if not legal or board.winner not in (None, -1):
+                break
+            r, c = random.choice(legal)
+            board.make_move(r, c)
+
+        while board.winner in (None, -1):
+            legal = board.get_legal_moves()
+            if not legal:
+                break
+
+            is_nnue_turn = (board.current_player == 1) == nnue_is_p1
+
+            if is_nnue_turn:
+                action = nnue_agent.select_action(board)
+            else:
+                # AlphaZero move via MCTS
+                from game import Board as PyBoard
+                py_board = PyBoard._from_cpp(board)
+                root = az_agent.search(py_board, add_noise=False)
+                if root.children:
+                    best_child = max(root.children.items(), key=lambda x: x[1].visits)
+                    action = best_child[0]
+                else:
+                    r, c = random.choice(legal)
+                    action = r * 9 + c
+
+            board.make_move(action // 9, action % 9)
+
+        if board.winner == 3 or board.winner in (None, -1):
+            draws += 1
+        elif (board.winner == 1 and nnue_is_p1) or \
+             (board.winner == 2 and not nnue_is_p1):
+            wins += 1
+        else:
+            losses += 1
+
+        wr = wins / max(1, game_num + 1) * 100
+        pbar.set_postfix_str(f"W={wins} L={losses} D={draws} WR={wr:.0f}%")
+
+    pbar.close()
+
+    winrate = wins / max(1, num_games) * 100
+    result = {
+        'vs_az/winrate': winrate,
+        'vs_az/wins': wins,
+        'vs_az/losses': losses,
+        'vs_az/draws': draws,
+        'vs_az/games': num_games,
+    }
+
+    msg = f"NNUE vs AZ({cfg.vs_alphazero_sims}sims): {winrate:.1f}% ({wins}W/{losses}L/{draws}D)"
+    tqdm.write(f"  {msg}")
+    if log_path:
+        _log(log_path, msg)
+
+    return result
 
 
 # ─── Merge datasets ──────────────────────────────────────────────
@@ -335,14 +470,25 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
     # ── Phase 2+: Self-play loop ──
     best_loop_loss = float('inf')
     no_improve_count = 0
+    max_loops = cfg.selfplay_loops if not cfg.continuous else 9999
 
-    loop_pbar = tqdm(range(cfg.selfplay_loops), desc="Self-Play Loop", ncols=100)
+    loop_pbar = tqdm(range(max_loops), desc="Self-Play Loop", ncols=100)
     for loop in loop_pbar:
         loop_t0 = time.time()
 
         # Generate
         sp_path = selfplay_generate(cfg, loop_idx=loop, log_path=log_path)
-        data_paths.append(sp_path)
+
+        # Rescore with AlphaZero (GPU)
+        if cfg.rescore_enabled:
+            try:
+                rescored_path = rescore_data(sp_path, cfg, log_path)
+                data_paths.append(rescored_path)
+            except Exception as e:
+                tqdm.write(f"  Rescore failed: {e}, using original data")
+                data_paths.append(sp_path)
+        else:
+            data_paths.append(sp_path)
 
         # Merge
         merged_path = merge_datasets(data_paths, max_positions=cfg.max_positions)
@@ -353,13 +499,14 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
         )
         global_step += len(ep_metrics)
 
-        # Evaluate
+        # Evaluate vs baselines
         eval_metrics = run_eval(cfg, log_path)
         eval_metrics['loop/val_loss'] = val_loss
         eval_metrics['loop/loop_time_s'] = time.time() - loop_t0
         eval_metrics['loop/total_positions'] = sum(
             len(np.load(p)['values']) for p in data_paths if Path(p).exists()
         )
+        eval_metrics['loop/loop'] = loop + 1
 
         # Save best model by winrate
         wr = eval_metrics.get('eval/vs_random_winrate', 0)
@@ -386,10 +533,20 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
             except Exception as e:
                 tqdm.write(f"  Elo eval failed: {e}")
 
-        # Log all metrics (including Elo if evaluated this loop)
+        # Continuous mode: evaluate NNUE vs AlphaZero
+        az_wr = 0.0
+        if cfg.continuous and (loop + 1) % 5 == 0:
+            try:
+                az_result = evaluate_vs_alphazero(cfg, log_path)
+                eval_metrics.update(az_result)
+                az_wr = az_result['vs_az/winrate']
+            except Exception as e:
+                tqdm.write(f"  NNUE vs AZ eval failed: {e}")
+
+        # Log all metrics
         wandb.log(eval_metrics, step=global_step)
 
-        # Early stopping
+        # Early stopping / continuous target check
         improved = ""
         if val_loss < best_loop_loss:
             best_loop_loss = val_loss
@@ -400,10 +557,17 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
 
         loop_pbar.set_postfix_str(
             f"val={val_loss:.5f} wr={wr:.0f}%{improved} "
-            f"({no_improve_count}/{cfg.early_stop_patience})"
+            f"az={az_wr:.0f}% ({no_improve_count}/{cfg.early_stop_patience})"
         )
 
-        if cfg.early_stop_patience > 0 and no_improve_count >= cfg.early_stop_patience:
+        # Continuous mode: stop when NNUE beats AlphaZero
+        if cfg.continuous and az_wr >= cfg.target_winrate:
+            _log(log_path, f"Target reached! NNUE vs AZ: {az_wr:.1f}% >= {cfg.target_winrate}%")
+            tqdm.write(f"\n  🎯 Target winrate reached! NNUE beats AlphaZero: {az_wr:.1f}%")
+            break
+
+        # Standard early stopping (only in non-continuous mode)
+        if not cfg.continuous and cfg.early_stop_patience > 0 and no_improve_count >= cfg.early_stop_patience:
             _log(log_path, f"Early stop at loop {loop+1}")
             tqdm.write(f"\n  Early stopping after {cfg.early_stop_patience} loops without improvement.")
             break

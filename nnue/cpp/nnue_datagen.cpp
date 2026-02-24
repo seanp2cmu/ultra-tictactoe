@@ -69,7 +69,10 @@ std::vector<TrainingSample> DataGenerator::self_play_game(uint64_t seed) {
     if (board.winner == 1) game_result_p1 = 1.0f;
     else if (board.winner == 2) game_result_p1 = -1.0f;
     
-    // Blend search score with game result
+    // Blend search score with game result in [-1, 1] space.
+    // Raw search eval is unbounded, so convert to [-1,1] via tanh(eval/scaling)
+    // before blending with game result (which is already -1/0/+1).
+    constexpr float EVAL_SCALING = 2.5f;
     float lam = config_.lambda_search;
     std::vector<TrainingSample> samples;
     samples.reserve(raw_samples.size());
@@ -78,8 +81,9 @@ std::vector<TrainingSample> DataGenerator::self_play_game(uint64_t seed) {
         TrainingSample ts;
         std::memcpy(ts.board, rs.board, 92);
         
+        float eval_normalized = std::tanh(rs.search_eval / EVAL_SCALING);
         float game_result_stm = (rs.stm == 1) ? game_result_p1 : -game_result_p1;
-        ts.value = lam * rs.search_eval + (1.0f - lam) * game_result_stm;
+        ts.value = lam * eval_normalized + (1.0f - lam) * game_result_stm;
         samples.push_back(ts);
     }
     
