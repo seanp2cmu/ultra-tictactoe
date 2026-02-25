@@ -17,7 +17,7 @@ class TrainingConfig:
     
     replay_buffer_size: int = 750000
     
-    save_dir: str = "./model"
+    save_dir: str = "./model/ai"
     
     use_amp: bool = True
     

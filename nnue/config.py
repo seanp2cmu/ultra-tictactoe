@@ -21,7 +21,7 @@ class NNUEConfig:
 class DataGenConfig:
     """Data generation settings."""
     
-    model_path: str = "model/01ge7yt9/latest.pt"
+    model_path: str = "model/ai/01ge7yt9/latest.pt"
     num_games: int = 10000
     num_simulations: int = 800
     output_path: str = "nnue/data/training_data.npz"
@@ -46,34 +46,34 @@ class PipelineConfig:
     """Full NNUE training pipeline settings."""
     
     # AlphaZero teacher (GPU producer) — bootstrap only
-    alphazero_model: str = "model/01ge7yt9/latest.pt"
+    alphazero_model: str = "model/ai/01ge7yt9/latest.pt"
     alphazero_sims: int = 800
     az_batch_games: int = 500       # Games per AZ batch
     az_total_games: int = 500       # Total AZ games (seed data)
     az_lambda: float = 0.75         # target = λ×search + (1-λ)×result
 
     # C++ NNUE selfplay loop (CPU) — main data source
-    selfplay_loops: int = 10        # Number of selfplay→retrain cycles
-    selfplay_games: int = 5000      # Games per selfplay loop
-    selfplay_depth: int = 8         # NNUE search depth for selfplay
+    selfplay_loops: int = 100       # Number of selfplay→retrain cycles
+    selfplay_games: int = 10000     # Games per selfplay loop
+    selfplay_depth: int = 10        # NNUE search depth for selfplay
     selfplay_threads: int = 64      # Threads for C++ NNUE selfplay
     selfplay_lambda: float = 0.75   # target = λ×search + (1-λ)×result
 
     # Training
-    train_epochs: int = 10
+    train_epochs: int = 20
     train_batch_size: int = 4096
     learning_rate: float = 0.001
     max_positions: int = 2_000_000
 
     # Evaluation
-    eval_games: int = 100
-    eval_games_minimax: int = 100
-    eval_depth: int = 6             # NNUE search depth for eval games
+    eval_games: int = 200
+    eval_games_minimax: int = 200
+    eval_depth: int = 8             # NNUE search depth for eval games
 
     # General
     device: str = "cuda"
-    model_dir: str = "nnue/model"
-    seed_checkpoint: str = "nnue/model/cfrvhghx/checkpoint.npz"  # Pre-existing data to skip AZ datagen
+    model_dir: str = "model/nnue"
+    seed_checkpoint: str = "model/nnue/cfrvhghx/checkpoint.npz"  # Pre-existing data to skip AZ datagen
 
 
 @dataclass

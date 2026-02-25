@@ -22,8 +22,8 @@ from nnue.training.trainer import train_nnue
 from nnue.config import NNUEConfig, TrainingConfig
 
 # ─── Config ───
-SEED_DATA = "nnue/model/cfrvhghx/checkpoint.npz"
-RUN_DIR = Path("nnue/model/proto_d8")
+SEED_DATA = "model/nnue/cfrvhghx/checkpoint.npz"
+RUN_DIR = Path("model/nnue/proto_d8")
 
 SELFPLAY_DEPTH = 8
 SELFPLAY_GAMES = 1000       # games per loop
@@ -42,7 +42,7 @@ def quick_eval(pt_path, depth=6, n_games=50):
     """Quick eval: NNUE vs random, return winrate %."""
     try:
         from nnue.agent import NNUEAgent
-        from evaluation.nnue_evaluator import run_evaluation_suite
+        from evaluation.evaluator import nnue_run_evaluation_suite as run_evaluation_suite
         agent = NNUEAgent(model_path=str(pt_path), depth=depth)
         metrics = run_evaluation_suite(agent, num_games=n_games, num_games_minimax=20)
         return metrics

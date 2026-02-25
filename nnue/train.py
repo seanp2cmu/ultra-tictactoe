@@ -27,7 +27,7 @@ import nnue_cpp
 from nnue.core.model import NNUE
 from nnue.cpp.export_weights import export_weights
 from nnue.training.trainer import train_nnue
-from evaluation.nnue_evaluator import run_evaluation_suite
+from evaluation.evaluator import nnue_run_evaluation_suite as run_evaluation_suite
 from nnue.agent import NNUEAgent
 from nnue.config import NNUEConfig, TrainingConfig, PipelineConfig
 

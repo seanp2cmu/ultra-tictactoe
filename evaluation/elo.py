@@ -6,8 +6,8 @@ round-robin matches between the newest checkpoint and recent opponents.
 Supports both AlphaZero (GPU/MCTS) and NNUE (C++ search) agents.
 
 Usage:
-    tracker = EloTracker(save_path="model/run_id/elo.json")
-    tracker.register_checkpoint("iter_010", path="model/run_id/ckpt_010.pt")
+    tracker = EloTracker(save_path="model/ai/run_id/elo.json")
+    tracker.register_checkpoint("iter_010", path="model/ai/run_id/ckpt_010.pt")
     metrics = tracker.evaluate_latest(make_agent_fn, num_games=50)
     # metrics = {'elo/current': 1523, 'elo/delta': +23, ...}
 """

@@ -45,7 +45,7 @@ def _build_scheduler(optimizer, config, steps_per_epoch):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
-def train_nnue(data, output_path='nnue/model/nnue_model.pt', 
+def train_nnue(data, output_path='model/nnue/nnue_model.pt', 
                net_config=None, train_config=None, device='cuda',
                warm_start_path=None):
     """Train NNUE model.

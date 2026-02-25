@@ -288,3 +288,82 @@ def run_evaluation_suite(network, num_games_random=1000, num_games_sims=200,
         metrics['elo/current_new'] = MINIMAX2_ELO + winrate_to_elo_diff(sims_score)
 
     return metrics
+
+
+# ─── NNUE evaluation suite (CPU agents, uttt_cpp.Board) ──────────
+
+def nnue_evaluate_vs_baseline(agent, baseline, num_games=200, random_opening_plies=6):
+    """NNUE agent vs baseline using uttt_cpp.Board (C++ board required by NNUE engine)."""
+    import uttt_cpp
+
+    result = MatchResult()
+
+    for i in range(num_games):
+        board = uttt_cpp.Board()
+        a_is_p1 = (i % 2 == 0)
+
+        for _ in range(random_opening_plies):
+            legal = board.get_legal_moves()
+            if not legal or board.winner not in (None, -1):
+                break
+            r, c = random.choice(legal)
+            board.make_move(r, c)
+
+        while board.winner in (None, -1):
+            legal = board.get_legal_moves()
+            if not legal:
+                break
+            is_a_turn = (board.current_player == 1) == a_is_p1
+            action = agent.select_action(board) if is_a_turn else baseline.select_action(board)
+            board.make_move(action // 9, action % 9)
+
+        result.games += 1
+        w = board.winner
+        if w == 3 or w in (None, -1):
+            result.draws += 1
+        elif (w == 1 and a_is_p1) or (w == 2 and not a_is_p1):
+            result.wins_a += 1
+        else:
+            result.wins_b += 1
+
+    return {
+        'model_wins': result.wins_a, 'baseline_wins': result.wins_b,
+        'draws': result.draws, 'games': result.games,
+        'win_rate': result.win_rate_a, 'draw_rate': result.draw_rate,
+    }
+
+
+def nnue_run_evaluation_suite(nnue_agent, num_games=200, num_games_minimax=100):
+    """Run NNUE evaluation suite against all baselines.
+
+    Args:
+        nnue_agent: Agent with select_action(board) -> int
+        num_games: Games per baseline (random, heuristic)
+        num_games_minimax: Games for minimax (slower)
+
+    Returns:
+        dict of metrics for wandb logging
+    """
+    from tqdm import tqdm
+    import time
+
+    metrics = {}
+
+    baselines = [
+        ('random', RandomAgent(), num_games),
+        ('heuristic', HeuristicAgent(), num_games),
+        ('minimax2', MinimaxAgent(depth=2), num_games_minimax),
+    ]
+
+    pbar = tqdm(baselines, desc="Eval", ncols=80, leave=False)
+    for name, agent, n in pbar:
+        pbar.set_postfix_str(f"vs {name}")
+        t0 = time.time()
+        r = nnue_evaluate_vs_baseline(nnue_agent, agent, num_games=n)
+        elapsed = time.time() - t0
+
+        metrics[f'eval/vs_{name}_winrate'] = r['win_rate'] * 100
+        metrics[f'eval/vs_{name}_drawrate'] = r['draw_rate'] * 100
+        metrics[f'eval/vs_{name}_time_s'] = elapsed
+
+    return metrics

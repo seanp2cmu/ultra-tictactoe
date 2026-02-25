@@ -49,7 +49,7 @@ mkdir -p /tmp/nnue-shared
 # Bootstrap with seed data (from existing checkpoint)
 python -m nnue.distributed.trainer \
     --shared-dir /mnt/shared/nnue \
-    --seed-data nnue/model/fin1zkq5/checkpoint.npz \
+    --seed-data model/nnue/fin1zkq5/checkpoint.npz \
     --run-name "distributed-v1" \
     --max-loops 50 \
     --min-new-positions 50000 \
