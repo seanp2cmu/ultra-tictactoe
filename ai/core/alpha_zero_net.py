@@ -1,5 +1,7 @@
 """AlphaZero network wrapper with training capabilities."""
 from typing import Tuple, Optional
+import atexit
+import signal
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -9,6 +11,31 @@ from torch.amp import autocast, GradScaler
 from .network import Model
 from utils import BoardEncoder
 from .tensorrt_engine import get_tensorrt_process_client, export_onnx, TRT_AVAILABLE
+
+# Global registry of TRT engines to clean up on forced exit
+_trt_engines = []
+
+def _cleanup_trt():
+    for engine in _trt_engines:
+        try:
+            engine.shutdown()
+        except Exception:
+            pass
+    _trt_engines.clear()
+
+atexit.register(_cleanup_trt)
+
+def _signal_handler(signum, frame):
+    _cleanup_trt()
+    # Re-raise with default handler
+    signal.signal(signum, signal.SIG_DFL)
+    signal.raise_signal(signum)
+
+for _sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(_sig, _signal_handler)
+    except (OSError, ValueError):
+        pass  # Can't set signal handler in non-main thread
 
 
 class AlphaZeroNet:
@@ -383,6 +410,7 @@ class AlphaZeroNet:
                 force_rebuild=force_rebuild,
             )
             if self.trt_engine is not None:
+                _trt_engines.append(self.trt_engine)
                 print("[Model] Using TensorRT (separate process)")
         except Exception as e:
             print(f"[Model] TensorRT process failed: {e}")

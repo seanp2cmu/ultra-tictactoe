@@ -30,6 +30,9 @@ struct DataGenConfig {
     // Opening randomization
     int random_move_count = 8;       // Play N random moves to diversify openings
     float random_move_temp = 1.5f;   // Temperature for random opening moves
+    
+    // Early termination
+    int early_stop_empty = 15;       // Stop game when empty cells <= this (0=disabled)
 };
 
 // ─── Training sample ────────────────────────────────────────────
@@ -90,6 +93,29 @@ std::vector<TrainingSample> generate_parallel(
     int num_games,
     int num_threads = 4,
     uint64_t base_seed = 42
+);
+
+/**
+ * Batch rescore positions with NNUE deep search (multi-threaded).
+ * Reconstructs boards from (N, 92) array, runs alpha-beta search on each.
+ *
+ * @param model       Shared NNUE model (read-only)
+ * @param boards      Flat array of N*92 int8 board representations
+ * @param num_positions Number of positions
+ * @param search_depth Max search depth
+ * @param num_threads  Number of parallel threads
+ * @param qsearch_mode Quiescence search mode (0/1/2)
+ * @param tt_size_mb   TT size per thread in MB
+ * @return Vector of raw scores (one per position)
+ */
+std::vector<float> batch_rescore(
+    NNUEModel* model,
+    const int8_t* boards,
+    int num_positions,
+    int search_depth = 10,
+    int num_threads = 16,
+    int qsearch_mode = 2,
+    int tt_size_mb = 32
 );
 
 } // namespace nnue

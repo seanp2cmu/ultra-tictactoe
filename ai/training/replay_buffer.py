@@ -230,5 +230,62 @@ class SelfPlayData:
         self._cache_valid = False
         # Keep _states/_policies allocated (avoid re-allocation)
 
+    def save(self, path: str) -> None:
+        """Save buffer state to .npz for resumability."""
+        d = {
+            'size': self._size,
+            'head': self._head,
+            'next_game_id': self._next_game_id,
+            'current_iteration': self._current_iteration,
+            'values': self._values[:self._size],
+            'game_ids': self._game_ids[:self._size],
+            'iterations': self._iterations[:self._size],
+        }
+        if self._states is not None:
+            d['states'] = self._states[:self._size]
+            d['policies'] = self._policies[:self._size]
+        np.savez_compressed(path, **d)
+
+    @classmethod
+    def load(cls, path: str, max_size: int = None, decay_factor: float = 0.75) -> 'SelfPlayData':
+        """Restore buffer from .npz checkpoint."""
+        data = np.load(path)
+        size = int(data['size'])
+        ms = max_size or size
+        buf = cls(max_size=ms, decay_factor=decay_factor)
+
+        buf._size = min(size, ms)
+        buf._head = int(data['head']) % ms
+        buf._next_game_id = int(data['next_game_id'])
+        buf._current_iteration = int(data['current_iteration'])
+
+        n = buf._size
+        buf._values[:n] = data['values'][:n]
+        buf._game_ids[:n] = data['game_ids'][:n]
+        buf._iterations[:n] = data['iterations'][:n]
+
+        if 'states' in data:
+            states = data['states'][:n]
+            buf._states = np.zeros((ms,) + states.shape[1:], dtype=np.float32)
+            buf._states[:n] = states
+            policies = data['policies'][:n]
+            buf._policies = np.zeros((ms, 81), dtype=np.float32)
+            buf._policies[:n] = policies
+
+        # Rebuild game_info from arrays
+        for i in range(n):
+            gid = int(buf._game_ids[i])
+            if gid < 0:
+                continue
+            if gid not in buf._game_info:
+                buf._game_info[gid] = {
+                    'iteration': int(buf._iterations[i]),
+                    'positions': set(),
+                }
+            buf._game_info[gid]['positions'].add(i)
+
+        buf._cache_valid = False
+        return buf
+
     def __len__(self) -> int:
         return self._size

@@ -1,4 +1,6 @@
+import atexit
 import os
+import signal
 import sys
 import time
 import subprocess
@@ -191,6 +193,7 @@ def main():
     
     # 6. Load checkpoint if resuming or forking
     start_iteration = 0
+    replay_buf_path = os.path.join(run_dir, 'replay_buffer.npz')
     if checkpoint_path:
         loaded_iter = trainer.load(checkpoint_path)
         
@@ -203,6 +206,17 @@ def main():
             if loaded_iter is not None:
                 start_iteration = loaded_iter + 1
             print(f"✓ Resuming from iteration {start_iteration}")
+            
+            # Restore replay buffer
+            if os.path.exists(replay_buf_path):
+                from ai.training.replay_buffer import SelfPlayData
+                trainer.replay_buffer = SelfPlayData.load(
+                    replay_buf_path,
+                    max_size=config.training.replay_buffer_size,
+                )
+                stats = trainer.replay_buffer.get_stats()
+                print(f"✓ Replay buffer restored: {stats.get('total',0):,} positions, "
+                      f"{stats.get('games',0):,} games")
         
         # Override LR and scheduler with current config values
         net = trainer.network
@@ -212,6 +226,17 @@ def main():
             net.optimizer, T_0=50, T_mult=1, eta_min=config.training.lr * 0.01
         )
         print(f"✓ LR reset to {config.training.lr} (cosine warm restarts, T_0=50)")
+    
+    # Save replay buffer on exit/crash
+    def _save_replay_buffer():
+        try:
+            trainer.replay_buffer.save(replay_buf_path)
+            print(f"\n✓ Replay buffer saved ({len(trainer.replay_buffer):,} positions)")
+        except Exception as e:
+            print(f"\n✗ Replay buffer save failed: {e}")
+    
+    atexit.register(_save_replay_buffer)
+    signal.signal(signal.SIGTERM, lambda *_: (_save_replay_buffer(), sys.exit(1)))
     
     # Load shared DTW cache
     dtw_cache_path = os.path.join(base_dir, 'dtw_cache.pkl')
@@ -408,6 +433,8 @@ def main():
         upload_to_hf(os.path.join(base_dir, RUNS_FILE), RUNS_FILE)
     
     # 8. Finish
+    _save_replay_buffer()
+    atexit.unregister(_save_replay_buffer)
     log_training_complete(log_path)
     upload_to_hf(log_path, f'{run_id}/training.log')
     
@@ -417,7 +444,7 @@ def main():
     
     upload_to_hf(os.path.join(base_dir, RUNS_FILE), RUNS_FILE)
     wandb.finish()
-    print(f"\n\u2713 Training completed!")
+    print(f"\n✓ Training completed!")
 
 
 if __name__ == '__main__':

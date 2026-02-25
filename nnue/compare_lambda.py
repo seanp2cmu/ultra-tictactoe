@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 """
-Compare NNUE training with different lambda_search values.
+Compare NNUE training with different AZ lambda values.
 Runs identical pipelines with λ=1.0, 0.75, 0.5 sequentially.
 """
-from nnue.train_nnue import run
-from nnue.config import PipelineConfig, TrainingConfig
+from nnue.train import run, ConcurrentConfig
+from nnue.config import TrainingConfig
 
 
 # Smaller scale for fair comparison (same compute per run)
 COMPARE_CFG = dict(
-    phase1_games=5000,
-    selfplay_loops=10,
-    selfplay_games=20000,
-    selfplay_threads=64,
-    selfplay_depth=8,
+    az_total_games=5000,
+    az_batch_games=2500,
+    rescore_loops=3,
     eval_games=200,
     eval_games_minimax=100,
-    eval_depth=5,
+    eval_depth=6,
     max_positions=1000000,
-    early_stop_patience=3,
 )
 
 LAMBDAS = [1.0, 0.75, 0.5]
@@ -32,8 +29,8 @@ def main():
         print(f"# Lambda = {lam}")
         print(f"{'#'*60}\n")
 
-        cfg = PipelineConfig(
-            lambda_search=lam,
+        cfg = ConcurrentConfig(
+            az_lambda=lam,
             **COMPARE_CFG,
         )
 

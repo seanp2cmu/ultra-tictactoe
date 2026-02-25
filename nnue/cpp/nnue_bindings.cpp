@@ -91,7 +91,8 @@ PYBIND11_MODULE(nnue_cpp, m) {
         .def_readwrite("skip_noisy", &nnue::DataGenConfig::skip_noisy)
         .def_readwrite("skip_noisy_maxply", &nnue::DataGenConfig::skip_noisy_maxply)
         .def_readwrite("random_move_count", &nnue::DataGenConfig::random_move_count)
-        .def_readwrite("random_move_temp", &nnue::DataGenConfig::random_move_temp);
+        .def_readwrite("random_move_temp", &nnue::DataGenConfig::random_move_temp)
+        .def_readwrite("early_stop_empty", &nnue::DataGenConfig::early_stop_empty);
 
     // generate_data: returns (boards_numpy, values_numpy) directly
     m.def("generate_data", [](nnue::NNUEModel* model,
@@ -129,4 +130,112 @@ PYBIND11_MODULE(nnue_cpp, m) {
     py::arg("seed") = 42,
     "Generate training data via C++ NNUE self-play.\n"
     "Returns (boards: np.ndarray[N,92], values: np.ndarray[N]).");
+
+    // batch_rescore: multi-threaded NNUE deep search rescore
+    m.def("batch_rescore", [](nnue::NNUEModel* model,
+                               py::array_t<int8_t> boards_arr,
+                               int search_depth,
+                               int num_threads,
+                               int qsearch_mode,
+                               int tt_size_mb) {
+        auto buf = boards_arr.request();
+        if (buf.ndim != 2 || buf.shape[1] != 92)
+            throw std::runtime_error("boards must be (N, 92) int8 array");
+
+        int num_positions = static_cast<int>(buf.shape[0]);
+        const int8_t* data = static_cast<const int8_t*>(buf.ptr);
+
+        std::vector<float> scores;
+        {
+            py::gil_scoped_release release;
+            scores = nnue::batch_rescore(model, data, num_positions,
+                                          search_depth, num_threads,
+                                          qsearch_mode, tt_size_mb);
+        }
+
+        // Return as numpy array
+        auto result = py::array_t<float>({(ssize_t)num_positions});
+        auto r_ptr = result.mutable_unchecked<1>();
+        for (ssize_t i = 0; i < num_positions; ++i)
+            r_ptr(i) = scores[i];
+
+        return result;
+    },
+    py::arg("model"),
+    py::arg("boards"),
+    py::arg("search_depth") = 10,
+    py::arg("num_threads") = 16,
+    py::arg("qsearch_mode") = 2,
+    py::arg("tt_size_mb") = 32,
+    "Batch rescore positions with NNUE deep search (multi-threaded C++).\n"
+    "Args: model, boards(N,92 int8), search_depth, num_threads, qsearch_mode, tt_size_mb\n"
+    "Returns: scores np.ndarray[N] (raw eval, unbounded).");
+
+    // search_bench: single-position search returning detailed stats
+    m.def("search_bench", [](nnue::NNUEModel* model,
+                              py::array_t<int8_t> board_arr,
+                              int search_depth,
+                              int qsearch_mode,
+                              int tt_size_mb) {
+        auto buf = board_arr.request();
+        if (buf.size != 92)
+            throw std::runtime_error("board must be (92,) int8 array");
+
+        const int8_t* arr = static_cast<const int8_t*>(buf.ptr);
+
+        // Reconstruct board
+        uttt::Board board;
+        for (int sub = 0; sub < 9; ++sub) {
+            int base_r = (sub / 3) * 3;
+            int base_c = (sub % 3) * 3;
+            for (int cell = 0; cell < 9; ++cell) {
+                int r = base_r + cell / 3;
+                int c = base_c + cell % 3;
+                int8_t v = arr[r * 9 + c];
+                if (v == 1) board.x_masks[sub] |= (1 << cell);
+                else if (v == 2) board.o_masks[sub] |= (1 << cell);
+            }
+            board.sub_counts[sub] = {
+                __builtin_popcount(board.x_masks[sub]),
+                __builtin_popcount(board.o_masks[sub])
+            };
+        }
+        for (int i = 0; i < 9; ++i) {
+            board.completed_boards[i] = arr[81 + i];
+            if (board.completed_boards[i] != 0)
+                board.completed_mask |= (1 << i);
+        }
+        int active = arr[90];
+        if (active >= 0) {
+            board.has_last_move = true;
+            board.last_move_r = active / 3;
+            board.last_move_c = active % 3;
+        }
+        board.current_player = arr[91];
+        board.check_winner();
+
+        nnue::NNUESearchEngine engine(model, tt_size_mb);
+        engine.set_qsearch(qsearch_mode);
+        nnue::SearchResult result;
+        {
+            py::gil_scoped_release release;
+            result = engine.search(board, search_depth);
+        }
+
+        py::dict d;
+        d["score"] = result.score;
+        d["depth"] = result.depth;
+        d["nodes"] = result.nodes;
+        d["tt_hits"] = result.tt_hits;
+        d["time_ms"] = result.time_ms;
+        d["best_r"] = result.best_r;
+        d["best_c"] = result.best_c;
+        return d;
+    },
+    py::arg("model"),
+    py::arg("board"),
+    py::arg("search_depth") = 8,
+    py::arg("qsearch_mode") = 2,
+    py::arg("tt_size_mb") = 16,
+    "Search a single position, returning {score, depth, nodes, tt_hits, time_ms}.");
 }

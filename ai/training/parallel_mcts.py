@@ -186,8 +186,9 @@ class ParallelMCTS:
         self,
         games: List[Dict],
         temperature: float = 1.0,
-        add_noise: bool = True
-    ) -> List[Tuple[np.ndarray, int]]:
+        add_noise: bool = True,
+        return_roots: bool = False,
+    ):
         """
         Virtual-loss multi-leaf MCTS with double-buffered pipeline.
         
@@ -200,29 +201,35 @@ class ParallelMCTS:
           New: ceil(num_sims/K) × 2 calls of ~N*K/2 boards each → K× fewer calls
         
         Uses async submit/collect for GPU/CPU overlap.
+        
+        If return_roots=True, returns (moves, roots) instead of just moves.
         """
         if not games:
-            return []
+            return ([], []) if return_roots else []
         
         # 0 sims = raw policy only (no search)
         if self.num_simulations == 0:
-            return self._raw_policy_moves(games, temperature)
+            result = self._raw_policy_moves(games, temperature)
+            return (result, [None] * len(games)) if return_roots else result
         
         # Use synchronous multi-leaf MCTS (correct backprop ordering).
-        return self.search_parallel_sync(games, temperature, add_noise)
+        return self.search_parallel_sync(games, temperature, add_noise, return_roots)
     
     def search_parallel_sync(
         self,
         games: List[Dict],
         temperature: float = 1.0,
-        add_noise: bool = True
-    ) -> List[Tuple[np.ndarray, int]]:
+        add_noise: bool = True,
+        return_roots: bool = False,
+    ):
         """
         Synchronous MCTS with virtual loss multi-leaf batching (no pipeline).
         Kept for benchmarking comparison against the async pipeline version.
+        
+        If return_roots=True, returns (moves, roots) instead of just moves.
         """
         if not games:
-            return []
+            return ([], []) if return_roots else []
         
         roots = [Node(game['board']) for game in games]
         global _parallel_timing
@@ -252,4 +259,5 @@ class ParallelMCTS:
             
             self._expand_backprop(leaves, policies_batch, values_batch)
         
-        return self._select_moves(roots, temperature)
+        moves = self._select_moves(roots, temperature)
+        return (moves, roots) if return_roots else moves

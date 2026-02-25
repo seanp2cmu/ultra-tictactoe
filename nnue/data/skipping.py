@@ -72,27 +72,6 @@ class PositionFilter:
         
         return True
     
-    def get_skip_reason(
-        self,
-        board: Board,
-        ply: int,
-        eval_value: float
-    ) -> Optional[str]:
-        """Get reason why position would be skipped (for debugging)."""
-        if ply < self.config.write_minply:
-            return f"ply {ply} < min {self.config.write_minply}"
-        if ply > self.config.write_maxply:
-            return f"ply {ply} > max {self.config.write_maxply}"
-        if abs(eval_value) > self.config.eval_limit:
-            return f"|eval| {abs(eval_value):.2f} > limit {self.config.eval_limit}"
-        if self.config.skip_endgame and self.dtw is not None:
-            if self.dtw.is_endgame(board):
-                return "endgame position"
-        if self.config.skip_noisy and ply <= self.config.skip_noisy_maxply:
-            if not self._is_quiet(board):
-                return "noisy position (tactical threat)"
-        return None
-    
     def _is_quiet(self, board: Board) -> bool:
         """Check if position has no immediate tactical threats.
         

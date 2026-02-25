@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 
 from nnue.core.model import NNUE
@@ -45,9 +45,14 @@ def _build_scheduler(optimizer, config, steps_per_epoch):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
-def train_nnue(data_path, output_path='nnue/model/nnue_model.pt', 
-               net_config=None, train_config=None, device='cuda'):
-    """Train NNUE model from .npz data.
+def train_nnue(data, output_path='nnue/model/nnue_model.pt', 
+               net_config=None, train_config=None, device='cuda',
+               warm_start_path=None):
+    """Train NNUE model.
+    
+    Args:
+        data: Either a file path (str) to .npz, or a tuple (boards, values) of numpy arrays.
+        warm_start_path: Path to .pt checkpoint to load weights from (None = random init)
     
     Returns:
         (model, best_val_loss, epoch_metrics_list)
@@ -57,8 +62,11 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
     use_amp = train_config.use_amp and device != 'cpu'
     
     # Load data
-    data = np.load(data_path)
-    boards, values = data['boards'], data['values']
+    if isinstance(data, str):
+        npz = np.load(data)
+        boards, values = npz['boards'], npz['values']
+    else:
+        boards, values = data
     
     # Split
     t0 = time.time()
@@ -76,14 +84,18 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
         pin_memory=True, persistent_workers=train_config.num_workers > 0,
     )
     
-    # Model
-    model = NNUE(
-        accumulator_size=net_config.accumulator_size,
-        hidden1_size=net_config.hidden1_size,
-        hidden2_size=net_config.hidden2_size,
-        num_buckets=net_config.num_buckets,
-        bucket_divisor=net_config.bucket_divisor,
-    ).to(device)
+    # Model (warm-start or random init)
+    if warm_start_path and os.path.exists(warm_start_path):
+        model = NNUE.load(warm_start_path, device=device)
+        tqdm.write(f"  Warm-start from {warm_start_path}")
+    else:
+        model = NNUE(
+            accumulator_size=net_config.accumulator_size,
+            hidden1_size=net_config.hidden1_size,
+            hidden2_size=net_config.hidden2_size,
+            num_buckets=net_config.num_buckets,
+            bucket_divisor=net_config.bucket_divisor,
+        ).to(device)
     
     param_count = sum(p.numel() for p in model.parameters())
     
@@ -93,7 +105,7 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
         weight_decay=train_config.weight_decay,
     )
     scaling = net_config.scaling_factor
-    scaler = GradScaler(enabled=use_amp)
+    scaler = GradScaler('cuda', enabled=use_amp)
     scheduler = _build_scheduler(optimizer, train_config, len(train_loader))
     
     # Info bar
@@ -123,7 +135,7 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
             nstm = nstm.to(device, non_blocking=True)
             target = target.to(device, non_blocking=True)
             
-            with autocast(enabled=use_amp):
+            with autocast("cuda", enabled=use_amp):
                 pred = model(stm, nstm).squeeze(-1)
                 loss = wdl_loss(pred, target, scaling=scaling)
             
@@ -155,7 +167,7 @@ def train_nnue(data_path, output_path='nnue/model/nnue_model.pt',
                 nstm = nstm.to(device, non_blocking=True)
                 target = target.to(device, non_blocking=True)
                 
-                with autocast(enabled=use_amp):
+                with autocast("cuda", enabled=use_amp):
                     pred = model(stm, nstm).squeeze(-1)
                     loss = wdl_loss(pred, target, scaling=scaling)
                 

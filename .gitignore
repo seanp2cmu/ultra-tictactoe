@@ -35,6 +35,8 @@ Thumbs.db
 *.onnx
 *.trt
 *.log
+*.npz
+ai/models/runs.json
 
 # Training outputs
 logs/
@@ -58,3 +60,5 @@ htmlcov/
 *.zip
 
 tests/
+
+*.nnue

@@ -1,15 +1,15 @@
 """NNUE training data generator using AlphaZero agent."""
 import random
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, Optional
 import numpy as np
+from tqdm import tqdm
 
 from game import Board
 from ai.core import AlphaZeroNet
 from ai.mcts import AlphaZeroAgent
-from ai.mcts import Node
+from ai.training.parallel_mcts import ParallelMCTS
 from ai.endgame import DTWCalculator
 from nnue.config import DataGenConfig
 from nnue.data.skipping import PositionFilter
@@ -50,126 +50,147 @@ class NNUEDataGenerator:
             'positions_skipped': 0,
         }
     
-    def generate_game(self) -> List[Dict]:
-        """
-        Play one self-play game and collect NNUE training data.
-        
-        Blends search score with game result:
-          target = λ × search_score + (1-λ) × game_result
-        where game_result is from the side-to-move's perspective.
-        
-        Returns:
-            List of training samples: {'board': np.ndarray, 'value': float}
-        """
-        board = Board()
-        samples = []
-        ply = 0
-        
-        while board.winner in (None, -1):
-            legal_moves = board.get_legal_moves()
-            if not legal_moves:
-                break
-            
-            # MCTS search
-            root = self.agent.search(board, add_noise=False)
-            
-            # Get best child value (continuous eval)
-            eval_value = self._get_best_child_value(root)
-            
-            self.stats['positions_total'] += 1
-            
-            # Check if position should be saved
-            if self.position_filter.should_save(board, ply, eval_value, self.rng):
-                sample = {
-                    'board': self._board_to_array(board),
-                    'search_eval': eval_value,
-                    'stm': board.current_player,  # side to move
-                    'ply': ply,
-                }
-                samples.append(sample)
-                self.stats['positions_saved'] += 1
-            else:
-                self.stats['positions_skipped'] += 1
-            
-            # Select move (use visit counts, low temperature)
-            action_probs = np.zeros(81, dtype=np.float32)
-            for action, child in root.children.items():
-                action_probs[action] = child.visits
-            
-            if action_probs.sum() == 0:
-                break
-            
-            # Temperature-based selection
-            action_probs = action_probs ** (1.0 / 0.1)  # Low temp
-            action_probs = action_probs / action_probs.sum()
-            action = int(np.random.choice(81, p=action_probs))
-            
-            row, col = action // 9, action % 9
-            if (row, col) not in legal_moves:
-                break
-            
-            board.make_move(row, col)
-            ply += 1
-        
-        # Determine game result: +1 = P1 win, -1 = P2 win, 0 = draw/unfinished
-        if board.winner == 1:
-            game_result_p1 = 1.0
-        elif board.winner == 2:
-            game_result_p1 = -1.0
-        else:
-            game_result_p1 = 0.0
-        
-        # Blend search score with game result for each sample
-        lam = self.config.lambda_search
-        for s in samples:
-            # Game result from side-to-move's perspective
-            game_result_stm = game_result_p1 if s['stm'] == 1 else -game_result_p1
-            s['value'] = lam * s['search_eval'] + (1.0 - lam) * game_result_stm
-        
-        self.stats['games_played'] += 1
-        return samples
-    
     def generate_dataset(
         self,
         num_games: int,
         output_path: Optional[str] = None,
-        verbose: bool = True
+        verbose: bool = True,
     ) -> Dict[str, np.ndarray]:
         """
-        Generate NNUE training dataset from multiple games.
+        Generate NNUE training dataset using parallel GPU-batched self-play.
+        
+        Runs `batch_size` games simultaneously via ParallelMCTS for high GPU
+        utilization. Much faster than sequential generate_game().
         
         Args:
-            num_games: Number of self-play games
+            num_games: Total number of self-play games
             output_path: Path to save .npz file (optional)
             verbose: Print progress
             
         Returns:
             Dict with 'boards' and 'values' arrays
         """
-        # Pre-allocate chunks to avoid per-sample list.append overhead
+        batch_size = min(num_games, 2048)
+        
+        mcts = ParallelMCTS(
+            network=self.network,
+            num_simulations=self.num_simulations,
+            c_puct=1.0,
+            dtw_calculator=self.dtw,
+        )
+        
         board_chunks = []
         value_chunks = []
-        
         start_time = time.time()
+        games_done = 0
         
-        for i in range(num_games):
-            samples = self.generate_game()
+        pbar = tqdm(total=num_games, desc="Phase1 DataGen", unit="g",
+                    ncols=90, leave=False, disable=not verbose)
+        
+        while games_done < num_games:
+            cur_batch = min(batch_size, num_games - games_done)
             
-            if samples:
-                boards_batch = np.array([s['board'] for s in samples], dtype=np.int8)
-                values_batch = np.array([s['value'] for s in samples], dtype=np.float32)
-                board_chunks.append(boards_batch)
-                value_chunks.append(values_batch)
+            # Init batch of games
+            active = []
+            for _ in range(cur_batch):
+                active.append({
+                    'board': Board(),
+                    'ply': 0,
+                    'raw_samples': [],   # (board_arr, search_eval, stm)
+                    'done': False,
+                })
             
-            if verbose and (i + 1) % 100 == 0:
-                elapsed = time.time() - start_time
-                rate = (i + 1) / elapsed
-                saved = self.stats['positions_saved']
-                total = self.stats['positions_total']
-                kept = saved / max(1, total)
-                print(f"Games: {i+1}/{num_games} | "
-                      f"Positions: {saved:,} ({kept:.1%} kept) | "
-                      f"Rate: {rate:.1f} games/s")
+            # Play until all games in batch are done
+            while any(not g['done'] for g in active):
+                # Collect games that need a move
+                pending = [g for g in active if not g['done']]
+                if not pending:
+                    break
+                
+                # ParallelMCTS batch search (return roots to extract value)
+                games_for_mcts = [{'board': g['board']} for g in pending]
+                results, roots = mcts.search_parallel(
+                    games_for_mcts, temperature=0.1, add_noise=False,
+                    return_roots=True,
+                )
+                
+                for g, (policy, action), root in zip(pending, results, roots):
+                    board = g['board']
+                    
+                    legal_moves = board.get_legal_moves()
+                    if not legal_moves:
+                        g['done'] = True
+                        continue
+                    
+                    # Extract eval from MCTS root's best child value
+                    eval_value = 0.0
+                    if root is not None and root.children:
+                        best_child = max(root.children.values(),
+                                         key=lambda c: c.visits)
+                        eval_value = -best_child.value()  # negate: child is opponent
+                    
+                    self.stats['positions_total'] += 1
+                    
+                    # Position filtering and collection
+                    if self.position_filter.should_save(
+                        board, g['ply'], eval_value, self.rng
+                    ):
+                        g['raw_samples'].append((
+                            self._board_to_array(board),
+                            eval_value,
+                            board.current_player,
+                        ))
+                        self.stats['positions_saved'] += 1
+                    else:
+                        self.stats['positions_skipped'] += 1
+                    
+                    # Make move
+                    row, col = action // 9, action % 9
+                    if (row, col) not in legal_moves:
+                        g['done'] = True
+                        continue
+                    
+                    board.make_move(row, col)
+                    g['ply'] += 1
+                    
+                    if board.winner not in (None, -1):
+                        g['done'] = True
+            
+            # Finalize: blend search_eval with game result
+            lam = self.config.lambda_search
+            for g in active:
+                board = g['board']
+                if board.winner == 1:
+                    game_result_p1 = 1.0
+                elif board.winner == 2:
+                    game_result_p1 = -1.0
+                else:
+                    game_result_p1 = 0.0
+                
+                if g['raw_samples']:
+                    boards_arr = np.array(
+                        [s[0] for s in g['raw_samples']], dtype=np.int8
+                    )
+                    values_arr = np.array([
+                        lam * s[1] + (1.0 - lam) * (
+                            game_result_p1 if s[2] == 1 else -game_result_p1
+                        )
+                        for s in g['raw_samples']
+                    ], dtype=np.float32)
+                    board_chunks.append(boards_arr)
+                    value_chunks.append(values_arr)
+                
+                self.stats['games_played'] += 1
+            
+            games_done += cur_batch
+            pbar.update(cur_batch)
+            
+            saved = self.stats['positions_saved']
+            elapsed = time.time() - start_time
+            rate = games_done / elapsed if elapsed > 0 else 0
+            pbar.set_postfix_str(f"{saved:,}pos {rate:.1f}g/s")
+        
+        pbar.close()
         
         if board_chunks:
             all_boards = np.concatenate(board_chunks)
@@ -188,19 +209,10 @@ class NNUEDataGenerator:
             np.savez_compressed(output_path, **dataset)
             if verbose:
                 elapsed = time.time() - start_time
-                print(f"\nSaved {len(all_values):,} positions to {output_path} "
-                      f"({elapsed:.1f}s total)")
+                tqdm.write(f"Saved {len(all_values):,} positions to {output_path} "
+                           f"({elapsed:.1f}s, {games_done/elapsed:.1f} g/s)")
         
         return dataset
-    
-    def _get_best_child_value(self, root: Node) -> float:
-        """Get evaluation from best (most visited) child."""
-        if not root.children:
-            return 0.0
-        
-        best_child = max(root.children.values(), key=lambda c: c.visits)
-        # Negate because child value is from opponent's perspective
-        return -best_child.value()
     
     def _board_to_array(self, board: Board) -> np.ndarray:
         """Convert board to flat (92,) int8 array for storage."""

@@ -1,6 +1,7 @@
 #include "nnue_datagen.hpp"
 #include <thread>
 #include <mutex>
+#include <atomic>
 #include <algorithm>
 #include <cstring>
 
@@ -33,6 +34,11 @@ std::vector<TrainingSample> DataGenerator::self_play_game(uint64_t seed) {
     while (board.winner == -1) {
         auto moves = board.get_legal_moves();
         if (moves.empty()) break;
+        
+        // Early termination: stop when few empty cells remain
+        if (config_.early_stop_empty > 0 &&
+            board.count_playable_empty_cells() <= config_.early_stop_empty)
+            break;
         
         // Opening randomization: play random moves for diversity
         if (ply < config_.random_move_count) {
@@ -244,6 +250,110 @@ std::vector<TrainingSample> generate_parallel(
     }
     
     return all_samples;
+}
+
+// ─── Batch rescore ──────────────────────────────────────────────
+
+static uttt::Board array_to_board(const int8_t* arr) {
+    uttt::Board board;
+    
+    // Reconstruct cells from array
+    for (int sub = 0; sub < 9; ++sub) {
+        int base_r = (sub / 3) * 3;
+        int base_c = (sub % 3) * 3;
+        for (int cell = 0; cell < 9; ++cell) {
+            int r = base_r + cell / 3;
+            int c = base_c + cell % 3;
+            int idx = r * 9 + c;
+            int8_t v = arr[idx];
+            if (v == 1) board.x_masks[sub] |= (1 << cell);
+            else if (v == 2) board.o_masks[sub] |= (1 << cell);
+        }
+        // Recount sub_counts
+        board.sub_counts[sub] = {
+            __builtin_popcount(board.x_masks[sub]),
+            __builtin_popcount(board.o_masks[sub])
+        };
+    }
+    
+    // Meta-board
+    for (int i = 0; i < 9; ++i) {
+        board.completed_boards[i] = arr[81 + i];
+    }
+    // Rebuild completed_mask
+    board.completed_mask = 0;
+    for (int i = 0; i < 9; ++i) {
+        if (board.completed_boards[i] != 0)
+            board.completed_mask |= (1 << i);
+    }
+    
+    // Active sub-board constraint via last_move
+    int active = arr[90];
+    if (active >= 0) {
+        board.has_last_move = true;
+        board.last_move_r = active / 3;
+        board.last_move_c = active % 3;
+    } else {
+        board.has_last_move = false;
+        board.last_move_r = -1;
+        board.last_move_c = -1;
+    }
+    
+    board.current_player = arr[91];
+    board.check_winner();
+    
+    return board;
+}
+
+std::vector<float> batch_rescore(
+    NNUEModel* model,
+    const int8_t* boards,
+    int num_positions,
+    int search_depth,
+    int num_threads,
+    int qsearch_mode,
+    int tt_size_mb)
+{
+    std::vector<float> scores(num_positions, 0.0f);
+    num_threads = std::max(1, std::min(num_threads, num_positions));
+    
+    std::vector<std::thread> threads;
+    std::atomic<int> next_pos{0};
+    
+    for (int t = 0; t < num_threads; ++t) {
+        threads.emplace_back([&, t]() {
+            NNUESearchEngine engine(model, tt_size_mb);
+            engine.set_qsearch(qsearch_mode);
+            
+            while (true) {
+                int i = next_pos.fetch_add(1);
+                if (i >= num_positions) break;
+                
+                const int8_t* arr = boards + i * 92;
+                uttt::Board board = array_to_board(arr);
+                
+                // Terminal check
+                if (board.winner != -1) {
+                    int cp = arr[91];
+                    if (board.winner == 3) {
+                        scores[i] = 0.0f;
+                    } else if (board.winner == cp) {
+                        scores[i] = 100.0f;  // large positive = win
+                    } else {
+                        scores[i] = -100.0f; // large negative = loss
+                    }
+                    continue;
+                }
+                
+                engine.clear();
+                SearchResult result = engine.search(board, search_depth);
+                scores[i] = result.score;
+            }
+        });
+    }
+    
+    for (auto& th : threads) th.join();
+    return scores;
 }
 
 } // namespace nnue
