@@ -1,13 +1,45 @@
 #pragma once
 
 #include "nnue_model.hpp"
+#include "nnue_features.hpp"
 #include "game/cpp/board.hpp"
 #include <vector>
 #include <tuple>
 #include <cstdint>
 #include <utility>
+#include <cstring>
 
 namespace nnue {
+
+// ─── D4 symmetry for 3×3 grid (applies to both sub-board and cell indices) ───
+// 8 transformations: identity, rot90, rot180, rot270, flipH, flipV, diagMain, diagAnti
+// Each maps index [0..8] (row-major 3×3) to another index.
+constexpr int NUM_SYMMETRIES = 8;
+constexpr int SYM_TABLE[8][9] = {
+    {0,1,2, 3,4,5, 6,7,8},  // identity
+    {6,3,0, 7,4,1, 8,5,2},  // rot90:  (r,c)→(c, 2-r)
+    {8,7,6, 5,4,3, 2,1,0},  // rot180: (r,c)→(2-r, 2-c)
+    {2,5,8, 1,4,7, 0,3,6},  // rot270: (r,c)→(2-c, r)
+    {2,1,0, 5,4,3, 8,7,6},  // flipH:  (r,c)→(r, 2-c)
+    {6,7,8, 3,4,5, 0,1,2},  // flipV:  (r,c)→(2-r, c)
+    {0,3,6, 1,4,7, 2,5,8},  // diagMain: (r,c)→(c, r)
+    {8,5,2, 7,4,1, 6,3,0},  // diagAnti: (r,c)→(2-c, 2-r)
+};
+// Inverse: INV_SYM[s][SYM_TABLE[s][i]] == i
+constexpr int INV_SYM[8] = {0, 3, 2, 1, 4, 5, 6, 7};
+// identity→identity, rot90→rot270, rot180→rot180, rot270→rot90,
+// flipH→flipH, flipV→flipV, diagMain→diagMain, diagAnti→diagAnti
+
+// Transform a 9×9 board coordinate (r,c) using symmetry s
+// Both sub-board index and cell index get the same 3×3 transform
+inline void sym_transform_rc(int r, int c, int s, int& out_r, int& out_c) {
+    int sub_r = r / 3, sub_c = c / 3;
+    int cell_r = r % 3, cell_c = c % 3;
+    int new_sub = SYM_TABLE[s][sub_r * 3 + sub_c];
+    int new_cell = SYM_TABLE[s][cell_r * 3 + cell_c];
+    out_r = (new_sub / 3) * 3 + (new_cell / 3);
+    out_c = (new_sub % 3) * 3 + (new_cell % 3);
+}
 
 constexpr int MAX_DEPTH = 64;
 constexpr int MAX_QS_DEPTH = 4;    // Max quiescence plies beyond depth 0
@@ -83,6 +115,7 @@ private:
     // Statistics
     int nodes_;
     int tt_hits_;
+    int sym_tt_hits_;  // TT hits via symmetry (subset of tt_hits_)
 
     // Killer moves: 2 per ply
     std::pair<int,int> killers_[MAX_DEPTH][2];
@@ -93,6 +126,27 @@ private:
     // Root best move (set by negamax_root)
     int root_best_r_;
     int root_best_c_;
+
+    // ─── Incremental accumulator stack ────────────────────────
+    // Two accumulators per ply: white (X/player1 perspective) and black (O/player2)
+    // Max plies: MAX_DEPTH + MAX_QS_DEPTH + margin
+    static constexpr int MAX_PLY = MAX_DEPTH + MAX_QS_DEPTH + 2;
+    static constexpr int ACC_I16_SIZE = 288;  // >= acc_padded_ (272), rounded up
+    alignas(32) int16_t white_acc_[MAX_PLY][ACC_I16_SIZE];  // player 1 perspective
+    alignas(32) int16_t black_acc_[MAX_PLY][ACC_I16_SIZE];  // player 2 perspective
+    int piece_count_;  // total pieces on board (incremental)
+
+    // Initialize accumulators at ply 0 from board state
+    void init_accumulators(const uttt::Board& board);
+
+    // Update accumulators for a move: copy parent ply → child ply, then add/sub changed features
+    // Must be called BEFORE make_move. Returns new_completed_status for caller to use.
+    void update_accumulators_before_move(int parent_ply, int child_ply,
+                                         const uttt::Board& board,
+                                         int move_r, int move_c);
+
+    // Evaluate using pre-computed accumulators at given ply
+    float evaluate_incremental(const uttt::Board& board, int ply) const;
 
     // Quiescence search mode: 0=off, 1=always, 2=auto
     int qsearch_mode_ = 0;
@@ -118,8 +172,8 @@ private:
     // Check if a move wins a sub-board (for qsearch: more selective)
     bool is_winning_move(int r, int c, const uttt::Board& board) const;
 
-    // Move ordering
-    int order_moves(const std::vector<std::tuple<int,int>>& moves,
+    // Move ordering (stack-based: takes raw r/c arrays)
+    int order_moves(const int* move_r, const int* move_c, int n_moves,
                     ScoredMove* out,
                     int tt_r, int tt_c, bool has_tt_move,
                     int ply, const uttt::Board& board);
@@ -130,8 +184,9 @@ private:
     // Killer update
     void update_killers(int ply, int r, int c);
 
-    // Board hash (FNV-1a style)
-    uint64_t board_hash(const uttt::Board& board) const;
+    // Symmetry-aware TT: compute canonical hash (min of 8 symmetry hashes)
+    // Returns the symmetry index that produced the canonical hash
+    int canonical_sym(const uttt::Board& board, uint64_t& canon_key) const;
 
     // Time check
     bool time_up() const;

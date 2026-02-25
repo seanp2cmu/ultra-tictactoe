@@ -280,11 +280,17 @@ static uttt::Board array_to_board(const int8_t* arr) {
     for (int i = 0; i < 9; ++i) {
         board.completed_boards[i] = arr[81 + i];
     }
-    // Rebuild completed_mask
+    // Rebuild completed_mask and meta masks
     board.completed_mask = 0;
+    board.x_meta = 0;
+    board.o_meta = 0;
     for (int i = 0; i < 9; ++i) {
         if (board.completed_boards[i] != 0)
             board.completed_mask |= (1 << i);
+        if (board.completed_boards[i] == 1)
+            board.x_meta |= (1 << i);
+        else if (board.completed_boards[i] == 2)
+            board.o_meta |= (1 << i);
     }
     
     // Active sub-board constraint via last_move
@@ -301,6 +307,7 @@ static uttt::Board array_to_board(const int8_t* arr) {
     
     board.current_player = arr[91];
     board.check_winner();
+    board.recompute_zobrist();
     
     return board;
 }

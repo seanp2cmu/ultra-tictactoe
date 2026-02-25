@@ -4,7 +4,7 @@ import time
 import gradio as gr
 
 from ai.baselines import RandomAgent, HeuristicAgent, MinimaxAgent
-from ai.evaluation.evaluator import evaluate_vs_baseline
+from evaluation.evaluator import evaluate_vs_baseline
 from app import config
 
 

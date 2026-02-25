@@ -21,20 +21,13 @@ PYBIND11_MODULE(nnue_cpp, m) {
     }, py::arg("board"),
        "Extract perspective features from a C++ Board. Returns (stm_indices, nstm_indices).");
 
-    // NNUE Model
+    // NNUE Model (quantized: int16 accumulator, int8 fc layers)
     py::class_<nnue::NNUEModel>(m, "NNUEModel")
         .def(py::init<>())
         .def("load", &nnue::NNUEModel::load, py::arg("path"),
-             "Load weights from binary file.")
+             "Load quantized weights (v3 format) from binary file.")
         .def("evaluate_board", &nnue::NNUEModel::evaluate_board, py::arg("board"),
-             "Evaluate a Board position. Returns raw eval (unbounded).")
-        .def("evaluate", [](const nnue::NNUEModel& self,
-                            const std::vector<int>& stm,
-                            const std::vector<int>& nstm) {
-            return self.evaluate(stm.data(), static_cast<int>(stm.size()),
-                                nstm.data(), static_cast<int>(nstm.size()));
-        }, py::arg("stm_features"), py::arg("nstm_features"),
-           "Evaluate from sparse feature index lists. Returns raw eval (unbounded).")
+             "Evaluate a Board position. Returns raw eval.")
         .def_readonly("loaded", &nnue::NNUEModel::loaded)
         .def_readonly("accumulator_size", &nnue::NNUEModel::accumulator_size)
         .def_readonly("hidden1_size", &nnue::NNUEModel::hidden1_size)
@@ -204,6 +197,10 @@ PYBIND11_MODULE(nnue_cpp, m) {
             board.completed_boards[i] = arr[81 + i];
             if (board.completed_boards[i] != 0)
                 board.completed_mask |= (1 << i);
+            if (board.completed_boards[i] == 1)
+                board.x_meta |= (1 << i);
+            else if (board.completed_boards[i] == 2)
+                board.o_meta |= (1 << i);
         }
         int active = arr[90];
         if (active >= 0) {
@@ -213,6 +210,7 @@ PYBIND11_MODULE(nnue_cpp, m) {
         }
         board.current_player = arr[91];
         board.check_winner();
+        board.recompute_zobrist();
 
         nnue::NNUESearchEngine engine(model, tt_size_mb);
         engine.set_qsearch(qsearch_mode);

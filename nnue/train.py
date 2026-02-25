@@ -27,7 +27,7 @@ import nnue_cpp
 from nnue.core.model import NNUE
 from nnue.cpp.export_weights import export_weights
 from nnue.training.trainer import train_nnue
-from nnue.evaluation.evaluator import run_evaluation_suite
+from evaluation.nnue_evaluator import run_evaluation_suite
 from nnue.agent import NNUEAgent
 from nnue.config import NNUEConfig, TrainingConfig, PipelineConfig
 
@@ -254,6 +254,14 @@ def run(cfg: PipelineConfig = None, train_cfg: TrainingConfig = None):
     loaded = _load_checkpoint(ckpt_path)
     if loaded is not None:
         data_state['boards'], data_state['values'] = loaded
+        tqdm.write(f"  Resumed from run checkpoint: {ckpt_path} ({len(loaded[1]):,} pos)")
+    elif cfg.seed_checkpoint and Path(cfg.seed_checkpoint).exists():
+        loaded = _load_checkpoint(Path(cfg.seed_checkpoint))
+        if loaded is not None:
+            data_state['boards'], data_state['values'] = loaded
+            tqdm.write(f"  Loaded seed checkpoint: {cfg.seed_checkpoint} ({len(loaded[1]):,} pos)")
+        else:
+            az_produce(cfg, log_path, data_state)
     else:
         az_produce(cfg, log_path, data_state)
 

@@ -56,7 +56,7 @@ class PipelineConfig:
     selfplay_loops: int = 10        # Number of selfplay→retrain cycles
     selfplay_games: int = 5000      # Games per selfplay loop
     selfplay_depth: int = 8         # NNUE search depth for selfplay
-    selfplay_threads: int = 16      # Threads for C++ NNUE selfplay
+    selfplay_threads: int = 64      # Threads for C++ NNUE selfplay
     selfplay_lambda: float = 0.75   # target = λ×search + (1-λ)×result
 
     # Training
@@ -73,6 +73,7 @@ class PipelineConfig:
     # General
     device: str = "cuda"
     model_dir: str = "nnue/model"
+    seed_checkpoint: str = "nnue/model/cfrvhghx/checkpoint.npz"  # Pre-existing data to skip AZ datagen
 
 
 @dataclass

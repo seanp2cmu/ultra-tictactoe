@@ -22,7 +22,7 @@ from ai.utils import (
     log_iteration_to_file, collect_wandb_metrics,
     run_and_log_eval, log_training_complete
 )
-from ai.evaluation.elo import EloTracker
+from evaluation.elo import EloTracker
 from utils import upload_to_hf
 
 
@@ -383,7 +383,7 @@ def main():
             upload_to_hf(ckpt_path, f'{run_id}/{ckpt_name}.pt')
             
             try:
-                from ai.evaluation.elo import winrate_to_elo_diff, DRAW_SCORE
+                from evaluation.elo import winrate_to_elo_diff, DRAW_SCORE
                 
                 if _elo_state['prev_path'] is None:
                     # First checkpoint: use eval-based Elo as anchor

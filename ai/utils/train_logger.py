@@ -4,7 +4,7 @@ import time
 import datetime
 import wandb
 
-from ai.evaluation.evaluator import run_evaluation_suite
+from evaluation.evaluator import run_evaluation_suite
 
 
 def log_iteration_to_file(log_path, iteration, total_iters, loss, lr, samples,
